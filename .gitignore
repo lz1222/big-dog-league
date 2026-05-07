@@ -1,0 +1,14 @@
+build/
+install/
+log/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.bag
+*.db3
+*.mcap
+rosbag2_*/
+.vscode/
+!.vscode/extensions.json
+*.log
+*.tmp
