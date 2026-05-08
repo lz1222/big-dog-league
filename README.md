@@ -36,6 +36,29 @@ ros2 launch rk_bringup mock_competition.launch.py auto_start:=false
 ros2 run rk_tools mission_client_node
 ```
 
+## Run The Two-Step Walk Test
+
+This test publishes a conservative forward `Twist` command to
+`/navigation/cmd_vel` for two seconds, then publishes zero velocity for one
+second and exits.
+
+```bash
+source install/setup.bash
+ros2 run rk_tools two_step_walk_test_node
+```
+
+To watch the velocity commands in another terminal:
+
+```bash
+ros2 topic echo /navigation/cmd_vel
+```
+
+For a slower or shorter hardware check:
+
+```bash
+ros2 run rk_tools two_step_walk_test_node --ros-args -p forward_speed:=0.08 -p walk_duration:=1.5
+```
+
 ## Main Interfaces
 
 - `/perception/line_track`: `rk_interfaces/msg/LineTrack`

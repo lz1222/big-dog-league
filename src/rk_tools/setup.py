@@ -23,6 +23,7 @@ setup(
             'mock_arm_server = rk_tools.mock_arm_server:main',
             'safety_node = rk_tools.safety_node:main',
             'mission_client_node = rk_tools.mission_client_node:main',
+            'two_step_walk_test_node = rk_tools.two_step_walk_test_node:main',
         ],
     },
 )
