@@ -14,12 +14,21 @@ def generate_launch_description():
     package_share = get_package_share_directory('rk_unitree_driver')
     config_file = os.path.join(package_share, 'config', 'go2_driver.yaml')
 
+    backend = LaunchConfiguration('backend')
     cmd_vel_topic = LaunchConfiguration('cmd_vel_topic')
     sport_request_topic = LaunchConfiguration('sport_request_topic')
     max_linear_x = LaunchConfiguration('max_linear_x')
     max_angular_z = LaunchConfiguration('max_angular_z')
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'backend',
+            default_value='mock',
+            description=(
+                'Motion backend: mock logs commands only; unitree_ros2 '
+                'publishes unitree_api/msg/Request for a real robot.'
+            )
+        ),
         DeclareLaunchArgument(
             'cmd_vel_topic',
             default_value='/navigation/cmd_vel',
@@ -48,6 +57,7 @@ def generate_launch_description():
             parameters=[
                 config_file,
                 {
+                    'backend': backend,
                     'cmd_vel_topic': cmd_vel_topic,
                     'sport_request_topic': sport_request_topic,
                     'max_linear_x': ParameterValue(

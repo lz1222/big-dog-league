@@ -5,6 +5,7 @@ import math
 import rclpy
 from geometry_msgs.msg import Twist
 from rcl_interfaces.msg import SetParametersResult
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from rk_unitree_driver.go2_motion_client import Go2MotionClient
@@ -19,6 +20,7 @@ class CmdVelBridgeNode(Node):
     def __init__(self):
         super().__init__('cmd_vel_bridge_node')
 
+        self.declare_parameter('backend', Go2MotionClient.MOCK_BACKEND)
         self.declare_parameter('cmd_vel_topic', '/navigation/cmd_vel')
         self.declare_parameter('sport_request_topic', '/api/sport/request')
         self.declare_parameter('max_linear_x', 0.20)
@@ -27,6 +29,7 @@ class CmdVelBridgeNode(Node):
         self.declare_parameter('stop_publish_count', 3)
         self.declare_parameter('stop_publish_period_sec', 0.05)
 
+        self.backend = self._backend_parameter()
         self.cmd_vel_topic = self._string_parameter('cmd_vel_topic')
         self.sport_request_topic = self._string_parameter(
             'sport_request_topic'
@@ -47,7 +50,8 @@ class CmdVelBridgeNode(Node):
         self._safety_monitor = SafetyMonitor(max_linear_x, max_angular_z)
         self._motion_client = Go2MotionClient(
             self,
-            self.sport_request_topic
+            self.sport_request_topic,
+            self.backend
         )
 
         self._last_cmd_time = None
@@ -74,6 +78,7 @@ class CmdVelBridgeNode(Node):
         self.get_logger().info(
             'cmd_vel bridge started: '
             f'{self.cmd_vel_topic} -> {self.sport_request_topic}, '
+            f'backend={self.backend}, '
             f'max_linear_x={max_linear_x:.3f}, '
             f'max_angular_z={max_angular_z:.3f}'
         )
@@ -189,6 +194,13 @@ class CmdVelBridgeNode(Node):
             raise ValueError(f'{name} must not be empty')
         return value
 
+    def _backend_parameter(self):
+        value = self._string_parameter('backend')
+        if value not in Go2MotionClient.SUPPORTED_BACKENDS:
+            supported = ', '.join(sorted(Go2MotionClient.SUPPORTED_BACKENDS))
+            raise ValueError(f'backend must be one of: {supported}')
+        return value
+
     def _positive_float_parameter(self, name):
         value = float(self.get_parameter(name).value)
         if not math.isfinite(value) or value <= 0.0:
@@ -215,14 +227,15 @@ def main(args=None):
     try:
         node = CmdVelBridgeNode()
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         if node is not None:
             node.get_logger().warn('Interrupted by user')
     finally:
         if node is not None:
             node.shutdown()
             node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

@@ -1,5 +1,6 @@
 cmd_vel_bridge_node:
   ros__parameters:
+    backend: mock
     cmd_vel_topic: /navigation/cmd_vel
     sport_request_topic: /api/sport/request
     max_linear_x: 0.20
