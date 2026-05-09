@@ -12,3 +12,8 @@ rosbag2_*/
 !.vscode/extensions.json
 *.log
 *.tmp
+third_party/unitree_ros2/
+third_party/unitree_sdk2/
+third_party/**/build/
+third_party/**/install/
+third_party/**/log/
