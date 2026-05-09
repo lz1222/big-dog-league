@@ -4,6 +4,7 @@ import time
 
 import rclpy
 from geometry_msgs.msg import Twist
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 
@@ -89,13 +90,14 @@ def main(args=None):
     try:
         node = TwoStepWalkTestNode()
         node.run()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         if node is not None:
             node.get_logger().warn('Interrupted by user')
     finally:
         if node is not None:
             node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

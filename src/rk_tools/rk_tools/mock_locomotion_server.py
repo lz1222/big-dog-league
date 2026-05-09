@@ -4,6 +4,7 @@ import time
 
 import rclpy
 from rclpy.action import ActionServer
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from rk_interfaces.action import ExecuteMotion
@@ -53,9 +54,12 @@ def main(args=None):
     node = MockLocomotionServer()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

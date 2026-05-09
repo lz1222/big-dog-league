@@ -2,6 +2,7 @@
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from rk_interfaces.action import RunMission
@@ -51,9 +52,12 @@ def main(args=None):
     node = MissionClientNode()
     try:
         node.run()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

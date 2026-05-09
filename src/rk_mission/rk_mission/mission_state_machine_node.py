@@ -7,7 +7,7 @@ import rclpy
 from rclpy.action import ActionClient, ActionServer
 from rclpy.action.server import GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 
 from rk_interfaces.action import ExecuteArmTask, ExecuteMotion, RunMission
@@ -283,10 +283,13 @@ def main(args=None):
     executor.add_node(node)
     try:
         executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
