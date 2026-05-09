@@ -16,7 +16,7 @@ from rk_interfaces.action import ExecuteArmTask, ExecuteMotion, RunMission
 STAGES = [
     'PRECHECK',
     'START',
-    'JUMP_START',
+    'LINE_FOLLOW',
     'AVOID',
     'STAIRS',
     'PICK_START_ITEM',
@@ -36,7 +36,7 @@ ARM_STAGE_TARGETS = {
 
 LOCOMOTION_STAGES = {
     'START',
-    'JUMP_START',
+    'LINE_FOLLOW',
     'AVOID',
     'STAIRS',
     'WARNING_DETECT_ACTION',
@@ -189,8 +189,14 @@ class MissionStateMachineNode(Node):
             else:
                 time.sleep(0.2)
 
+            if index + 1 < len(STAGES):
+                self.log_transition(stage, STAGES[index + 1])
+
         self.publish_feedback(goal_handle, 'DONE', 1.0)
         return True
+
+    def log_transition(self, current_stage, next_stage):
+        self.get_logger().info(f'[FSM] {current_stage} -> {next_stage}')
 
     def publish_feedback(self, goal_handle, stage, progress):
         feedback = RunMission.Feedback()
