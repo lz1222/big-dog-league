@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -15,6 +15,12 @@ def generate_launch_description():
             default_value='true',
             description='Automatically start the mock mission through /mission/run.'
         ),
+        LogInfo(msg='Starting RK mock competition system.'),
+        LogInfo(msg=['mission auto_start: ', auto_start]),
+        LogInfo(msg='Starting rk_perception mock nodes.'),
+        LogInfo(msg='Starting rk_navigation line follower node.'),
+        LogInfo(msg='Starting rk_tools mock hardware and safety nodes.'),
+        LogInfo(msg='Starting rk_mission mission state machine node.'),
         Node(
             package='rk_perception',
             executable='mock_line_tracker_node',
