@@ -1,0 +1,1 @@
+/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_go/rosidl_generator_cpp/unitree_go/msg/detail/wireless_controller__type_support.hpp

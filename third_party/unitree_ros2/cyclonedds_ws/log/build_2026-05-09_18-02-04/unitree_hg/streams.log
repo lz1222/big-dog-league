@@ -1,0 +1,431 @@
+[0.104s] Invoking command in '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/tmp/rk_rosidl_generator_dds_idl/opt/ros/humble:/opt/ros/humble /usr/bin/cmake --build /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg -- -j4 -l4
+[0.692s] [  1%] Built target unitree_hg__rs
+[0.806s] Consolidate compiler generated dependencies of target unitree_hg__rosidl_generator_c
+[0.973s] [  2%] Generating DDS interfaces
+[1.036s] [  2%] Built target unitree_hg__cpp
+[1.158s] [ 14%] Built target unitree_hg__rosidl_generator_c
+[1.405s] [ 15%] Generating C++ type support for eProsima Fast-RTPS
+[1.461s] [ 16%] Generating C++ introspection for ROS interfaces
+[1.615s] [ 16%] Built target ament_cmake_python_symlink_unitree_hg
+[1.729s] [ 16%] Generating C++ type support dispatch for ROS interfaces
+[16.462s] [ 16%] Built target unitree_hg__dds_connext_idl
+[17.267s] [ 17%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/bms_cmd__type_support.cpp.o
+[20.215s] [ 18%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/bms_state__type_support.cpp.o
+[20.629s] [ 19%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/bms_cmd__type_support.cpp.o
+[21.033s] [ 20%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/bms_cmd__type_support.cpp.o
+[25.195s] [ 21%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/hand_cmd__type_support.cpp.o
+[28.164s] [ 22%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/hand_state__type_support.cpp.o
+[28.851s] [ 23%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/bms_state__type_support.cpp.o
+[29.929s] [ 24%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/bms_state__type_support.cpp.o
+[32.000s] [ 25%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/imu_state__type_support.cpp.o
+[36.247s] [ 26%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/hand_cmd__type_support.cpp.o
+[36.974s] [ 27%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/hand_cmd__type_support.cpp.o
+[36.983s] [ 28%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/low_cmd__type_support.cpp.o
+[41.656s] [ 29%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/low_state__type_support.cpp.o
+[44.904s] [ 30%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/hand_state__type_support.cpp.o
+[45.079s] [ 31%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/hand_state__type_support.cpp.o
+[46.955s] [ 32%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/main_board_state__type_support.cpp.o
+[51.829s] [ 32%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/motor_cmd__type_support.cpp.o
+[52.555s] [ 32%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/imu_state__type_support.cpp.o
+[52.976s] [ 33%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/imu_state__type_support.cpp.o
+[57.321s] [ 34%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/motor_state__type_support.cpp.o
+[62.573s] [ 35%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/low_cmd__type_support.cpp.o
+[63.069s] [ 36%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/low_cmd__type_support.cpp.o
+[63.822s] [ 37%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/unitree_hg/msg/press_sensor_state__type_support.cpp.o
+[68.702s] [ 38%] Linking CXX shared library libunitree_hg__rosidl_typesupport_cpp.so
+[69.422s] [ 38%] Built target unitree_hg__rosidl_typesupport_cpp
+[70.454s] [ 38%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/low_state__type_support.cpp.o
+[71.102s] [ 39%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/low_state__type_support.cpp.o
+[77.590s] [ 40%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/main_board_state__type_support.cpp.o
+[79.546s] [ 41%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/main_board_state__type_support.cpp.o
+[85.427s] [ 42%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/motor_cmd__type_support.cpp.o
+[86.808s] [ 43%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/motor_cmd__type_support.cpp.o
+[90.079s] [ 44%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/motor_state__type_support.cpp.o
+[90.762s] [ 45%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/motor_state__type_support.cpp.o
+[92.934s] [ 46%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/unitree_hg/msg/detail/dds_fastrtps/press_sensor_state__type_support.cpp.o
+[93.387s] [ 47%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/unitree_hg/msg/detail/press_sensor_state__type_support.cpp.o
+[97.224s] [ 48%] Linking CXX shared library libunitree_hg__rosidl_typesupport_fastrtps_cpp.so
+[98.399s] [ 48%] Built target unitree_hg__rosidl_typesupport_fastrtps_cpp
+[98.400s] [ 49%] Linking CXX shared library libunitree_hg__rosidl_typesupport_introspection_cpp.so
+[99.509s] [ 49%] Built target unitree_hg__rosidl_typesupport_introspection_cpp
+[99.714s] [ 50%] Generating C introspection for ROS interfaces
+[107.801s] [ 51%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/bms_cmd__type_support.c.o
+[108.100s] [ 51%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/bms_state__type_support.c.o
+[108.631s] [ 52%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/hand_cmd__type_support.c.o
+[109.030s] [ 53%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/hand_state__type_support.c.o
+[109.598s] [ 54%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/imu_state__type_support.c.o
+[109.978s] [ 55%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/low_cmd__type_support.c.o
+[110.369s] [ 56%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/low_state__type_support.c.o
+[110.672s] [ 57%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/main_board_state__type_support.c.o
+[110.934s] [ 58%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/motor_cmd__type_support.c.o
+[111.204s] [ 59%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/motor_state__type_support.c.o
+[111.602s] [ 59%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/unitree_hg/msg/detail/press_sensor_state__type_support.c.o
+[111.957s] [ 60%] Linking C shared library libunitree_hg__rosidl_typesupport_introspection_c.so
+[112.430s] [ 60%] Built target unitree_hg__rosidl_typesupport_introspection_c
+[112.513s] [ 61%] Generating C type support dispatch for ROS interfaces
+[120.552s] [ 62%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/bms_cmd__type_support.cpp.o
+[121.047s] [ 63%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/bms_state__type_support.cpp.o
+[121.424s] [ 64%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/hand_cmd__type_support.cpp.o
+[121.757s] [ 65%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/hand_state__type_support.cpp.o
+[122.088s] [ 66%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/imu_state__type_support.cpp.o
+[122.483s] [ 66%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/low_cmd__type_support.cpp.o
+[122.855s] [ 67%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/low_state__type_support.cpp.o
+[123.199s] [ 68%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/main_board_state__type_support.cpp.o
+[123.542s] [ 69%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/motor_cmd__type_support.cpp.o
+[123.800s] [ 70%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/motor_state__type_support.cpp.o
+[124.033s] [ 71%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_c.dir/rosidl_typesupport_c/unitree_hg/msg/press_sensor_state__type_support.cpp.o
+[124.389s] [ 72%] Linking CXX shared library libunitree_hg__rosidl_typesupport_c.so
+[124.920s] [ 72%] Built target unitree_hg__rosidl_typesupport_c
+[125.008s] [ 73%] Generating C type support for eProsima Fast-RTPS
+[131.072s] [ 74%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/bms_cmd__type_support_c.cpp.o
+[133.465s] [ 75%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/hand_cmd__type_support_c.cpp.o
+[136.186s] [ 75%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/hand_state__type_support_c.cpp.o
+[139.306s] [ 76%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/imu_state__type_support_c.cpp.o
+[142.569s] [ 77%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/low_cmd__type_support_c.cpp.o
+[145.797s] [ 78%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/low_state__type_support_c.cpp.o
+[149.492s] [ 79%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/main_board_state__type_support_c.cpp.o
+[152.761s] [ 80%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/motor_cmd__type_support_c.cpp.o
+[156.124s] [ 81%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/motor_state__type_support_c.cpp.o
+[158.890s] [ 82%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/press_sensor_state__type_support_c.cpp.o
+[167.496s] [ 83%] Building CXX object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/unitree_hg/msg/detail/bms_state__type_support_c.cpp.o
+[170.865s] [ 84%] Linking CXX shared library libunitree_hg__rosidl_typesupport_fastrtps_c.so
+[171.518s] [ 84%] Built target unitree_hg__rosidl_typesupport_fastrtps_c
+[172.840s] running egg_info
+[172.851s] creating unitree_hg.egg-info
+[172.852s] writing unitree_hg.egg-info/PKG-INFO
+[172.852s] writing dependency_links to unitree_hg.egg-info/dependency_links.txt
+[172.852s] writing top-level names to unitree_hg.egg-info/top_level.txt
+[172.852s] writing manifest file 'unitree_hg.egg-info/SOURCES.txt'
+[172.866s] reading manifest file 'unitree_hg.egg-info/SOURCES.txt'
+[172.866s] writing manifest file 'unitree_hg.egg-info/SOURCES.txt'
+[173.007s] [ 84%] Built target ament_cmake_python_build_unitree_hg_egg
+[173.099s] [ 84%] Built target unitree_hg
+[173.209s] [ 85%] Generating Python code for ROS interfaces
+[181.905s] [ 85%] Built target unitree_hg__py
+[182.051s] [ 86%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_bms_cmd_s.c.o
+[182.625s] [ 87%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_hand_state_s.c.o
+[183.117s] [ 88%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_imu_state_s.c.o
+[183.628s] [ 89%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_low_cmd_s.c.o
+[184.278s] [ 90%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_low_state_s.c.o
+[184.874s] [ 91%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_main_board_state_s.c.o
+[185.355s] [ 92%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_motor_cmd_s.c.o
+[185.810s] [ 93%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_motor_state_s.c.o
+[186.311s] [ 93%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_press_sensor_state_s.c.o
+[186.754s] [ 94%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_hand_cmd_s.c.o
+[187.178s] [ 94%] Building C object CMakeFiles/unitree_hg__rosidl_generator_py.dir/rosidl_generator_py/unitree_hg/msg/_bms_state_s.c.o
+[187.727s] [ 95%] Linking C shared library rosidl_generator_py/unitree_hg/libunitree_hg__rosidl_generator_py.so
+[187.904s] [ 95%] Built target unitree_hg__rosidl_generator_py
+[187.985s] [ 95%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_fastrtps_c__pyext.dir/rosidl_generator_py/unitree_hg/_unitree_hg_s.ep.rosidl_typesupport_fastrtps_c.c.o
+[188.481s] [ 96%] Linking C shared library rosidl_generator_py/unitree_hg/unitree_hg_s__rosidl_typesupport_fastrtps_c.cpython-310-x86_64-linux-gnu.so
+[188.666s] [ 96%] Built target unitree_hg__rosidl_typesupport_fastrtps_c__pyext
+[188.738s] [ 97%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_c__pyext.dir/rosidl_generator_py/unitree_hg/_unitree_hg_s.ep.rosidl_typesupport_c.c.o
+[189.255s] [ 98%] Linking C shared library rosidl_generator_py/unitree_hg/unitree_hg_s__rosidl_typesupport_c.cpython-310-x86_64-linux-gnu.so
+[189.443s] [ 98%] Built target unitree_hg__rosidl_typesupport_c__pyext
+[189.529s] [ 99%] Building C object CMakeFiles/unitree_hg__rosidl_typesupport_introspection_c__pyext.dir/rosidl_generator_py/unitree_hg/_unitree_hg_s.ep.rosidl_typesupport_introspection_c.c.o
+[190.054s] [100%] Linking C shared library rosidl_generator_py/unitree_hg/unitree_hg_s__rosidl_typesupport_introspection_c.cpython-310-x86_64-linux-gnu.so
+[190.220s] [100%] Built target unitree_hg__rosidl_typesupport_introspection_c__pyext
+[190.265s] Invoked command in '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/tmp/rk_rosidl_generator_dds_idl/opt/ros/humble:/opt/ros/humble /usr/bin/cmake --build /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg -- -j4 -l4
+[190.273s] Invoking command in '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/tmp/rk_rosidl_generator_dds_idl/opt/ros/humble:/opt/ros/humble /usr/bin/cmake --install /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg
+[190.301s] -- Install configuration: ""
+[190.307s] -- Execute custom install script
+[190.310s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/ament_index/resource_index/rosidl_interfaces/unitree_hg
+[190.334s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/bms_cmd.h
+[190.363s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/bms_state.h
+[190.404s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__functions.h
+[190.439s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__struct.h
+[190.472s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__type_support.h
+[190.505s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__functions.h
+[190.539s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__struct.h
+[190.573s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__type_support.h
+[190.620s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__functions.h
+[190.666s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__struct.h
+[190.707s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__type_support.h
+[190.752s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__functions.h
+[190.790s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__struct.h
+[190.821s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__type_support.h
+[190.854s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__functions.h
+[190.904s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__struct.h
+[190.942s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__type_support.h
+[190.979s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__functions.h
+[191.015s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__struct.h
+[191.050s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__type_support.h
+[191.104s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__functions.h
+[191.147s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__struct.h
+[191.185s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__type_support.h
+[191.224s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__functions.h
+[191.260s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__struct.h
+[191.294s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__type_support.h
+[191.337s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__functions.h
+[191.394s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__struct.h
+[191.434s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__type_support.h
+[191.477s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__functions.h
+[191.527s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__struct.h
+[191.569s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__type_support.h
+[191.617s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__functions.h
+[191.669s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__struct.h
+[191.727s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__type_support.h
+[191.772s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/hand_cmd.h
+[191.810s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/hand_state.h
+[191.849s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/imu_state.h
+[191.895s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/low_cmd.h
+[191.940s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/low_state.h
+[191.971s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/main_board_state.h
+[192.008s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/motor_cmd.h
+[192.045s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/motor_state.h
+[192.077s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/press_sensor_state.h
+[192.115s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/rosidl_generator_c__visibility_control.h
+[192.152s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/environment/library_path.sh
+[192.186s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/environment/library_path.dsv
+[192.227s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__rosidl_typesupport_fastrtps_c.h
+[192.262s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__rosidl_typesupport_fastrtps_c.h
+[192.292s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__rosidl_typesupport_fastrtps_c.h
+[192.324s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__rosidl_typesupport_fastrtps_c.h
+[192.363s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__rosidl_typesupport_fastrtps_c.h
+[192.402s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__rosidl_typesupport_fastrtps_c.h
+[192.436s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__rosidl_typesupport_fastrtps_c.h
+[192.469s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__rosidl_typesupport_fastrtps_c.h
+[192.505s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__rosidl_typesupport_fastrtps_c.h
+[192.536s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__rosidl_typesupport_fastrtps_c.h
+[192.569s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__rosidl_typesupport_fastrtps_c.h
+[192.601s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/rosidl_typesupport_fastrtps_c__visibility_control.h
+[192.639s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/bms_cmd.hpp
+[192.674s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/bms_state.hpp
+[192.706s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__builder.hpp
+[192.735s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__struct.hpp
+[192.767s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__traits.hpp
+[192.811s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__type_support.hpp
+[192.843s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__builder.hpp
+[192.872s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__struct.hpp
+[192.906s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__traits.hpp
+[192.937s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__type_support.hpp
+[192.975s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__builder.hpp
+[193.007s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__struct.hpp
+[193.043s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__traits.hpp
+[193.077s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__type_support.hpp
+[193.109s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__builder.hpp
+[193.145s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__struct.hpp
+[193.178s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__traits.hpp
+[193.218s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__type_support.hpp
+[193.266s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__builder.hpp
+[193.299s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__struct.hpp
+[193.327s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__traits.hpp
+[193.364s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__type_support.hpp
+[193.402s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__builder.hpp
+[193.435s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__struct.hpp
+[193.465s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__traits.hpp
+[193.497s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__type_support.hpp
+[193.534s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__builder.hpp
+[193.565s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__struct.hpp
+[193.588s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__traits.hpp
+[193.621s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__type_support.hpp
+[193.654s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__builder.hpp
+[193.690s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__struct.hpp
+[193.728s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__traits.hpp
+[193.764s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__type_support.hpp
+[193.804s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__builder.hpp
+[193.836s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__struct.hpp
+[193.870s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__traits.hpp
+[193.912s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__type_support.hpp
+[193.940s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__builder.hpp
+[193.974s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__struct.hpp
+[194.010s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__traits.hpp
+[194.038s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__type_support.hpp
+[194.071s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__builder.hpp
+[194.103s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__struct.hpp
+[194.135s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__traits.hpp
+[194.168s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__type_support.hpp
+[194.219s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/hand_cmd.hpp
+[194.260s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/hand_state.hpp
+[194.293s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/imu_state.hpp
+[194.326s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/low_cmd.hpp
+[194.360s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/low_state.hpp
+[194.405s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/main_board_state.hpp
+[194.438s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/motor_cmd.hpp
+[194.472s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/motor_state.hpp
+[194.508s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/press_sensor_state.hpp
+[194.540s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/rosidl_generator_cpp__visibility_control.hpp
+[194.574s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__rosidl_typesupport_fastrtps_cpp.hpp
+[194.609s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__rosidl_typesupport_fastrtps_cpp.hpp
+[194.645s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__rosidl_typesupport_fastrtps_cpp.hpp
+[194.677s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__rosidl_typesupport_fastrtps_cpp.hpp
+[194.706s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__rosidl_typesupport_fastrtps_cpp.hpp
+[194.753s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__rosidl_typesupport_fastrtps_cpp.hpp
+[194.792s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__rosidl_typesupport_fastrtps_cpp.hpp
+[194.832s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__rosidl_typesupport_fastrtps_cpp.hpp
+[194.871s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__rosidl_typesupport_fastrtps_cpp.hpp
+[194.932s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__rosidl_typesupport_fastrtps_cpp.hpp
+[194.969s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__rosidl_typesupport_fastrtps_cpp.hpp
+[195.043s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/rosidl_typesupport_fastrtps_cpp__visibility_control.h
+[195.102s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__rosidl_typesupport_introspection_c.h
+[195.158s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__rosidl_typesupport_introspection_c.h
+[195.197s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__rosidl_typesupport_introspection_c.h
+[195.239s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__rosidl_typesupport_introspection_c.h
+[195.285s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__rosidl_typesupport_introspection_c.h
+[195.334s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__rosidl_typesupport_introspection_c.h
+[195.378s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__rosidl_typesupport_introspection_c.h
+[195.413s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__rosidl_typesupport_introspection_c.h
+[195.447s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__rosidl_typesupport_introspection_c.h
+[195.478s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__rosidl_typesupport_introspection_c.h
+[195.516s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__rosidl_typesupport_introspection_c.h
+[195.556s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/rosidl_typesupport_introspection_c__visibility_control.h
+[195.597s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_cmd__rosidl_typesupport_introspection_cpp.hpp
+[195.630s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/bms_state__rosidl_typesupport_introspection_cpp.hpp
+[195.662s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_cmd__rosidl_typesupport_introspection_cpp.hpp
+[195.696s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/hand_state__rosidl_typesupport_introspection_cpp.hpp
+[195.725s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/imu_state__rosidl_typesupport_introspection_cpp.hpp
+[195.758s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_cmd__rosidl_typesupport_introspection_cpp.hpp
+[195.807s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/low_state__rosidl_typesupport_introspection_cpp.hpp
+[195.847s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/main_board_state__rosidl_typesupport_introspection_cpp.hpp
+[195.881s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_cmd__rosidl_typesupport_introspection_cpp.hpp
+[195.921s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/motor_state__rosidl_typesupport_introspection_cpp.hpp
+[195.961s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/unitree_hg/unitree_hg/msg/detail/press_sensor_state__rosidl_typesupport_introspection_cpp.hpp
+[195.994s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/environment/pythonpath.sh
+[196.020s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/environment/pythonpath.dsv
+[196.081s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg-0.0.0-py3.10.egg-info/PKG-INFO
+[196.119s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg-0.0.0-py3.10.egg-info/SOURCES.txt
+[196.179s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg-0.0.0-py3.10.egg-info/dependency_links.txt
+[196.243s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg-0.0.0-py3.10.egg-info/top_level.txt
+[196.297s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/__init__.py
+[196.337s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/_unitree_hg_s.ep.rosidl_typesupport_c.c
+[196.378s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/_unitree_hg_s.ep.rosidl_typesupport_fastrtps_c.c
+[196.425s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/_unitree_hg_s.ep.rosidl_typesupport_introspection_c.c
+[196.459s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/libunitree_hg__rosidl_generator_py.so
+[196.496s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/__init__.py
+[196.538s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_bms_cmd.py
+[196.597s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_bms_cmd_s.c
+[196.644s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_bms_state.py
+[196.686s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_bms_state_s.c
+[196.727s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_hand_cmd.py
+[196.761s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_hand_cmd_s.c
+[196.808s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_hand_state.py
+[196.848s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_hand_state_s.c
+[196.898s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_imu_state.py
+[196.931s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_imu_state_s.c
+[196.965s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_low_cmd.py
+[197.001s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_low_cmd_s.c
+[197.033s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_low_state.py
+[197.069s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_low_state_s.c
+[197.104s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_main_board_state.py
+[197.139s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_main_board_state_s.c
+[197.174s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_motor_cmd.py
+[197.210s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_motor_cmd_s.c
+[197.245s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_motor_state.py
+[197.282s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_motor_state_s.c
+[197.319s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_press_sensor_state.py
+[197.354s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_press_sensor_state_s.c
+[197.397s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/unitree_hg_s__rosidl_typesupport_c.cpython-310-x86_64-linux-gnu.so
+[197.435s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/unitree_hg_s__rosidl_typesupport_fastrtps_c.cpython-310-x86_64-linux-gnu.so
+[197.465s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/unitree_hg_s__rosidl_typesupport_introspection_c.cpython-310-x86_64-linux-gnu.so
+[197.495s] -- Up-to-date symlink: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/unitree_hg_s__rosidl_typesupport_fastrtps_c.cpython-310-x86_64-linux-gnu.so
+[197.499s] -- Up-to-date symlink: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/unitree_hg_s__rosidl_typesupport_introspection_c.cpython-310-x86_64-linux-gnu.so
+[197.505s] -- Up-to-date symlink: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/unitree_hg_s__rosidl_typesupport_c.cpython-310-x86_64-linux-gnu.so
+[197.507s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/ament_index/resource_index/rust_packages/unitree_hg
+[197.546s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/rust/Cargo.toml
+[197.579s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/rust/build.rs
+[197.614s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/rust/src/lib.rs
+[197.646s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/rust/src/msg.rs
+[197.680s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/rust/src/msg/rmw.rs
+[197.719s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/BmsCmd.idl
+[197.756s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/BmsState.idl
+[197.787s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/HandCmd.idl
+[197.821s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/HandState.idl
+[197.856s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/IMUState.idl
+[197.896s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/LowCmd.idl
+[197.933s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/LowState.idl
+[197.961s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/MainBoardState.idl
+[197.992s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/MotorCmd.idl
+[198.028s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/MotorState.idl
+[198.066s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/PressSensorState.idl
+[198.100s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/BmsCmd.msg
+[198.134s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/BmsState.msg
+[198.171s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/HandCmd.msg
+[198.194s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/HandState.msg
+[198.227s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/IMUState.msg
+[198.264s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/LowCmd.msg
+[198.294s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/LowState.msg
+[198.325s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/MainBoardState.msg
+[198.358s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/MotorCmd.msg
+[198.396s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/MotorState.msg
+[198.432s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/PressSensorState.msg
+[198.467s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/BmsCmd_.idl
+[198.499s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/BmsState_.idl
+[198.534s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/HandCmd_.idl
+[198.568s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/HandState_.idl
+[198.598s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/IMUState_.idl
+[198.630s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/LowCmd_.idl
+[198.665s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/LowState_.idl
+[198.698s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/MainBoardState_.idl
+[198.733s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/MotorCmd_.idl
+[198.771s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/MotorState_.idl
+[198.802s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/msg/dds_connext/PressSensorState_.idl
+[198.839s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/ament_index/resource_index/package_run_dependencies/unitree_hg
+[198.873s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/ament_index/resource_index/parent_prefix_path/unitree_hg
+[198.923s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/environment/ament_prefix_path.sh
+[198.958s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/environment/ament_prefix_path.dsv
+[198.991s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/environment/path.sh
+[199.024s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/environment/path.dsv
+[199.059s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/local_setup.bash
+[199.093s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/local_setup.sh
+[199.127s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/local_setup.zsh
+[199.159s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/local_setup.dsv
+[199.195s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/package.dsv
+[199.227s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/ament_index/resource_index/packages/unitree_hg
+[199.264s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/rosidl_cmake-extras.cmake
+[199.296s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/ament_cmake_export_dependencies-extras.cmake
+[199.327s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/ament_cmake_export_include_directories-extras.cmake
+[199.360s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/ament_cmake_export_libraries-extras.cmake
+[199.394s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/ament_cmake_export_targets-extras.cmake
+[199.427s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/rosidl_cmake_export_typesupport_targets-extras.cmake
+[199.462s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/rosidl_cmake_export_typesupport_libraries-extras.cmake
+[199.495s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hgConfig.cmake
+[199.533s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hgConfig-version.cmake
+[199.571s] -- Symlinking: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/package.xml
+[199.615s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_generator_c.so
+[199.623s] -- Set runtime path of "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_generator_c.so" to ""
+[199.626s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_fastrtps_c.so
+[199.632s] -- Set runtime path of "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_fastrtps_c.so" to ""
+[199.632s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_fastrtps_cpp.so
+[199.636s] -- Set runtime path of "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_fastrtps_cpp.so" to ""
+[199.636s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_introspection_c.so
+[199.640s] -- Set runtime path of "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_introspection_c.so" to ""
+[199.641s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_c.so
+[199.642s] -- Set runtime path of "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_c.so" to ""
+[199.642s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_introspection_cpp.so
+[199.648s] -- Set runtime path of "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_introspection_cpp.so" to ""
+[199.648s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_cpp.so
+[199.655s] -- Set runtime path of "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_typesupport_cpp.so" to ""
+[199.857s] Listing '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg'...
+[199.857s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/__init__.py'...
+[199.858s] Listing '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg'...
+[199.860s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/__init__.py'...
+[199.860s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_bms_cmd.py'...
+[199.860s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_bms_state.py'...
+[199.864s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_hand_cmd.py'...
+[199.868s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_hand_state.py'...
+[199.868s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_imu_state.py'...
+[199.868s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_low_cmd.py'...
+[199.868s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_low_state.py'...
+[199.869s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_main_board_state.py'...
+[199.869s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_motor_cmd.py'...
+[199.869s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_motor_state.py'...
+[199.869s] Compiling '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/msg/_press_sensor_state.py'...
+[199.877s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_generator_py.so
+[199.877s] -- Set runtime path of "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/lib/libunitree_hg__rosidl_generator_py.so" to ""
+[199.877s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/export_unitree_hg__rosidl_generator_cExport.cmake
+[199.877s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/export_unitree_hg__rosidl_generator_cExport-noconfig.cmake
+[199.878s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/export_unitree_hg__rosidl_typesupport_fastrtps_cExport.cmake
+[199.878s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/export_unitree_hg__rosidl_typesupport_fastrtps_cExport-noconfig.cmake
+[199.878s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/export_unitree_hg__rosidl_generator_cppExport.cmake
+[199.878s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/export_unitree_hg__rosidl_typesupport_fastrtps_cppExport.cmake
+[199.878s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/export_unitree_hg__rosidl_typesupport_fastrtps_cppExport-noconfig.cmake
+[199.878s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hg__rosidl_typesupport_introspection_cExport.cmake
+[199.879s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hg__rosidl_typesupport_introspection_cExport-noconfig.cmake
+[199.879s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hg__rosidl_typesupport_cExport.cmake
+[199.879s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hg__rosidl_typesupport_cExport-noconfig.cmake
+[199.879s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hg__rosidl_typesupport_introspection_cppExport.cmake
+[199.879s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hg__rosidl_typesupport_introspection_cppExport-noconfig.cmake
+[199.879s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hg__rosidl_typesupport_cppExport.cmake
+[199.879s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/unitree_hg__rosidl_typesupport_cppExport-noconfig.cmake
+[199.880s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/export_unitree_hg__rosidl_generator_pyExport.cmake
+[199.890s] -- Installing: /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg/share/unitree_hg/cmake/export_unitree_hg__rosidl_generator_pyExport-noconfig.cmake
+[199.914s] Invoked command in '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/tmp/rk_rosidl_generator_dds_idl/opt/ros/humble:/opt/ros/humble /usr/bin/cmake --install /home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg

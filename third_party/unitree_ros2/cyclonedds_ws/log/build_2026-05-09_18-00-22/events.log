@@ -1,0 +1,182 @@
+[0.000000] (-) TimerEvent: {}
+[0.002056] (unitree_api) JobQueued: {'identifier': 'unitree_api', 'dependencies': OrderedDict()}
+[0.002347] (unitree_go) JobQueued: {'identifier': 'unitree_go', 'dependencies': OrderedDict()}
+[0.002886] (unitree_hg) JobQueued: {'identifier': 'unitree_hg', 'dependencies': OrderedDict()}
+[0.006109] (unitree_api) JobStarted: {'identifier': 'unitree_api'}
+[0.029685] (unitree_go) JobStarted: {'identifier': 'unitree_go'}
+[0.045347] (unitree_hg) JobStarted: {'identifier': 'unitree_hg'}
+[0.058701] (unitree_api) JobProgress: {'identifier': 'unitree_api', 'progress': 'cmake'}
+[0.061498] (unitree_api) Command: {'cmd': ['/usr/bin/cmake', '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/src/unitree/unitree_api', '-DAMENT_CMAKE_SYMLINK_INSTALL=1', '-DCMAKE_INSTALL_PREFIX=/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_api'], 'cwd': '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_api', 'env': OrderedDict([('LESSOPEN', '| /usr/bin/lesspipe %s'), ('VSCODE_CWD', '/home/lzbb'), ('VSCODE_ESM_ENTRYPOINT', 'vs/workbench/api/node/extensionHostProcess'), ('CODEX_CI', '1'), ('LANGUAGE', 'zh_CN:en'), ('USER', 'lzbb'), ('SSH_CLIENT', '192.168.83.1 59279 22'), ('LC_TIME', 'zh_CN.UTF-8'), ('CODEX_INTERNAL_ORIGINATOR_OVERRIDE', 'codex_vscode'), ('VSCODE_NLS_CONFIG', '{"userLocale":"zh-cn","osLocale":"zh-cn","resolvedLanguage":"zh-cn","defaultMessagesFile":"/home/lzbb/.vscode-server/cli/servers/Stable-8b640eef5a6c6089c029249d48efa5c99adf7d51/server/out/nls.messages.json","languagePack":{"translationsConfigFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/tcf.json","messagesFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/8b640eef5a6c6089c029249d48efa5c99adf7d51/nls.messages.json","corruptMarkerFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/corrupted.info"},"locale":"zh-cn","availableLanguages":{"*":"zh-cn"},"_languagePackId":"b912e1cc94c8380c6bb426bdce2c540f.zh-cn","_languagePackSupport":true,"_translationsConfigFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/tcf.json","_cacheRoot":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn","_resolvedLanguagePackCoreLocation":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/8b640eef5a6c6089c029249d48efa5c99adf7d51","_corruptedFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/corrupted.info"}'), ('VSCODE_HANDLES_UNCAUGHT_ERRORS', 'true'), ('XDG_SESSION_TYPE', 'tty'), ('DEBUG', 'release'), ('SHLVL', '0'), ('LD_LIBRARY_PATH', '/home/lzbb/go2_ws/install/unitree_sdk2/lib:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib'), ('BROWSER', '/home/lzbb/.vscode-server/cli/servers/Stable-8b640eef5a6c6089c029249d48efa5c99adf7d51/server/bin/helpers/browser.sh'), ('MOTD_SHOWN', 'pam'), ('HOME', '/home/lzbb'), ('VSCODE_RECONNECTION_GRACE_TIME', '10800000'), ('VSCODE_IPC_HOOK_CLI', '/run/user/1000/vscode-ipc-52056c4d-2ae8-4935-b35e-5bee004f55a6.sock'), ('ROS_PYTHON_VERSION', '3'), ('PAGER', 'cat'), ('LC_MONETARY', 'zh_CN.UTF-8'), ('LC_CTYPE', 'C.UTF-8'), ('NO_COLOR', '1'), ('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus'), ('COLORTERM', ''), ('COLCON_PREFIX_PATH', '/home/lzbb/go2_ws/install'), ('APPLICATION_INSIGHTS_NO_STATSBEAT', 'true'), ('ROS_DISTRO', 'humble'), ('LOGNAME', 'lzbb'), ('VSCODE_HANDLES_SIGPIPE', 'true'), ('_', '/usr/bin/colcon'), ('ROS_VERSION', '2'), ('XDG_SESSION_CLASS', 'user'), ('RUST_LOG', 'warn'), ('TERM', 'dumb'), ('XDG_SESSION_ID', '5'), ('VSCODE_CLI_REQUIRE_TOKEN', 'fc267ef3-1d2f-4100-a69a-e3728c8f6a65'), ('ROS_LOCALHOST_ONLY', '0'), ('PATH', '/home/lzbb/.codex/tmp/arg0/codex-arg0vYQEyZ:/home/lzbb/.vscode-server/cli/servers/Stable-8b640eef5a6c6089c029249d48efa5c99adf7d51/server/bin/remote-cli:/opt/ros/humble/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/lzbb/.vscode-server/extensions/openai.chatgpt-26.506.31421-linux-x64/bin/linux-x86_64'), ('VSCODE_AGENT_FOLDER', '/home/lzbb/.vscode-server'), ('PAPERSIZE', 'a4'), ('LC_ADDRESS', 'zh_CN.UTF-8'), ('XDG_RUNTIME_DIR', '/run/user/1000'), ('CODEX_SANDBOX_NETWORK_DISABLED', '1'), ('LANG', 'C.UTF-8'), ('LC_TELEPHONE', 'zh_CN.UTF-8'), ('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'), ('GH_PAGER', 'cat'), ('LS_COLORS', ''), ('AMENT_PREFIX_PATH', '/opt/ros/humble'), ('SHELL', '/bin/bash'), ('LC_NAME', 'zh_CN.UTF-8'), ('ELECTRON_RUN_AS_NODE', '1'), ('LESSCLOSE', '/usr/bin/lesspipe %s %s'), ('CODEX_THREAD_ID', '019e0c1a-9e77-7211-9a1d-f23248c7498c'), ('LC_MEASUREMENT', 'zh_CN.UTF-8'), ('LC_IDENTIFICATION', 'zh_CN.UTF-8'), ('GIT_PAGER', 'cat'), ('PWD', '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_api'), ('LC_ALL', 'C.UTF-8'), ('SSH_CONNECTION', '192.168.83.1 59279 192.168.83.128 22'), ('XDG_DATA_DIRS', '/usr/share/gnome:/usr/local/share:/usr/share:/var/lib/snapd/desktop'), ('PYTHONPATH', '/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages'), ('LC_NUMERIC', 'zh_CN.UTF-8'), ('LC_PAPER', 'zh_CN.UTF-8'), ('COLCON', '1'), ('CMAKE_PREFIX_PATH', '/home/lzbb/go2_ws/install/unitree_sdk2:/opt/ros/humble')]), 'shell': False}
+[0.072981] (unitree_go) JobProgress: {'identifier': 'unitree_go', 'progress': 'cmake'}
+[0.073087] (unitree_go) Command: {'cmd': ['/usr/bin/cmake', '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/src/unitree/unitree_go', '-DAMENT_CMAKE_SYMLINK_INSTALL=1', '-DCMAKE_INSTALL_PREFIX=/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_go'], 'cwd': '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_go', 'env': OrderedDict([('LESSOPEN', '| /usr/bin/lesspipe %s'), ('VSCODE_CWD', '/home/lzbb'), ('VSCODE_ESM_ENTRYPOINT', 'vs/workbench/api/node/extensionHostProcess'), ('CODEX_CI', '1'), ('LANGUAGE', 'zh_CN:en'), ('USER', 'lzbb'), ('SSH_CLIENT', '192.168.83.1 59279 22'), ('LC_TIME', 'zh_CN.UTF-8'), ('CODEX_INTERNAL_ORIGINATOR_OVERRIDE', 'codex_vscode'), ('VSCODE_NLS_CONFIG', '{"userLocale":"zh-cn","osLocale":"zh-cn","resolvedLanguage":"zh-cn","defaultMessagesFile":"/home/lzbb/.vscode-server/cli/servers/Stable-8b640eef5a6c6089c029249d48efa5c99adf7d51/server/out/nls.messages.json","languagePack":{"translationsConfigFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/tcf.json","messagesFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/8b640eef5a6c6089c029249d48efa5c99adf7d51/nls.messages.json","corruptMarkerFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/corrupted.info"},"locale":"zh-cn","availableLanguages":{"*":"zh-cn"},"_languagePackId":"b912e1cc94c8380c6bb426bdce2c540f.zh-cn","_languagePackSupport":true,"_translationsConfigFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/tcf.json","_cacheRoot":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn","_resolvedLanguagePackCoreLocation":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/8b640eef5a6c6089c029249d48efa5c99adf7d51","_corruptedFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/corrupted.info"}'), ('VSCODE_HANDLES_UNCAUGHT_ERRORS', 'true'), ('XDG_SESSION_TYPE', 'tty'), ('DEBUG', 'release'), ('SHLVL', '0'), ('LD_LIBRARY_PATH', '/home/lzbb/go2_ws/install/unitree_sdk2/lib:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib'), ('BROWSER', '/home/lzbb/.vscode-server/cli/servers/Stable-8b640eef5a6c6089c029249d48efa5c99adf7d51/server/bin/helpers/browser.sh'), ('MOTD_SHOWN', 'pam'), ('HOME', '/home/lzbb'), ('VSCODE_RECONNECTION_GRACE_TIME', '10800000'), ('VSCODE_IPC_HOOK_CLI', '/run/user/1000/vscode-ipc-52056c4d-2ae8-4935-b35e-5bee004f55a6.sock'), ('ROS_PYTHON_VERSION', '3'), ('PAGER', 'cat'), ('LC_MONETARY', 'zh_CN.UTF-8'), ('LC_CTYPE', 'C.UTF-8'), ('NO_COLOR', '1'), ('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus'), ('COLORTERM', ''), ('COLCON_PREFIX_PATH', '/home/lzbb/go2_ws/install'), ('APPLICATION_INSIGHTS_NO_STATSBEAT', 'true'), ('ROS_DISTRO', 'humble'), ('LOGNAME', 'lzbb'), ('VSCODE_HANDLES_SIGPIPE', 'true'), ('_', '/usr/bin/colcon'), ('ROS_VERSION', '2'), ('XDG_SESSION_CLASS', 'user'), ('RUST_LOG', 'warn'), ('TERM', 'dumb'), ('XDG_SESSION_ID', '5'), ('VSCODE_CLI_REQUIRE_TOKEN', 'fc267ef3-1d2f-4100-a69a-e3728c8f6a65'), ('ROS_LOCALHOST_ONLY', '0'), ('PATH', '/home/lzbb/.codex/tmp/arg0/codex-arg0vYQEyZ:/home/lzbb/.vscode-server/cli/servers/Stable-8b640eef5a6c6089c029249d48efa5c99adf7d51/server/bin/remote-cli:/opt/ros/humble/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/lzbb/.vscode-server/extensions/openai.chatgpt-26.506.31421-linux-x64/bin/linux-x86_64'), ('VSCODE_AGENT_FOLDER', '/home/lzbb/.vscode-server'), ('PAPERSIZE', 'a4'), ('LC_ADDRESS', 'zh_CN.UTF-8'), ('XDG_RUNTIME_DIR', '/run/user/1000'), ('CODEX_SANDBOX_NETWORK_DISABLED', '1'), ('LANG', 'C.UTF-8'), ('LC_TELEPHONE', 'zh_CN.UTF-8'), ('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'), ('GH_PAGER', 'cat'), ('LS_COLORS', ''), ('AMENT_PREFIX_PATH', '/opt/ros/humble'), ('SHELL', '/bin/bash'), ('LC_NAME', 'zh_CN.UTF-8'), ('ELECTRON_RUN_AS_NODE', '1'), ('LESSCLOSE', '/usr/bin/lesspipe %s %s'), ('CODEX_THREAD_ID', '019e0c1a-9e77-7211-9a1d-f23248c7498c'), ('LC_MEASUREMENT', 'zh_CN.UTF-8'), ('LC_IDENTIFICATION', 'zh_CN.UTF-8'), ('GIT_PAGER', 'cat'), ('PWD', '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_go'), ('LC_ALL', 'C.UTF-8'), ('SSH_CONNECTION', '192.168.83.1 59279 192.168.83.128 22'), ('XDG_DATA_DIRS', '/usr/share/gnome:/usr/local/share:/usr/share:/var/lib/snapd/desktop'), ('PYTHONPATH', '/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages'), ('LC_NUMERIC', 'zh_CN.UTF-8'), ('LC_PAPER', 'zh_CN.UTF-8'), ('COLCON', '1'), ('CMAKE_PREFIX_PATH', '/home/lzbb/go2_ws/install/unitree_sdk2:/opt/ros/humble')]), 'shell': False}
+[0.081029] (unitree_hg) JobProgress: {'identifier': 'unitree_hg', 'progress': 'cmake'}
+[0.117360] (unitree_hg) Command: {'cmd': ['/usr/bin/cmake', '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/src/unitree/unitree_hg', '-DAMENT_CMAKE_SYMLINK_INSTALL=1', '-DCMAKE_INSTALL_PREFIX=/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/install/unitree_hg'], 'cwd': '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg', 'env': OrderedDict([('LESSOPEN', '| /usr/bin/lesspipe %s'), ('VSCODE_CWD', '/home/lzbb'), ('VSCODE_ESM_ENTRYPOINT', 'vs/workbench/api/node/extensionHostProcess'), ('CODEX_CI', '1'), ('LANGUAGE', 'zh_CN:en'), ('USER', 'lzbb'), ('SSH_CLIENT', '192.168.83.1 59279 22'), ('LC_TIME', 'zh_CN.UTF-8'), ('CODEX_INTERNAL_ORIGINATOR_OVERRIDE', 'codex_vscode'), ('VSCODE_NLS_CONFIG', '{"userLocale":"zh-cn","osLocale":"zh-cn","resolvedLanguage":"zh-cn","defaultMessagesFile":"/home/lzbb/.vscode-server/cli/servers/Stable-8b640eef5a6c6089c029249d48efa5c99adf7d51/server/out/nls.messages.json","languagePack":{"translationsConfigFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/tcf.json","messagesFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/8b640eef5a6c6089c029249d48efa5c99adf7d51/nls.messages.json","corruptMarkerFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/corrupted.info"},"locale":"zh-cn","availableLanguages":{"*":"zh-cn"},"_languagePackId":"b912e1cc94c8380c6bb426bdce2c540f.zh-cn","_languagePackSupport":true,"_translationsConfigFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/tcf.json","_cacheRoot":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn","_resolvedLanguagePackCoreLocation":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/8b640eef5a6c6089c029249d48efa5c99adf7d51","_corruptedFile":"/home/lzbb/.vscode-server/data/clp/b912e1cc94c8380c6bb426bdce2c540f.zh-cn/corrupted.info"}'), ('VSCODE_HANDLES_UNCAUGHT_ERRORS', 'true'), ('XDG_SESSION_TYPE', 'tty'), ('DEBUG', 'release'), ('SHLVL', '0'), ('LD_LIBRARY_PATH', '/home/lzbb/go2_ws/install/unitree_sdk2/lib:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib'), ('BROWSER', '/home/lzbb/.vscode-server/cli/servers/Stable-8b640eef5a6c6089c029249d48efa5c99adf7d51/server/bin/helpers/browser.sh'), ('MOTD_SHOWN', 'pam'), ('HOME', '/home/lzbb'), ('VSCODE_RECONNECTION_GRACE_TIME', '10800000'), ('VSCODE_IPC_HOOK_CLI', '/run/user/1000/vscode-ipc-52056c4d-2ae8-4935-b35e-5bee004f55a6.sock'), ('ROS_PYTHON_VERSION', '3'), ('PAGER', 'cat'), ('LC_MONETARY', 'zh_CN.UTF-8'), ('LC_CTYPE', 'C.UTF-8'), ('NO_COLOR', '1'), ('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus'), ('COLORTERM', ''), ('COLCON_PREFIX_PATH', '/home/lzbb/go2_ws/install'), ('APPLICATION_INSIGHTS_NO_STATSBEAT', 'true'), ('ROS_DISTRO', 'humble'), ('LOGNAME', 'lzbb'), ('VSCODE_HANDLES_SIGPIPE', 'true'), ('_', '/usr/bin/colcon'), ('ROS_VERSION', '2'), ('XDG_SESSION_CLASS', 'user'), ('RUST_LOG', 'warn'), ('TERM', 'dumb'), ('XDG_SESSION_ID', '5'), ('VSCODE_CLI_REQUIRE_TOKEN', 'fc267ef3-1d2f-4100-a69a-e3728c8f6a65'), ('ROS_LOCALHOST_ONLY', '0'), ('PATH', '/home/lzbb/.codex/tmp/arg0/codex-arg0vYQEyZ:/home/lzbb/.vscode-server/cli/servers/Stable-8b640eef5a6c6089c029249d48efa5c99adf7d51/server/bin/remote-cli:/opt/ros/humble/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/lzbb/.vscode-server/extensions/openai.chatgpt-26.506.31421-linux-x64/bin/linux-x86_64'), ('VSCODE_AGENT_FOLDER', '/home/lzbb/.vscode-server'), ('PAPERSIZE', 'a4'), ('LC_ADDRESS', 'zh_CN.UTF-8'), ('XDG_RUNTIME_DIR', '/run/user/1000'), ('CODEX_SANDBOX_NETWORK_DISABLED', '1'), ('LANG', 'C.UTF-8'), ('LC_TELEPHONE', 'zh_CN.UTF-8'), ('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'), ('GH_PAGER', 'cat'), ('LS_COLORS', ''), ('AMENT_PREFIX_PATH', '/opt/ros/humble'), ('SHELL', '/bin/bash'), ('LC_NAME', 'zh_CN.UTF-8'), ('ELECTRON_RUN_AS_NODE', '1'), ('LESSCLOSE', '/usr/bin/lesspipe %s %s'), ('CODEX_THREAD_ID', '019e0c1a-9e77-7211-9a1d-f23248c7498c'), ('LC_MEASUREMENT', 'zh_CN.UTF-8'), ('LC_IDENTIFICATION', 'zh_CN.UTF-8'), ('GIT_PAGER', 'cat'), ('PWD', '/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg'), ('LC_ALL', 'C.UTF-8'), ('SSH_CONNECTION', '192.168.83.1 59279 192.168.83.128 22'), ('XDG_DATA_DIRS', '/usr/share/gnome:/usr/local/share:/usr/share:/var/lib/snapd/desktop'), ('PYTHONPATH', '/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages'), ('LC_NUMERIC', 'zh_CN.UTF-8'), ('LC_PAPER', 'zh_CN.UTF-8'), ('COLCON', '1'), ('CMAKE_PREFIX_PATH', '/home/lzbb/go2_ws/install/unitree_sdk2:/opt/ros/humble')]), 'shell': False}
+[0.134244] (-) TimerEvent: {}
+[0.242270] (-) TimerEvent: {}
+[0.344476] (-) TimerEvent: {}
+[0.368575] (unitree_go) StdoutLine: {'line': b'-- The C compiler identification is GNU 11.4.0\n'}
+[0.369887] (unitree_api) StdoutLine: {'line': b'-- The C compiler identification is GNU 11.4.0\n'}
+[0.441407] (unitree_hg) StdoutLine: {'line': b'-- The C compiler identification is GNU 11.4.0\n'}
+[0.445862] (-) TimerEvent: {}
+[0.549350] (-) TimerEvent: {}
+[0.655761] (-) TimerEvent: {}
+[0.677644] (unitree_api) StdoutLine: {'line': b'-- The CXX compiler identification is GNU 11.4.0\n'}
+[0.720665] (unitree_go) StdoutLine: {'line': b'-- The CXX compiler identification is GNU 11.4.0\n'}
+[0.746161] (unitree_api) StdoutLine: {'line': b'-- Detecting C compiler ABI info\n'}
+[0.758811] (-) TimerEvent: {}
+[0.774060] (unitree_go) StdoutLine: {'line': b'-- Detecting C compiler ABI info\n'}
+[0.844069] (unitree_hg) StdoutLine: {'line': b'-- The CXX compiler identification is GNU 11.4.0\n'}
+[0.859814] (-) TimerEvent: {}
+[0.890119] (unitree_hg) StdoutLine: {'line': b'-- Detecting C compiler ABI info\n'}
+[0.960370] (-) TimerEvent: {}
+[1.062138] (-) TimerEvent: {}
+[1.088244] (unitree_api) StdoutLine: {'line': b'-- Detecting C compiler ABI info - done\n'}
+[1.155476] (unitree_api) StdoutLine: {'line': b'-- Check for working C compiler: /usr/bin/cc - skipped\n'}
+[1.155999] (unitree_api) StdoutLine: {'line': b'-- Detecting C compile features\n'}
+[1.164978] (-) TimerEvent: {}
+[1.165755] (unitree_go) StdoutLine: {'line': b'-- Detecting C compiler ABI info - done\n'}
+[1.166170] (unitree_api) StdoutLine: {'line': b'-- Detecting C compile features - done\n'}
+[1.186827] (unitree_api) StdoutLine: {'line': b'-- Detecting CXX compiler ABI info\n'}
+[1.199738] (unitree_go) StdoutLine: {'line': b'-- Check for working C compiler: /usr/bin/cc - skipped\n'}
+[1.207213] (unitree_go) StdoutLine: {'line': b'-- Detecting C compile features\n'}
+[1.207502] (unitree_go) StdoutLine: {'line': b'-- Detecting C compile features - done\n'}
+[1.226039] (unitree_go) StdoutLine: {'line': b'-- Detecting CXX compiler ABI info\n'}
+[1.267735] (-) TimerEvent: {}
+[1.294619] (unitree_hg) StdoutLine: {'line': b'-- Detecting C compiler ABI info - done\n'}
+[1.348587] (unitree_hg) StdoutLine: {'line': b'-- Check for working C compiler: /usr/bin/cc - skipped\n'}
+[1.355336] (unitree_hg) StdoutLine: {'line': b'-- Detecting C compile features\n'}
+[1.359115] (unitree_hg) StdoutLine: {'line': b'-- Detecting C compile features - done\n'}
+[1.367948] (-) TimerEvent: {}
+[1.375480] (unitree_hg) StdoutLine: {'line': b'-- Detecting CXX compiler ABI info\n'}
+[1.473798] (-) TimerEvent: {}
+[1.577190] (-) TimerEvent: {}
+[1.678625] (-) TimerEvent: {}
+[1.784001] (unitree_go) StdoutLine: {'line': b'-- Detecting CXX compiler ABI info - done\n'}
+[1.787248] (-) TimerEvent: {}
+[1.843450] (unitree_go) StdoutLine: {'line': b'-- Check for working CXX compiler: /usr/bin/c++ - skipped\n'}
+[1.846256] (unitree_go) StdoutLine: {'line': b'-- Detecting CXX compile features\n'}
+[1.847878] (unitree_api) StdoutLine: {'line': b'-- Detecting CXX compiler ABI info - done\n'}
+[1.855578] (unitree_go) StdoutLine: {'line': b'-- Detecting CXX compile features - done\n'}
+[1.873986] (unitree_go) StdoutLine: {'line': b'-- Found ament_cmake: 1.3.14 (/opt/ros/humble/share/ament_cmake/cmake)\n'}
+[1.889134] (unitree_api) StdoutLine: {'line': b'-- Check for working CXX compiler: /usr/bin/c++ - skipped\n'}
+[1.890629] (-) TimerEvent: {}
+[1.890828] (unitree_api) StdoutLine: {'line': b'-- Detecting CXX compile features\n'}
+[1.910475] (unitree_api) StdoutLine: {'line': b'-- Detecting CXX compile features - done\n'}
+[1.929471] (unitree_api) StdoutLine: {'line': b'-- Found ament_cmake: 1.3.14 (/opt/ros/humble/share/ament_cmake/cmake)\n'}
+[1.960570] (unitree_hg) StdoutLine: {'line': b'-- Detecting CXX compiler ABI info - done\n'}
+[1.994039] (-) TimerEvent: {}
+[2.025240] (unitree_hg) StdoutLine: {'line': b'-- Check for working CXX compiler: /usr/bin/c++ - skipped\n'}
+[2.040346] (unitree_hg) StdoutLine: {'line': b'-- Detecting CXX compile features\n'}
+[2.041162] (unitree_hg) StdoutLine: {'line': b'-- Detecting CXX compile features - done\n'}
+[2.051863] (unitree_hg) StdoutLine: {'line': b'-- Found ament_cmake: 1.3.14 (/opt/ros/humble/share/ament_cmake/cmake)\n'}
+[2.095462] (-) TimerEvent: {}
+[2.198295] (-) TimerEvent: {}
+[2.299957] (-) TimerEvent: {}
+[2.407270] (-) TimerEvent: {}
+[2.508097] (-) TimerEvent: {}
+[2.619808] (-) TimerEvent: {}
+[2.728846] (-) TimerEvent: {}
+[2.830063] (-) TimerEvent: {}
+[2.843592] (unitree_go) StdoutLine: {'line': b'-- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter \n'}
+[2.884885] (unitree_api) StdoutLine: {'line': b'-- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter \n'}
+[2.930903] (-) TimerEvent: {}
+[3.003303] (unitree_hg) StdoutLine: {'line': b'-- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter \n'}
+[3.033731] (-) TimerEvent: {}
+[3.134733] (-) TimerEvent: {}
+[3.207329] (unitree_go) StdoutLine: {'line': b'-- Override CMake install command with custom implementation using symlinks instead of copying resources\n'}
+[3.223857] (unitree_api) StdoutLine: {'line': b'-- Override CMake install command with custom implementation using symlinks instead of copying resources\n'}
+[3.235602] (-) TimerEvent: {}
+[3.320388] (unitree_api) StdoutLine: {'line': b'-- Found geometry_msgs: 4.9.1 (/opt/ros/humble/share/geometry_msgs/cmake)\n'}
+[3.331292] (unitree_go) StdoutLine: {'line': b'-- Found geometry_msgs: 4.9.1 (/opt/ros/humble/share/geometry_msgs/cmake)\n'}
+[3.336404] (-) TimerEvent: {}
+[3.393218] (unitree_hg) StdoutLine: {'line': b'-- Override CMake install command with custom implementation using symlinks instead of copying resources\n'}
+[3.438690] (-) TimerEvent: {}
+[3.507670] (unitree_api) StdoutLine: {'line': b'-- Found rosidl_generator_c: 3.1.8 (/opt/ros/humble/share/rosidl_generator_c/cmake)\n'}
+[3.526198] (unitree_go) StdoutLine: {'line': b'-- Found rosidl_generator_c: 3.1.8 (/opt/ros/humble/share/rosidl_generator_c/cmake)\n'}
+[3.538210] (unitree_api) StdoutLine: {'line': b'-- Found rosidl_adapter: 3.1.8 (/opt/ros/humble/share/rosidl_adapter/cmake)\n'}
+[3.539190] (-) TimerEvent: {}
+[3.567494] (unitree_go) StdoutLine: {'line': b'-- Found rosidl_adapter: 3.1.8 (/opt/ros/humble/share/rosidl_adapter/cmake)\n'}
+[3.577518] (unitree_api) StdoutLine: {'line': b'-- Found rosidl_generator_cpp: 3.1.8 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)\n'}
+[3.587204] (unitree_hg) StdoutLine: {'line': b'-- Found geometry_msgs: 4.9.1 (/opt/ros/humble/share/geometry_msgs/cmake)\n'}
+[3.618862] (unitree_go) StdoutLine: {'line': b'-- Found rosidl_generator_cpp: 3.1.8 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)\n'}
+[3.639970] (-) TimerEvent: {}
+[3.653752] (unitree_api) StdoutLine: {'line': b'-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c\n'}
+[3.681043] (unitree_go) StdoutLine: {'line': b'-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c\n'}
+[3.743980] (unitree_api) StdoutLine: {'line': b'-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp\n'}
+[3.745292] (-) TimerEvent: {}
+[3.745380] (unitree_hg) StdoutLine: {'line': b'-- Found rosidl_generator_c: 3.1.8 (/opt/ros/humble/share/rosidl_generator_c/cmake)\n'}
+[3.752000] (unitree_go) StdoutLine: {'line': b'-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp\n'}
+[3.764218] (unitree_hg) StdoutLine: {'line': b'-- Found rosidl_adapter: 3.1.8 (/opt/ros/humble/share/rosidl_adapter/cmake)\n'}
+[3.798072] (unitree_hg) StdoutLine: {'line': b'-- Found rosidl_generator_cpp: 3.1.8 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)\n'}
+[3.846021] (-) TimerEvent: {}
+[3.849043] (unitree_hg) StdoutLine: {'line': b'-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c\n'}
+[3.913468] (unitree_hg) StdoutLine: {'line': b'-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp\n'}
+[3.919216] (unitree_api) StdoutLine: {'line': b'-- Found rosidl_default_generators: 1.2.1 (/opt/ros/humble/share/rosidl_default_generators/cmake)\n'}
+[3.931126] (unitree_go) StdoutLine: {'line': b'-- Found rosidl_default_generators: 1.2.1 (/opt/ros/humble/share/rosidl_default_generators/cmake)\n'}
+[3.947757] (-) TimerEvent: {}
+[3.999097] (unitree_api) StderrLine: {'line': b'CMake Error at CMakeLists.txt:26 (find_package):\n'}
+[3.999707] (unitree_api) StderrLine: {'line': b'  By not providing "Findrosidl_generator_dds_idl.cmake" in CMAKE_MODULE_PATH\n'}
+[3.999962] (unitree_api) StderrLine: {'line': b'  this project has asked CMake to find a package configuration file provided\n'}
+[4.000177] (unitree_api) StderrLine: {'line': b'  by "rosidl_generator_dds_idl", but CMake did not find one.\n'}
+[4.000383] (unitree_api) StderrLine: {'line': b'\n'}
+[4.000592] (unitree_api) StderrLine: {'line': b'  Could not find a package configuration file provided by\n'}
+[4.012912] (unitree_api) StderrLine: {'line': b'  "rosidl_generator_dds_idl" with any of the following names:\n'}
+[4.017375] (unitree_api) StderrLine: {'line': b'\n'}
+[4.024503] (unitree_api) StderrLine: {'line': b'    rosidl_generator_dds_idlConfig.cmake\n'}
+[4.025022] (unitree_api) StderrLine: {'line': b'    rosidl_generator_dds_idl-config.cmake\n'}
+[4.025307] (unitree_api) StderrLine: {'line': b'\n'}
+[4.025533] (unitree_api) StderrLine: {'line': b'  Add the installation prefix of "rosidl_generator_dds_idl" to\n'}
+[4.025742] (unitree_api) StderrLine: {'line': b'  CMAKE_PREFIX_PATH or set "rosidl_generator_dds_idl_DIR" to a directory\n'}
+[4.031033] (unitree_api) StderrLine: {'line': b'  containing one of the above files.  If "rosidl_generator_dds_idl" provides\n'}
+[4.033085] (unitree_api) StderrLine: {'line': b'  a separate development package or SDK, be sure it has been installed.\n'}
+[4.033384] (unitree_api) StderrLine: {'line': b'\n'}
+[4.033594] (unitree_api) StderrLine: {'line': b'\n'}
+[4.033787] (unitree_api) StdoutLine: {'line': b'-- Configuring incomplete, errors occurred!\n'}
+[4.034000] (unitree_api) StdoutLine: {'line': b'See also "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_api/CMakeFiles/CMakeOutput.log".\n'}
+[4.034206] (unitree_go) StderrLine: {'line': b'CMake Error at CMakeLists.txt:26 (find_package):\n'}
+[4.034475] (unitree_go) StderrLine: {'line': b'  By not providing "Findrosidl_generator_dds_idl.cmake" in CMAKE_MODULE_PATH\n'}
+[4.034675] (unitree_go) StderrLine: {'line': b'  this project has asked CMake to find a package configuration file provided\n'}
+[4.036392] (unitree_go) StderrLine: {'line': b'  by "rosidl_generator_dds_idl", but CMake did not find one.\n'}
+[4.036669] (unitree_go) StderrLine: {'line': b'\n'}
+[4.036891] (unitree_go) StderrLine: {'line': b'  Could not find a package configuration file provided by\n'}
+[4.037097] (unitree_go) StderrLine: {'line': b'  "rosidl_generator_dds_idl" with any of the following names:\n'}
+[4.037297] (unitree_go) StderrLine: {'line': b'\n'}
+[4.037512] (unitree_go) StderrLine: {'line': b'    rosidl_generator_dds_idlConfig.cmake\n'}
+[4.040311] (unitree_go) StderrLine: {'line': b'    rosidl_generator_dds_idl-config.cmake\n'}
+[4.045071] (unitree_go) StderrLine: {'line': b'\n'}
+[4.045392] (unitree_go) StderrLine: {'line': b'  Add the installation prefix of "rosidl_generator_dds_idl" to\n'}
+[4.045616] (unitree_go) StderrLine: {'line': b'  CMAKE_PREFIX_PATH or set "rosidl_generator_dds_idl_DIR" to a directory\n'}
+[4.045816] (unitree_go) StderrLine: {'line': b'  containing one of the above files.  If "rosidl_generator_dds_idl" provides\n'}
+[4.046019] (unitree_go) StderrLine: {'line': b'  a separate development package or SDK, be sure it has been installed.\n'}
+[4.046214] (unitree_go) StderrLine: {'line': b'\n'}
+[4.046402] (unitree_go) StderrLine: {'line': b'\n'}
+[4.046585] (unitree_go) StdoutLine: {'line': b'-- Configuring incomplete, errors occurred!\n'}
+[4.046780] (unitree_go) StdoutLine: {'line': b'See also "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_go/CMakeFiles/CMakeOutput.log".\n'}
+[4.048626] (-) TimerEvent: {}
+[4.063798] (unitree_api) CommandEnded: {'returncode': 1}
+[4.077705] (unitree_go) CommandEnded: {'returncode': 1}
+[4.107203] (unitree_hg) StdoutLine: {'line': b'-- Found rosidl_default_generators: 1.2.1 (/opt/ros/humble/share/rosidl_default_generators/cmake)\n'}
+[4.154125] (-) TimerEvent: {}
+[4.169356] (unitree_go) JobEnded: {'identifier': 'unitree_go', 'rc': 1}
+[4.174373] (unitree_api) JobEnded: {'identifier': 'unitree_api', 'rc': 'SIGINT'}
+[4.183078] (unitree_hg) StderrLine: {'line': b'CMake Error at CMakeLists.txt:26 (find_package):\n'}
+[4.184141] (unitree_hg) StderrLine: {'line': b'  By not providing "Findrosidl_generator_dds_idl.cmake" in CMAKE_MODULE_PATH\n'}
+[4.184428] (unitree_hg) StderrLine: {'line': b'  this project has asked CMake to find a package configuration file provided\n'}
+[4.184655] (unitree_hg) StderrLine: {'line': b'  by "rosidl_generator_dds_idl", but CMake did not find one.\n'}
+[4.184957] (unitree_hg) StderrLine: {'line': b'\n'}
+[4.186187] (unitree_hg) StderrLine: {'line': b'  Could not find a package configuration file provided by\n'}
+[4.186495] (unitree_hg) StderrLine: {'line': b'  "rosidl_generator_dds_idl" with any of the following names:\n'}
+[4.186737] (unitree_hg) StderrLine: {'line': b'\n'}
+[4.186960] (unitree_hg) StderrLine: {'line': b'    rosidl_generator_dds_idlConfig.cmake\n'}
+[4.189619] (unitree_hg) StderrLine: {'line': b'    rosidl_generator_dds_idl-config.cmake\n'}
+[4.191126] (unitree_hg) StderrLine: {'line': b'\n'}
+[4.194598] (unitree_hg) StderrLine: {'line': b'  Add the installation prefix of "rosidl_generator_dds_idl" to\n'}
+[4.194939] (unitree_hg) StderrLine: {'line': b'  CMAKE_PREFIX_PATH or set "rosidl_generator_dds_idl_DIR" to a directory\n'}
+[4.195166] (unitree_hg) StderrLine: {'line': b'  containing one of the above files.  If "rosidl_generator_dds_idl" provides\n'}
+[4.195380] (unitree_hg) StderrLine: {'line': b'  a separate development package or SDK, be sure it has been installed.\n'}
+[4.197320] (unitree_hg) StderrLine: {'line': b'\n'}
+[4.203307] (unitree_hg) StderrLine: {'line': b'\n'}
+[4.203450] (unitree_hg) StdoutLine: {'line': b'-- Configuring incomplete, errors occurred!\n'}
+[4.203546] (unitree_hg) StdoutLine: {'line': b'See also "/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_hg/CMakeFiles/CMakeOutput.log".\n'}
+[4.203637] (unitree_hg) JobEnded: {'identifier': 'unitree_hg', 'rc': 'SIGINT'}
+[4.214991] (-) EventReactorShutdown: {}
