@@ -1,0 +1,11 @@
+line_follower_node:
+  ros__parameters:
+    line_track_topic: /perception/line_track
+    cmd_vel_topic: /navigation/cmd_vel
+    forward_speed: 0.10
+    min_confidence: 0.15
+    lateral_gain: 0.80
+    heading_gain: 0.40
+    max_angular_z: 0.30
+    lost_line_stop: true
+    debug_log: true
