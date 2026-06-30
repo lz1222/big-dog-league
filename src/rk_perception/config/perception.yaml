@@ -4,17 +4,15 @@ real_line_tracker_node:
     line_track_topic: /perception/line_track
     enable_debug_image: false
     debug_log: false
-    roi_top_fraction: 0.5
+    roi_top_fraction: 0.35
     threshold_value: 80
-    min_contour_area: 300.0
     max_lateral_error: 1.0
-    min_confidence_area: 1500.0
     line_width_cm: 10.0
     num_scan_bands: 7
     min_valid_bands: 3
-    require_bottom_band: true
+    require_bottom_band: false
     min_line_width_fraction: 0.015
-    max_line_width_fraction: 0.35
+    max_line_width_fraction: 0.20
     max_dark_fraction: 0.35
-    visible_min_confidence: 0.30
+    visible_min_confidence: 0.45
     frame_id: d435i_color_optical_frame

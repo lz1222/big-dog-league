@@ -31,17 +31,17 @@ def clamp(value, minimum, maximum):
 
 @dataclass(frozen=True)
 class LineTrackerConfig:
-    roi_top_fraction: float = 0.5
+    roi_top_fraction: float = 0.35
     threshold_value: int = 80
     max_lateral_error: float = 1.0
     line_width_cm: float = 10.0
     num_scan_bands: int = 7
     min_valid_bands: int = 3
-    require_bottom_band: bool = True
+    require_bottom_band: bool = False
     min_line_width_fraction: float = 0.015
-    max_line_width_fraction: float = 0.35
+    max_line_width_fraction: float = 0.20
     max_dark_fraction: float = 0.35
-    visible_min_confidence: float = 0.30
+    visible_min_confidence: float = 0.45
 
     def normalized(self):
         min_width = clamp(float(self.min_line_width_fraction), 0.001, 1.0)
@@ -347,7 +347,9 @@ def _select_best_band_path(
                 for candidate in candidates_by_band[0]
             ]
     else:
-        for band_index, candidates in enumerate(candidates_by_band):
+        max_start_band = min(3, len(candidates_by_band) - 1)
+        for band_index in range(max_start_band + 1):
+            candidates = candidates_by_band[band_index]
             start_candidates.extend(
                 (band_index, candidate)
                 for candidate in candidates
@@ -370,8 +372,8 @@ def _select_best_band_path(
                 continue
 
             max_center_jump = max(
-                image_width * 0.20,
-                last_candidate.width_px * 3.0
+                image_width * 0.35,
+                last_candidate.width_px * 4.0
             )
             eligible = []
             for candidate in candidates:
@@ -483,19 +485,17 @@ class RealLineTrackerNode(Node):
         self.declare_parameter('line_track_topic', '/perception/line_track')
         self.declare_parameter('enable_debug_image', False)
         self.declare_parameter('debug_log', False)
-        self.declare_parameter('roi_top_fraction', 0.5)
+        self.declare_parameter('roi_top_fraction', 0.35)
         self.declare_parameter('threshold_value', 80)
-        self.declare_parameter('min_contour_area', 300.0)
         self.declare_parameter('max_lateral_error', 1.0)
-        self.declare_parameter('min_confidence_area', 1500.0)
         self.declare_parameter('line_width_cm', 10.0)
         self.declare_parameter('num_scan_bands', 7)
         self.declare_parameter('min_valid_bands', 3)
-        self.declare_parameter('require_bottom_band', True)
+        self.declare_parameter('require_bottom_band', False)
         self.declare_parameter('min_line_width_fraction', 0.015)
-        self.declare_parameter('max_line_width_fraction', 0.35)
+        self.declare_parameter('max_line_width_fraction', 0.20)
         self.declare_parameter('max_dark_fraction', 0.35)
-        self.declare_parameter('visible_min_confidence', 0.30)
+        self.declare_parameter('visible_min_confidence', 0.45)
         self.declare_parameter('frame_id', 'd435i_color_optical_frame')
 
         self.image_topic = self.get_parameter(
@@ -784,13 +784,10 @@ class RealLineTrackerNode(Node):
             self.overlay_publisher.publish(overlay_msg)
         except CvBridgeError as exc:
             self.get_logger().warn(f'Failed to publish debug image: {exc}')
-            self.publish_line_lost(image_msg, 'debug_image_failed')
         except cv2.error as exc:
             self.get_logger().warn(f'OpenCV debug image failed: {exc}')
-            self.publish_line_lost(image_msg, 'debug_image_failed')
         except Exception as exc:
             self.get_logger().warn(f'Debug image publishing failed: {exc}')
-            self.publish_line_lost(image_msg, 'debug_image_failed')
 
     def publish_fallback_debug(self, image_msg, image, result):
         if result is not None:
