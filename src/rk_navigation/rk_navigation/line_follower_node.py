@@ -19,6 +19,14 @@ SEARCH_LINE = 'SEARCH_LINE'
 STOP = 'STOP'
 
 RUNNING_STATES = {LINE_FOLLOW, SHORT_LOST, TURN_90, SEARCH_LINE}
+VALID_STATES = {
+    WAIT_START,
+    LINE_FOLLOW,
+    SHORT_LOST,
+    TURN_90,
+    SEARCH_LINE,
+    STOP,
+}
 
 
 class LineFollowerNode(Node):
@@ -214,7 +222,10 @@ class LineFollowerNode(Node):
             return
 
         now = self.get_clock().now()
-        self.get_logger().info('Competition navigation started')
+        self.get_logger().info(
+            'Mission start received: '
+            f'state={self.state}, target_state={LINE_FOLLOW}'
+        )
         self.stable_seen_count = 0
         self.last_loss_reason = 'mission_start'
         self.set_state(LINE_FOLLOW, 'mission_start', now)
@@ -224,7 +235,10 @@ class LineFollowerNode(Node):
             return
 
         now = self.get_clock().now()
-        self.get_logger().warn('Mission stop received; entering STOP')
+        self.get_logger().warn(
+            'Mission stop received: '
+            f'state={self.state}, target_state={STOP}'
+        )
         self.last_loss_reason = 'mission_stop'
         self.set_state(STOP, 'mission_stop', now)
         self.publish_zero()
@@ -238,6 +252,7 @@ class LineFollowerNode(Node):
         if not self.is_valid_line_msg(msg):
             self.last_loss_reason = 'invalid_line_track'
             if self.state in RUNNING_STATES:
+                self.log_invalid_line_track_stop(msg, now)
                 self.set_state(STOP, 'invalid_line_track', now)
                 self.publish_zero()
             return
@@ -249,6 +264,7 @@ class LineFollowerNode(Node):
             self.last_turn_direction = self.direction_from_errors(msg)
 
             if self.state == SHORT_LOST:
+                self.log_line_recovered('line_recovered', msg)
                 self.set_state(LINE_FOLLOW, 'line_recovered', now)
         elif self.state == LINE_FOLLOW:
             self.last_loss_reason = self.line_loss_reason(msg)
@@ -273,6 +289,12 @@ class LineFollowerNode(Node):
 
         if self.state in RUNNING_STATES and self.line_message_timed_out(now):
             self.last_loss_reason = 'line_msg_timeout'
+            self.get_logger().warn(
+                'Line message timeout; entering STOP: '
+                f'state={self.state}, '
+                f'last_line_age={self.line_msg_age(now):.3f}s, '
+                f'timeout={self.line_msg_timeout:.3f}s'
+            )
             self.set_state(STOP, 'line_msg_timeout', now)
             self.publish_zero()
             return
@@ -307,6 +329,7 @@ class LineFollowerNode(Node):
 
         if not self.is_valid_line_msg(msg):
             self.last_loss_reason = 'invalid_line_track'
+            self.log_invalid_line_track_stop(msg, now)
             self.set_state(STOP, 'invalid_line_track', now)
             return Twist()
 
@@ -338,6 +361,7 @@ class LineFollowerNode(Node):
 
     def command_short_lost(self, now):
         if self.is_trackable_line(self.last_line_msg):
+            self.log_line_recovered('line_recovered', self.last_line_msg)
             self.set_state(LINE_FOLLOW, 'line_recovered', now)
             return self.command_line_follow(now)
 
@@ -360,6 +384,12 @@ class LineFollowerNode(Node):
         elapsed = self.elapsed_in_state(now)
         if elapsed >= self.turn_90_duration:
             self.stable_seen_count = 0
+            self.get_logger().info(
+                'Turn 90 complete: '
+                f'elapsed={elapsed:.3f}s, '
+                f'duration={self.turn_90_duration:.3f}s, '
+                f'turn_direction={self.active_turn_direction}'
+            )
             self.set_state(SEARCH_LINE, 'turn_90_complete', now)
             return self.make_search_line_cmd()
 
@@ -367,6 +397,7 @@ class LineFollowerNode(Node):
 
     def command_search_line(self, now):
         if self.stable_seen_count >= self.line_reacquire_count:
+            self.log_line_recovered('line_reacquired', self.last_line_msg)
             self.set_state(LINE_FOLLOW, 'line_reacquired', now)
             return self.command_line_follow(now)
 
@@ -388,6 +419,7 @@ class LineFollowerNode(Node):
         if self.is_reacquired_line(msg):
             self.stable_seen_count += 1
             if self.stable_seen_count >= self.line_reacquire_count:
+                self.log_line_recovered('line_reacquired', msg)
                 self.set_state(LINE_FOLLOW, 'line_reacquired', now)
         else:
             if self.stable_seen_count > 0:
@@ -426,6 +458,19 @@ class LineFollowerNode(Node):
         self.publisher.publish(Twist())
 
     def set_state(self, new_state, reason, now):
+        requested_state = new_state
+        if (
+            not isinstance(requested_state, str)
+            or requested_state not in VALID_STATES
+        ):
+            self.get_logger().error(
+                'Invalid target state requested; entering STOP: '
+                f'current_state={self.state}, '
+                f'requested_state={requested_state}, reason={reason}'
+            )
+            new_state = STOP
+            reason = f'invalid_target_state_{requested_state}'
+
         if new_state == self.state:
             return
 
@@ -441,11 +486,37 @@ class LineFollowerNode(Node):
 
         if new_state in {LINE_FOLLOW, WAIT_START, STOP}:
             self.stable_seen_count = 0
+        if new_state == WAIT_START:
+            self.get_logger().info(
+                'Enter state WAIT_START: '
+                f'reason={reason}, waiting for mission start'
+            )
+            return
+        if new_state == LINE_FOLLOW:
+            self.get_logger().info(
+                'Enter state LINE_FOLLOW: '
+                f'reason={reason}, '
+                f'last_line_age={self.line_msg_age(now):.3f}s, '
+                f'{self.line_msg_summary(self.last_line_msg)}'
+            )
+            return
+        if new_state == SHORT_LOST:
+            self.get_logger().info(
+                'Enter state SHORT_LOST: '
+                f'reason={reason}, '
+                f'loss_reason={self.last_loss_reason}, '
+                f'short_lost_timeout={self.short_lost_timeout:.3f}s, '
+                f'last_seen_age={self.last_seen_line_age(now):.3f}s, '
+                f'last_line_age={self.line_msg_age(now):.3f}s, '
+                f'{self.line_msg_summary(self.last_line_msg)}'
+            )
+            return
         if new_state == TURN_90:
             self.get_logger().info(
                 'Enter state TURN_90: '
                 f'reason={reason}, '
                 f'turn_direction={self.active_turn_direction}, '
+                f'duration={self.turn_90_duration:.3f}s, '
                 f'mode={self.turn_direction_mode}, '
                 f'last_lateral_error={self.last_lateral_error:.3f}, '
                 f'last_heading_error={self.last_heading_error:.3f}'
@@ -456,13 +527,19 @@ class LineFollowerNode(Node):
                 'Enter state SEARCH_LINE: '
                 f'reason={reason}, '
                 f'turn_direction={self.active_turn_direction}, '
-                f'timeout={self.search_timeout:.3f}s'
+                f'timeout={self.search_timeout:.3f}s, '
+                f'reacquire_count={self.line_reacquire_count}, '
+                f'stable_seen_count={self.stable_seen_count}'
             )
             return
-
-        self.get_logger().info(
-            f'Enter state {new_state}: reason={reason}'
-        )
+        if new_state == STOP:
+            self.get_logger().warn(
+                'Enter state STOP: '
+                f'reason={reason}, '
+                f'last_loss_reason={self.last_loss_reason}, '
+                f'last_line_age={self.line_msg_age(now):.3f}s, '
+                f'{self.line_msg_summary(self.last_line_msg)}'
+            )
 
     def line_message_timed_out(self, now):
         if self.line_msg_timeout <= 0.0:
@@ -477,6 +554,11 @@ class LineFollowerNode(Node):
     def elapsed_since_last_seen(self, now):
         if self.last_seen_line_time is None:
             return self.elapsed_in_state(now)
+        return self.elapsed_since(now, self.last_seen_line_time)
+
+    def last_seen_line_age(self, now):
+        if self.last_seen_line_time is None:
+            return -1.0
         return self.elapsed_since(now, self.last_seen_line_time)
 
     def elapsed_in_state(self, now):
@@ -514,6 +596,40 @@ class LineFollowerNode(Node):
         if float(msg.confidence) < self.line_follow_min_confidence:
             return 'confidence_low'
         return 'unknown_line_loss'
+
+    def log_invalid_line_track_stop(self, msg, now):
+        self.get_logger().warn(
+            'Invalid line track received; entering STOP: '
+            f'state={self.state}, '
+            f'last_line_age={self.line_msg_age(now):.3f}s, '
+            f'{self.line_msg_summary(msg)}'
+        )
+
+    def log_line_recovered(self, reason, msg):
+        self.get_logger().info(
+            'Line recovered: '
+            f'state={self.state}, '
+            f'reason={reason}, '
+            f'stable_seen_count={self.stable_seen_count}, '
+            f'required_count={self.line_reacquire_count}, '
+            f'{self.line_msg_summary(msg)}'
+        )
+
+    def line_msg_summary(self, msg):
+        if msg is None:
+            return 'line_msg=None'
+
+        return (
+            f'line_visible={bool(msg.line_visible)}, '
+            f'confidence={float(msg.confidence):.3f}, '
+            f'lateral_error={float(msg.lateral_error):.3f}, '
+            f'heading_error={float(msg.heading_error):.3f}'
+        )
+
+    def line_msg_age(self, now):
+        if self.last_line_msg_time is None:
+            return -1.0
+        return self.elapsed_since(now, self.last_line_msg_time)
 
     def direction_from_errors(self, msg):
         correction = -(
@@ -584,12 +700,7 @@ class LineFollowerNode(Node):
         )
 
     def current_line_age(self):
-        if self.last_line_msg_time is None:
-            return -1.0
-        return self.elapsed_since(
-            self.get_clock().now(),
-            self.last_line_msg_time
-        )
+        return self.line_msg_age(self.get_clock().now())
 
     def string_parameter(self, name):
         value = str(self.get_parameter(name).value)
