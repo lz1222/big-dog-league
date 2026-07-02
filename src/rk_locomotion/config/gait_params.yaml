@@ -24,3 +24,14 @@ gait_control_node:
     stop_publish_period_sec: 0.05
 
     roll_pitch_limit_deg: 25.0
+
+    jump_obstacle:
+      timeout_sec: 5.0
+      pre_stop_sec: 0.5
+      prepare_sec: 0.3
+      phase1_vx: 0.10
+      phase1_duration: 0.8
+      pause_duration: 0.2
+      phase2_vx: 0.08
+      phase2_duration: 0.5
+      recover_sec: 0.5

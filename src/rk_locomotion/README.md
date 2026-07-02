@@ -19,6 +19,8 @@ Supported commands:
 - `HOLD_STABLE`
 - `LOW_SPEED_MOVE`
 - `TURN_IN_PLACE`
+- `JUMP_START_OBSTACLE`
+- `JUMP_END_OBSTACLE`
 - `BODY_HEIGHT_ADJUST`
 - `SPEED_LIMIT`
 
@@ -66,4 +68,47 @@ JSON example:
 ```bash
 ros2 topic pub --once /gait/command_json std_msgs/String \
   "{data: '{\"command\":\"LOW_SPEED_MOVE\",\"vx\":0.1,\"duration_sec\":2.0}'}"
+```
+
+## Stage 2 Obstacle Tests
+
+The obstacle commands are conservative framework sequences, not aggressive
+jumps. They stop first, run two short low-speed forward phases, and recover with
+zero velocity. Keep watching `/navigation/cmd_vel` and `/gait/control_lock`
+during bench testing.
+
+Watch the control lock:
+
+```bash
+ros2 topic echo /gait/control_lock std_msgs/msg/Bool
+```
+
+Watch the velocity sent to the existing bridge:
+
+```bash
+ros2 topic echo /navigation/cmd_vel geometry_msgs/msg/Twist
+```
+
+Test the start obstacle sequence:
+
+```bash
+ros2 topic pub --once /gait/command_json std_msgs/msg/String \
+  "{data: '{\"command\":\"JUMP_START_OBSTACLE\"}'}"
+```
+
+Test the end obstacle sequence:
+
+```bash
+ros2 topic pub --once /gait/command_json std_msgs/msg/String \
+  "{data: '{\"command\":\"JUMP_END_OBSTACLE\"}'}"
+```
+
+Test STOP interrupting the start obstacle sequence:
+
+```bash
+ros2 topic pub --once /gait/command_json std_msgs/msg/String \
+  "{data: '{\"command\":\"JUMP_START_OBSTACLE\"}'}" &
+sleep 1
+ros2 topic pub --once /gait/command_json std_msgs/msg/String \
+  "{data: '{\"command\":\"STOP\"}'}"
 ```

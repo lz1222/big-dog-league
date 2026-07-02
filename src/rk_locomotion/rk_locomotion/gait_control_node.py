@@ -115,6 +115,8 @@ class GaitControlNode(Node):
         'TURN_IN_PLACE',
         'BODY_HEIGHT_ADJUST',
         'SPEED_LIMIT',
+        'JUMP_START_OBSTACLE',
+        'JUMP_END_OBSTACLE',
     }
 
     def __init__(self):
@@ -146,6 +148,33 @@ class GaitControlNode(Node):
         self.publish_rate_hz = self._positive_float_parameter('publish_rate_hz')
         self.roll_pitch_limit_deg = self._positive_float_parameter(
             'roll_pitch_limit_deg'
+        )
+        self.jump_timeout_sec = self._positive_float_parameter(
+            'jump_obstacle.timeout_sec'
+        )
+        self.jump_pre_stop_sec = self._nonnegative_float_parameter(
+            'jump_obstacle.pre_stop_sec'
+        )
+        self.jump_prepare_sec = self._nonnegative_float_parameter(
+            'jump_obstacle.prepare_sec'
+        )
+        self.jump_phase1_vx = self._nonnegative_float_parameter(
+            'jump_obstacle.phase1_vx'
+        )
+        self.jump_phase1_duration = self._nonnegative_float_parameter(
+            'jump_obstacle.phase1_duration'
+        )
+        self.jump_pause_duration = self._nonnegative_float_parameter(
+            'jump_obstacle.pause_duration'
+        )
+        self.jump_phase2_vx = self._nonnegative_float_parameter(
+            'jump_obstacle.phase2_vx'
+        )
+        self.jump_phase2_duration = self._nonnegative_float_parameter(
+            'jump_obstacle.phase2_duration'
+        )
+        self.jump_recover_sec = self._nonnegative_float_parameter(
+            'jump_obstacle.recover_sec'
         )
 
         stop_count = self._positive_int_parameter('stop_publish_count')
@@ -236,6 +265,15 @@ class GaitControlNode(Node):
             'stop_publish_count': 3,
             'stop_publish_period_sec': 0.05,
             'roll_pitch_limit_deg': 25.0,
+            'jump_obstacle.timeout_sec': 5.0,
+            'jump_obstacle.pre_stop_sec': 0.5,
+            'jump_obstacle.prepare_sec': 0.3,
+            'jump_obstacle.phase1_vx': 0.10,
+            'jump_obstacle.phase1_duration': 0.8,
+            'jump_obstacle.pause_duration': 0.2,
+            'jump_obstacle.phase2_vx': 0.08,
+            'jump_obstacle.phase2_duration': 0.5,
+            'jump_obstacle.recover_sec': 0.5,
         }
         for name, value in parameters.items():
             self.declare_parameter(name, value)
@@ -310,6 +348,10 @@ class GaitControlNode(Node):
                 result = self.execute_turn_in_place(fields)
             elif command == 'BODY_HEIGHT_ADJUST':
                 result = self.execute_body_height_adjust(fields)
+            elif command == 'JUMP_START_OBSTACLE':
+                result = self.execute_jump_obstacle('start')
+            elif command == 'JUMP_END_OBSTACLE':
+                result = self.execute_jump_obstacle('end')
             else:
                 result = CommandResult(
                     False,
@@ -379,7 +421,7 @@ class GaitControlNode(Node):
             self.motion.hold_stable()
             time.sleep(period)
 
-        self.motion.stop('hold_stable completed', log_level='info')
+        self.motion.stop('hold_stable final stop', log_level='info')
         if capped:
             return CommandResult(
                 False,
@@ -407,7 +449,7 @@ class GaitControlNode(Node):
             self.send_velocity(vx, vy, wz)
             time.sleep(period)
 
-        self.zero_velocity('LOW_SPEED_MOVE completed')
+        self.zero_velocity('LOW_SPEED_MOVE final stop')
         if capped:
             return CommandResult(
                 False,
@@ -447,7 +489,7 @@ class GaitControlNode(Node):
             self.send_velocity(0.0, 0.0, wz)
             time.sleep(period)
 
-        self.zero_velocity('TURN_IN_PLACE completed')
+        self.zero_velocity('TURN_IN_PLACE final stop')
         if capped:
             return CommandResult(
                 False,
@@ -462,6 +504,122 @@ class GaitControlNode(Node):
         if success:
             return CommandResult(True, STATUS_DONE, message)
         return CommandResult(False, STATUS_FAILED, message)
+
+    def execute_jump_obstacle(self, obstacle_type):
+        command_name = self._jump_command_name(obstacle_type)
+        start_time = time.monotonic()
+
+        initial_check = self._pre_obstacle_check(start_time)
+        if initial_check is not None:
+            return initial_check
+
+        self.zero_velocity(f'{command_name} pre-stop')
+        check = self._wait_for_obstacle(self.jump_pre_stop_sec, start_time)
+        if check is not None:
+            return check
+
+        check = self.prepare_obstacle_pose(start_time)
+        if check is not None:
+            return check
+
+        self.publish_debug('obstacle phase 1')
+        check = self._run_obstacle_velocity_phase(
+            self.jump_phase1_vx,
+            self.jump_phase1_duration,
+            start_time
+        )
+        if check is not None:
+            return check
+
+        self.zero_velocity(f'{command_name} pause')
+        check = self._wait_for_obstacle(self.jump_pause_duration, start_time)
+        if check is not None:
+            return check
+
+        self.publish_debug('obstacle phase 2')
+        check = self._run_obstacle_velocity_phase(
+            self.jump_phase2_vx,
+            self.jump_phase2_duration,
+            start_time
+        )
+        if check is not None:
+            return check
+
+        self.zero_velocity(f'{command_name} phase sequence stop')
+        check = self.recover_after_obstacle(start_time)
+        if check is not None:
+            return check
+
+        return CommandResult(
+            True,
+            STATUS_DONE,
+            f'{command_name} completed'
+        )
+
+    def prepare_obstacle_pose(self, start_time):
+        self.publish_debug(
+            'prepare_obstacle_pose TODO: body height/gait mode adapter is not '
+            'wired yet'
+        )
+        return self._wait_for_obstacle(self.jump_prepare_sec, start_time)
+
+    def recover_after_obstacle(self, start_time):
+        self.publish_debug('obstacle recovery')
+        self.zero_velocity('obstacle recovery')
+        return self._wait_for_obstacle(self.jump_recover_sec, start_time)
+
+    def _run_obstacle_velocity_phase(self, vx, duration, start_time):
+        end_time = time.monotonic() + float(duration)
+        period = 1.0 / self.publish_rate_hz
+
+        while time.monotonic() < end_time:
+            check = self._pre_obstacle_check(start_time)
+            if check is not None:
+                return check
+            self.send_velocity(vx, 0.0, 0.0)
+            time.sleep(period)
+
+        return None
+
+    def _wait_for_obstacle(self, duration, start_time):
+        end_time = time.monotonic() + float(duration)
+        period = 1.0 / self.publish_rate_hz
+
+        while time.monotonic() < end_time:
+            check = self._pre_obstacle_check(start_time)
+            if check is not None:
+                return check
+            time.sleep(period)
+
+        return None
+
+    def _pre_obstacle_check(self, start_time):
+        with self._state_lock:
+            emergency_stop = self._emergency_stop
+
+        if emergency_stop:
+            self.motion.stop('obstacle emergency stop', log_level='warn')
+            return CommandResult(
+                False,
+                STATUS_EMERGENCY_STOP,
+                'obstacle interrupted by STOP'
+            )
+
+        if time.monotonic() - start_time > self.jump_timeout_sec:
+            self.motion.stop('obstacle timeout stop', log_level='warn')
+            return CommandResult(False, STATUS_TIMEOUT, 'obstacle timeout')
+
+        if not self.is_robot_stable():
+            self.motion.stop('obstacle unstable stop', log_level='warn')
+            return CommandResult(False, STATUS_UNSTABLE, 'obstacle unstable')
+
+        return None
+
+    @staticmethod
+    def _jump_command_name(obstacle_type):
+        if obstacle_type == 'end':
+            return 'JUMP_END_OBSTACLE'
+        return 'JUMP_START_OBSTACLE'
 
     def set_speed_limit(self, fields):
         updates = {}
