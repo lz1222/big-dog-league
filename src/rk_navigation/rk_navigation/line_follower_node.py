@@ -9,6 +9,7 @@ from rclpy.node import Node
 from std_msgs.msg import Bool
 
 from rk_interfaces.msg import LineTrack
+from std_msgs.msg import Bool
 
 
 WAIT_START = 'WAIT_START'
@@ -34,6 +35,7 @@ class LineFollowerNode(Node):
 
     def __init__(self):
         super().__init__('line_follower_node')
+<<<<<<< Updated upstream
 
         self.declare_parameter('cmd_vel_topic', '/navigation/cmd_vel')
         self.declare_parameter('line_track_topic', '/perception/line_track')
@@ -74,6 +76,18 @@ class LineFollowerNode(Node):
         self.line_track_topic = self.string_parameter('line_track_topic')
         self.mission_start_topic = self.string_parameter(
             'mission_start_topic'
+=======
+        self.confidence_threshold = 0.50
+        self.forward_speed = 0.20
+        self.angular_gain = -1.20
+        self.max_angular_speed = 0.60
+        self.gait_control_locked = False
+
+        self.publisher = self.create_publisher(
+            Twist,
+            '/navigation/cmd_vel',
+            10
+>>>>>>> Stashed changes
         )
         self.mission_stop_topic = self.string_parameter('mission_stop_topic')
 
@@ -100,6 +114,7 @@ class LineFollowerNode(Node):
             self.on_line_track,
             10
         )
+<<<<<<< Updated upstream
         self.start_subscription = self.create_subscription(
             Bool,
             self.mission_start_topic,
@@ -242,12 +257,39 @@ class LineFollowerNode(Node):
         self.last_loss_reason = 'mission_stop'
         self.set_state(STOP, 'mission_stop', now)
         self.publish_zero()
+=======
+        self.lock_subscription = self.create_subscription(
+            Bool,
+            '/gait/control_lock',
+            self.on_gait_control_lock,
+            10
+        )
+        self.get_logger().info('Line follower node started')
+>>>>>>> Stashed changes
+
+    def on_gait_control_lock(self, msg):
+        locked = bool(msg.data)
+        if locked != self.gait_control_locked:
+            message = (
+                'gait_control_lock=True; line follower cmd_vel output paused'
+                if locked
+                else 'gait_control_lock=False; line follower resumed'
+            )
+            self.get_logger().info(message)
+        self.gait_control_locked = locked
 
     def on_line_track(self, msg):
+<<<<<<< Updated upstream
         self.refresh_parameters()
         now = self.get_clock().now()
         self.last_line_msg = msg
         self.last_line_msg_time = now
+=======
+        if self.gait_control_locked:
+            return
+
+        cmd = Twist()
+>>>>>>> Stashed changes
 
         if not self.is_valid_line_msg(msg):
             self.last_loss_reason = 'invalid_line_track'

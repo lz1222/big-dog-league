@@ -1,0 +1,26 @@
+gait_control_node:
+  ros__parameters:
+    cmd_vel_topic: /navigation/cmd_vel
+    status_topic: /gait/status
+    control_lock_topic: /gait/control_lock
+    debug_topic: /gait/debug
+    current_mode_topic: /gait/current_mode
+    command_json_topic: /gait/command_json
+
+    default_max_vx: 0.25
+    default_max_vy: 0.15
+    default_max_wz: 0.40
+    hard_max_vx: 0.25
+    hard_max_vy: 0.15
+    hard_max_wz: 0.40
+
+    max_action_duration_sec: 10.0
+    default_hold_duration_sec: 2.0
+    default_move_duration_sec: 1.0
+    default_turn_duration_sec: 1.0
+    publish_rate_hz: 10.0
+    status_publish_rate_hz: 5.0
+    stop_publish_count: 3
+    stop_publish_period_sec: 0.05
+
+    roll_pitch_limit_deg: 25.0
