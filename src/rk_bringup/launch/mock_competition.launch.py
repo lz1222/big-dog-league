@@ -2,18 +2,27 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     auto_start = LaunchConfiguration('auto_start')
+    competition_config = PathJoinSubstitution([
+        FindPackageShare('rk_config'),
+        'config',
+        'mission',
+        'competition.yaml',
+    ])
 
     return LaunchDescription([
         DeclareLaunchArgument(
             'auto_start',
             default_value='true',
-            description='Automatically start the mock mission through /mission/run.'
+            description=(
+                'Automatically start the mock mission through /mission/run.'
+            )
         ),
         LogInfo(msg='Starting RK mock competition system.'),
         LogInfo(msg=['mission auto_start: ', auto_start]),
@@ -31,7 +40,8 @@ def generate_launch_description():
             package='rk_perception',
             executable='mock_sign_detector_node',
             name='mock_sign_detector_node',
-            output='screen'
+            output='screen',
+            parameters=[competition_config]
         ),
         Node(
             package='rk_perception',
@@ -43,7 +53,8 @@ def generate_launch_description():
             package='rk_navigation',
             executable='line_follower_node',
             name='line_follower_node',
-            output='screen'
+            output='screen',
+            parameters=[competition_config]
         ),
         Node(
             package='rk_tools',
@@ -68,6 +79,9 @@ def generate_launch_description():
             executable='mission_state_machine_node',
             name='mission_state_machine_node',
             output='screen',
-            parameters=[{'auto_start': auto_start}]
+            parameters=[
+                competition_config,
+                {'auto_start': auto_start},
+            ]
         ),
     ])
