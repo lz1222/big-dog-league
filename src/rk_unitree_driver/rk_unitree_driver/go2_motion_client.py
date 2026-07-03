@@ -15,7 +15,9 @@ class Go2MotionClient:
     }
 
     STOP_MOVE_API_ID = 1003
+    STAND_DOWN_API_ID = 1005
     MOVE_API_ID = 1008
+    DAMP_API_ID = 1001
 
     def __init__(self, node, sport_request_topic, backend):
         if backend not in self.SUPPORTED_BACKENDS:
@@ -87,6 +89,30 @@ class Go2MotionClient:
         self._logger.warn(
             '[' + self._timestamp() + '] '
             f'StopMove api_id={self.STOP_MOVE_API_ID} '
+            f'reason="{reason}"'
+        )
+
+    def send_stand_down(self, reason):
+        if self._backend == self.UNITREE_ROS2_BACKEND:
+            request = self._make_request(self.STAND_DOWN_API_ID)
+            request.parameter = ''
+            self._publisher.publish(request)
+
+        self._logger.warn(
+            '[' + self._timestamp() + '] '
+            f'StandDown api_id={self.STAND_DOWN_API_ID} '
+            f'reason="{reason}"'
+        )
+
+    def send_damp(self, reason):
+        if self._backend == self.UNITREE_ROS2_BACKEND:
+            request = self._make_request(self.DAMP_API_ID)
+            request.parameter = ''
+            self._publisher.publish(request)
+
+        self._logger.warn(
+            '[' + self._timestamp() + '] '
+            f'Damp api_id={self.DAMP_API_ID} '
             f'reason="{reason}"'
         )
 

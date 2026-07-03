@@ -1,10 +1,27 @@
 cmd_vel_bridge_node:
   ros__parameters:
-    backend: mock
+    backend: unitree_ros2
     cmd_vel_topic: /navigation/cmd_vel
     sport_request_topic: /api/sport/request
-    max_linear_x: 0.20
-    max_angular_z: 0.60
+    max_linear_x: 0.08
+    max_angular_z: 0.35
     cmd_timeout_sec: 0.50
     stop_publish_count: 3
     stop_publish_period_sec: 0.05
+
+keyboard_estop_node:
+  ros__parameters:
+    backend: unitree_ros2
+    cmd_vel_topic: /navigation/cmd_vel
+    mission_stop_topic: /mission/stop
+    sport_request_topic: /api/sport/request
+    estop_key: g
+    zero_cmd_publish_count: 10
+    zero_cmd_publish_period_sec: 0.05
+    stop_publish_count: 5
+    stop_publish_period_sec: 0.08
+    stand_down_delay_sec: 0.6
+    stand_down_repeat_count: 1
+    stand_down_repeat_period_sec: 0.5
+    send_damp_after_stand_down: false
+    damp_delay_sec: 1.0

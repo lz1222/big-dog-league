@@ -29,6 +29,8 @@ setup(
         'console_scripts': [
             'cmd_vel_bridge_node = '
             'rk_unitree_driver.cmd_vel_bridge_node:main',
+            'keyboard_estop_node = '
+            'rk_unitree_driver.keyboard_estop_node:main',
         ],
     },
 )

@@ -26,30 +26,30 @@ line_follower_node:
     control_rate_hz: 10.0
     debug_log: false
 
-    base_speed: 0.18
-    mid_speed: 0.12
-    slow_speed: 0.08
+    base_speed: 0.08
+    mid_speed: 0.06
+    slow_speed: 0.04
     error_slow_threshold: 0.20
     error_slowest_threshold: 0.50
     kp_lateral: 1.2
     kp_heading: 0.8
-    max_angular_z: 0.8
+    max_angular_z: 0.35
     line_follow_min_confidence: 0.0
 
     short_lost_timeout: 0.6
-    short_lost_linear_speed: 0.06
-    search_angular_speed: 0.25
+    short_lost_linear_speed: 0.04
+    search_angular_speed: 0.18
 
     turn_90_duration: 1.6
-    turn_90_angular_speed: 0.45
+    turn_90_angular_speed: 0.25
     turn_direction_mode: last_error
     default_turn_direction: 1
     turn_direction_deadband: 0.02
 
-    search_linear_speed: 0.05
-    search_line_angular_speed: 0.20
+    search_linear_speed: 0.04
+    search_line_angular_speed: 0.18
     search_timeout: 5.0
     line_reacquire_count: 5
     reacquire_min_confidence: 0.45
     reacquire_max_lateral_error: 0.75
-    line_msg_timeout: 0.5
+    line_msg_timeout: 1.5

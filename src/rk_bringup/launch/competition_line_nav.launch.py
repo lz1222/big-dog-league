@@ -16,6 +16,11 @@ def generate_launch_description():
     image_topic = LaunchConfiguration('image_topic')
     bridge_max_linear_x = LaunchConfiguration('bridge_max_linear_x')
     bridge_max_angular_z = LaunchConfiguration('bridge_max_angular_z')
+    start_keyboard_estop = LaunchConfiguration('start_keyboard_estop')
+    estop_key = LaunchConfiguration('estop_key')
+    send_damp_after_stand_down = LaunchConfiguration(
+        'send_damp_after_stand_down'
+    )
 
     line_nav_config = PathJoinSubstitution([
         FindPackageShare('rk_bringup'),
@@ -35,7 +40,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'backend',
-            default_value='mock',
+            default_value='unitree_ros2',
             description='cmd_vel bridge backend: mock or unitree_ros2.'
         ),
         DeclareLaunchArgument(
@@ -50,13 +55,28 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'bridge_max_linear_x',
-            default_value='0.20',
+            default_value='0.08',
             description='cmd_vel bridge linear.x safety limit.'
         ),
         DeclareLaunchArgument(
             'bridge_max_angular_z',
-            default_value='0.80',
+            default_value='0.35',
             description='cmd_vel bridge angular.z safety limit.'
+        ),
+        DeclareLaunchArgument(
+            'start_keyboard_estop',
+            default_value='true',
+            description='Start keyboard emergency stop node.'
+        ),
+        DeclareLaunchArgument(
+            'estop_key',
+            default_value='g',
+            description='Keyboard key that stops Go2 and sends StandDown.'
+        ),
+        DeclareLaunchArgument(
+            'send_damp_after_stand_down',
+            default_value='false',
+            description='Send Damp after StandDown in keyboard emergency stop.'
         ),
         LogInfo(
             msg='Starting competition line navigation. '
@@ -65,6 +85,7 @@ def generate_launch_description():
         LogInfo(msg=['debug: ', debug]),
         LogInfo(msg=['cmd_vel bridge backend: ', backend]),
         LogInfo(msg=['start_realsense: ', start_realsense]),
+        LogInfo(msg=['keyboard estop key: ', estop_key]),
         Node(
             package='realsense2_camera',
             executable='realsense2_camera_node',
@@ -126,6 +147,25 @@ def generate_launch_description():
                     'max_angular_z': ParameterValue(
                         bridge_max_angular_z,
                         value_type=float
+                    ),
+                },
+            ],
+        ),
+        Node(
+            package='rk_unitree_driver',
+            executable='keyboard_estop_node',
+            name='keyboard_estop_node',
+            output='screen',
+            condition=IfCondition(start_keyboard_estop),
+            parameters=[
+                go2_config,
+                {
+                    'backend': backend,
+                    'cmd_vel_topic': '/navigation/cmd_vel',
+                    'estop_key': estop_key,
+                    'send_damp_after_stand_down': ParameterValue(
+                        send_damp_after_stand_down,
+                        value_type=bool
                     ),
                 },
             ],
