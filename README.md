@@ -65,9 +65,15 @@ ros2 run rk_tools two_step_walk_test_node --ros-args -p forward_speed:=0.08 -p w
 - `/perception/sign_detections`: `rk_interfaces/msg/SignDetectionArray`
 - `/perception/item_tags`: `rk_interfaces/msg/ItemTagArray`
 - `/navigation/cmd_vel`: `geometry_msgs/msg/Twist`
+- `/gait/control_lock`: `std_msgs/msg/Bool`
 - `/locomotion/execute_motion`: `rk_interfaces/action/ExecuteMotion`
 - `/arm/execute_task`: `rk_interfaces/action/ExecuteArmTask`
 - `/mission/run`: `rk_interfaces/action/RunMission`
 - `/safety/estop`: `std_srvs/srv/SetBool`
+
+## Three-Person Development Split
+
+See `docs/three_person_development_plan.md` for the file ownership map,
+frozen ROS interfaces, merge rules, and staged integration checklist.
 
 Do not edit generated files in `build/`, `install/`, or `log/`.

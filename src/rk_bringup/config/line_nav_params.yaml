@@ -23,6 +23,7 @@ line_follower_node:
     cmd_vel_topic: /navigation/cmd_vel
     mission_start_topic: /mission/start
     mission_stop_topic: /mission/stop
+    gait_control_lock_topic: /gait/control_lock
     control_rate_hz: 10.0
     debug_log: false
 

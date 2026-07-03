@@ -9,7 +9,6 @@ from rclpy.node import Node
 from std_msgs.msg import Bool
 
 from rk_interfaces.msg import LineTrack
-from std_msgs.msg import Bool
 
 
 WAIT_START = 'WAIT_START'
@@ -35,12 +34,12 @@ class LineFollowerNode(Node):
 
     def __init__(self):
         super().__init__('line_follower_node')
-<<<<<<< Updated upstream
 
         self.declare_parameter('cmd_vel_topic', '/navigation/cmd_vel')
         self.declare_parameter('line_track_topic', '/perception/line_track')
         self.declare_parameter('mission_start_topic', '/mission/start')
         self.declare_parameter('mission_stop_topic', '/mission/stop')
+        self.declare_parameter('gait_control_lock_topic', '/gait/control_lock')
         self.declare_parameter('control_rate_hz', 10.0)
         self.declare_parameter('debug_log', False)
 
@@ -76,20 +75,11 @@ class LineFollowerNode(Node):
         self.line_track_topic = self.string_parameter('line_track_topic')
         self.mission_start_topic = self.string_parameter(
             'mission_start_topic'
-=======
-        self.confidence_threshold = 0.50
-        self.forward_speed = 0.20
-        self.angular_gain = -1.20
-        self.max_angular_speed = 0.60
-        self.gait_control_locked = False
-
-        self.publisher = self.create_publisher(
-            Twist,
-            '/navigation/cmd_vel',
-            10
->>>>>>> Stashed changes
         )
         self.mission_stop_topic = self.string_parameter('mission_stop_topic')
+        self.gait_control_lock_topic = self.string_parameter(
+            'gait_control_lock_topic'
+        )
 
         self.state = WAIT_START
         self.state_enter_time = self.get_clock().now()
@@ -104,6 +94,7 @@ class LineFollowerNode(Node):
         self.last_debug_log_ns = 0
         self.debug_log_period_ns = 1_000_000_000
         self.last_loss_reason = 'none'
+        self.gait_control_locked = False
 
         self.refresh_parameters()
 
@@ -114,7 +105,6 @@ class LineFollowerNode(Node):
             self.on_line_track,
             10
         )
-<<<<<<< Updated upstream
         self.start_subscription = self.create_subscription(
             Bool,
             self.mission_start_topic,
@@ -125,6 +115,12 @@ class LineFollowerNode(Node):
             Bool,
             self.mission_stop_topic,
             self.on_mission_stop,
+            10
+        )
+        self.lock_subscription = self.create_subscription(
+            Bool,
+            self.gait_control_lock_topic,
+            self.on_gait_control_lock,
             10
         )
 
@@ -140,6 +136,7 @@ class LineFollowerNode(Node):
             f'cmd_vel_topic={self.cmd_vel_topic}, '
             f'start_topic={self.mission_start_topic}, '
             f'stop_topic={self.mission_stop_topic}, '
+            f'gait_control_lock_topic={self.gait_control_lock_topic}, '
             f'initial_state={self.state}, '
             f'control_rate_hz={self.control_rate_hz:.1f}'
         )
@@ -257,15 +254,6 @@ class LineFollowerNode(Node):
         self.last_loss_reason = 'mission_stop'
         self.set_state(STOP, 'mission_stop', now)
         self.publish_zero()
-=======
-        self.lock_subscription = self.create_subscription(
-            Bool,
-            '/gait/control_lock',
-            self.on_gait_control_lock,
-            10
-        )
-        self.get_logger().info('Line follower node started')
->>>>>>> Stashed changes
 
     def on_gait_control_lock(self, msg):
         locked = bool(msg.data)
@@ -279,17 +267,10 @@ class LineFollowerNode(Node):
         self.gait_control_locked = locked
 
     def on_line_track(self, msg):
-<<<<<<< Updated upstream
         self.refresh_parameters()
         now = self.get_clock().now()
         self.last_line_msg = msg
         self.last_line_msg_time = now
-=======
-        if self.gait_control_locked:
-            return
-
-        cmd = Twist()
->>>>>>> Stashed changes
 
         if not self.is_valid_line_msg(msg):
             self.last_loss_reason = 'invalid_line_track'
@@ -318,6 +299,10 @@ class LineFollowerNode(Node):
     def on_control_timer(self):
         self.refresh_parameters()
         now = self.get_clock().now()
+
+        if self.gait_control_locked:
+            self.log_debug('gait_control_lock active; cmd_vel output paused')
+            return
 
         if self.state == WAIT_START:
             self.publish_zero()
