@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from dataclasses import dataclass
 import threading
 import time
 
@@ -15,31 +16,87 @@ from rk_interfaces.action import ExecuteArmTask, ExecuteMotion, RunMission
 from rk_interfaces.msg import ItemTagArray, SignDetectionArray
 
 
-STAGES = [
-    'PRECHECK',
-    'WAIT_START',
-    'START_JUMP',
-    'FOLLOW_TO_AVOID_ENTRY',
-    'AVOID_ZONE',
-    'FOLLOW_TO_STAIRS',
-    'STAIRS_UP_DOWN',
-    'FOLLOW_TO_PICK_PLATFORM',
-    'DETECT_PICK_SIGN',
-    'PICK_START_ITEM',
-    'FOLLOW_TO_TRANSFER_PLATFORM',
-    'DROP_START_ITEM',
-    'PICK_FIELD_ITEM',
-    'FOLLOW_TO_CHECK_POINT',
-    'DETECT_WARNING_SIGN',
-    'DO_WARNING_ACTION',
-    'FOLLOW_TO_PLACE_PLATFORM',
-    'PLACE_FIELD_ITEM',
-    'FOLLOW_TO_FINISH_JUMP',
-    'FINISH_JUMP',
-    'RETURN_TO_START_ZONE',
-    'FINAL_STOP',
-    'DONE',
-]
+@dataclass(frozen=True)
+class StageSpec:
+    """One mission stage definition used by the mission FSM."""
+
+    name: str
+    kind: str
+    command: str = ''
+    target: str = ''
+    item_type: str = ''
+    description: str = ''
+
+
+STAGE_PLAN = (
+    StageSpec('PRECHECK', 'precheck', description='Check action timeouts.'),
+    StageSpec('WAIT_START', 'wait', description='Short start delay.'),
+    StageSpec('START_JUMP', 'motion', 'start_jump'),
+    StageSpec(
+        'FOLLOW_TO_AVOID_ENTRY',
+        'navigation',
+        'follow_to_avoid_entry'
+    ),
+    StageSpec('AVOID_ZONE', 'navigation', 'avoid_zone'),
+    StageSpec('FOLLOW_TO_STAIRS', 'navigation', 'follow_to_stairs'),
+    StageSpec('STAIRS_UP_DOWN', 'motion', 'stairs_up_down'),
+    StageSpec(
+        'FOLLOW_TO_PICK_PLATFORM',
+        'navigation',
+        'follow_to_pick_platform'
+    ),
+    StageSpec('DETECT_PICK_SIGN', 'detect_pick_sign'),
+    StageSpec(
+        'PICK_START_ITEM',
+        'arm_wait_item',
+        'pick_start_item',
+        target='start_item',
+        item_type='start_item'
+    ),
+    StageSpec(
+        'FOLLOW_TO_TRANSFER_PLATFORM',
+        'navigation',
+        'follow_to_transfer_platform'
+    ),
+    StageSpec(
+        'DROP_START_ITEM',
+        'arm',
+        'drop_start_item',
+        target='transfer_platform'
+    ),
+    StageSpec(
+        'PICK_FIELD_ITEM',
+        'arm_wait_item',
+        'pick_field_item',
+        target='field_item',
+        item_type='field_item'
+    ),
+    StageSpec(
+        'FOLLOW_TO_CHECK_POINT',
+        'navigation',
+        'follow_to_check_point'
+    ),
+    StageSpec('DETECT_WARNING_SIGN', 'detect_warning_sign'),
+    StageSpec('DO_WARNING_ACTION', 'warning_motion'),
+    StageSpec('FOLLOW_TO_PLACE_PLATFORM', 'place_navigation'),
+    StageSpec('PLACE_FIELD_ITEM', 'place_arm', 'place_field_item'),
+    StageSpec(
+        'FOLLOW_TO_FINISH_JUMP',
+        'navigation',
+        'follow_to_finish_jump'
+    ),
+    StageSpec('FINISH_JUMP', 'motion', 'finish_jump'),
+    StageSpec(
+        'RETURN_TO_START_ZONE',
+        'navigation',
+        'return_to_start_zone'
+    ),
+    StageSpec('FINAL_STOP', 'final_stop', 'final_stop'),
+    StageSpec('DONE', 'done'),
+)
+
+STAGES = [stage.name for stage in STAGE_PLAN]
+STAGE_BY_NAME = {stage.name: stage for stage in STAGE_PLAN}
 
 PICK_SIGN_TARGETS = {
     '1': 'place_platform_1',
@@ -357,38 +414,53 @@ class MissionStateMachineNode(Node):
         return STAGES[start_index:end_index]
 
     def execute_stage(self, stage, goal_handle):
-        handlers = {
-            'PRECHECK': self.stage_precheck,
-            'WAIT_START': self.stage_wait_start,
-            'START_JUMP': self.stage_start_jump,
-            'FOLLOW_TO_AVOID_ENTRY': self.stage_follow_to_avoid_entry,
-            'AVOID_ZONE': self.stage_avoid_zone,
-            'FOLLOW_TO_STAIRS': self.stage_follow_to_stairs,
-            'STAIRS_UP_DOWN': self.stage_stairs_up_down,
-            'FOLLOW_TO_PICK_PLATFORM': self.stage_follow_to_pick_platform,
-            'DETECT_PICK_SIGN': self.stage_detect_pick_sign,
-            'PICK_START_ITEM': self.stage_pick_start_item,
-            'FOLLOW_TO_TRANSFER_PLATFORM': (
-                self.stage_follow_to_transfer_platform
-            ),
-            'DROP_START_ITEM': self.stage_drop_start_item,
-            'PICK_FIELD_ITEM': self.stage_pick_field_item,
-            'FOLLOW_TO_CHECK_POINT': self.stage_follow_to_check_point,
-            'DETECT_WARNING_SIGN': self.stage_detect_warning_sign,
-            'DO_WARNING_ACTION': self.stage_do_warning_action,
-            'FOLLOW_TO_PLACE_PLATFORM': self.stage_follow_to_place_platform,
-            'PLACE_FIELD_ITEM': self.stage_place_field_item,
-            'FOLLOW_TO_FINISH_JUMP': self.stage_follow_to_finish_jump,
-            'FINISH_JUMP': self.stage_finish_jump,
-            'RETURN_TO_START_ZONE': self.stage_return_to_start_zone,
-            'FINAL_STOP': self.stage_final_stop,
-            'DONE': self.stage_done,
-        }
-        handler = handlers.get(stage)
-        if handler is None:
+        spec = STAGE_BY_NAME.get(stage)
+        if spec is None:
             self.get_logger().error(f'No handler for stage: {stage}')
             return False
-        return handler(goal_handle)
+        return self.execute_stage_spec(spec, goal_handle)
+
+    def execute_stage_spec(self, spec, goal_handle):
+        self.get_logger().info(
+            'Stage detail: '
+            f'name={spec.name}, kind={spec.kind}, '
+            f'command={spec.command or "-"}, '
+            f'target={spec.target or "-"}'
+        )
+
+        if spec.kind == 'precheck':
+            return self.stage_precheck(goal_handle)
+        if spec.kind == 'wait':
+            return self.stage_wait_start(goal_handle)
+        if spec.kind == 'motion':
+            return self.call_motion(spec.command)
+        if spec.kind == 'navigation':
+            return self.call_navigation_segment(spec.command)
+        if spec.kind == 'detect_pick_sign':
+            return self.stage_detect_pick_sign(goal_handle)
+        if spec.kind == 'detect_warning_sign':
+            return self.stage_detect_warning_sign(goal_handle)
+        if spec.kind == 'warning_motion':
+            return self.call_warning_motion()
+        if spec.kind == 'arm':
+            return self.call_arm_task(spec.command, spec.target)
+        if spec.kind == 'arm_wait_item':
+            self.wait_for_item_tag(spec.item_type or spec.target, goal_handle)
+            return self.call_arm_task(spec.command, spec.target)
+        if spec.kind == 'place_navigation':
+            return self.call_place_navigation()
+        if spec.kind == 'place_arm':
+            return self.call_place_arm(spec.command)
+        if spec.kind == 'final_stop':
+            self.publish_mission_stop()
+            return self.call_motion(spec.command)
+        if spec.kind == 'done':
+            return self.stage_done(goal_handle)
+
+        self.get_logger().error(
+            f'Unknown stage kind: {spec.kind} for {spec.name}'
+        )
+        return False
 
     def stage_precheck(self, goal_handle):
         del goal_handle
@@ -488,6 +560,9 @@ class MissionStateMachineNode(Node):
 
     def stage_do_warning_action(self, goal_handle):
         del goal_handle
+        return self.call_warning_motion()
+
+    def call_warning_motion(self):
         action = self.warning_action or self.default_warning_action
         if not action:
             self.get_logger().error('No warning action is available')
@@ -496,6 +571,9 @@ class MissionStateMachineNode(Node):
 
     def stage_follow_to_place_platform(self, goal_handle):
         del goal_handle
+        return self.call_place_navigation()
+
+    def call_place_navigation(self):
         target = self.place_target or self.default_place_target
         if not target:
             self.get_logger().error('No place target is available')
@@ -504,11 +582,14 @@ class MissionStateMachineNode(Node):
 
     def stage_place_field_item(self, goal_handle):
         del goal_handle
+        return self.call_place_arm('place_field_item')
+
+    def call_place_arm(self, task_name):
         target = self.place_target or self.default_place_target
         if not target:
             self.get_logger().error('No place target is available')
             return False
-        return self.call_arm_task('place_field_item', target)
+        return self.call_arm_task(task_name, target)
 
     def stage_follow_to_finish_jump(self, goal_handle):
         del goal_handle

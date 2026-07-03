@@ -31,9 +31,7 @@ ament_target_dependencies(go2_sdk_cmd_vel_bridge
 )
 
 target_link_libraries(go2_sdk_cmd_vel_bridge
-  unitree_go2_sdk
-  unitree_go2_idl_cpp
-  unitree_ros2_idl_cpp
+  unitree_sdk2
   ddsc
   ddscxx
   rt

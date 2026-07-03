@@ -219,7 +219,7 @@ private:
       std::chrono::duration<double>(period_sec));
   }
 
-  unitree::robot::SportClient sport_client_;
+  unitree::robot::go2::SportClient sport_client_;
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr subscription_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_;

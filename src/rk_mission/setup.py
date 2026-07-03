@@ -13,6 +13,7 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
+    tests_require=['pytest'],
     maintainer='ZhenLi',
     maintainer_email='2605128876@qq.com',
     description='Mock competition mission state machine.',

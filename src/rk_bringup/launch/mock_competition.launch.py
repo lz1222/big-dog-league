@@ -4,11 +4,15 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     auto_start = LaunchConfiguration('auto_start')
+    start_stage = LaunchConfiguration('start_stage')
+    end_stage = LaunchConfiguration('end_stage')
+    navigation_debug = LaunchConfiguration('navigation_debug')
     competition_config = PathJoinSubstitution([
         FindPackageShare('rk_config'),
         'config',
@@ -24,8 +28,25 @@ def generate_launch_description():
                 'Automatically start the mock mission through /mission/run.'
             )
         ),
+        DeclareLaunchArgument(
+            'start_stage',
+            default_value='',
+            description='Optional first mission stage for single-stage debug.'
+        ),
+        DeclareLaunchArgument(
+            'end_stage',
+            default_value='',
+            description='Optional last mission stage for single-stage debug.'
+        ),
+        DeclareLaunchArgument(
+            'navigation_debug',
+            default_value='false',
+            description='Enable line follower debug logs.'
+        ),
         LogInfo(msg='Starting RK mock competition system.'),
         LogInfo(msg=['mission auto_start: ', auto_start]),
+        LogInfo(msg=['mission start_stage: ', start_stage]),
+        LogInfo(msg=['mission end_stage: ', end_stage]),
         LogInfo(msg='Starting rk_perception mock nodes.'),
         LogInfo(msg='Starting rk_navigation line follower node.'),
         LogInfo(msg='Starting rk_tools mock hardware and safety nodes.'),
@@ -54,7 +75,15 @@ def generate_launch_description():
             executable='line_follower_node',
             name='line_follower_node',
             output='screen',
-            parameters=[competition_config]
+            parameters=[
+                competition_config,
+                {
+                    'debug_log': ParameterValue(
+                        navigation_debug,
+                        value_type=bool
+                    ),
+                },
+            ]
         ),
         Node(
             package='rk_tools',
@@ -81,7 +110,14 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 competition_config,
-                {'auto_start': auto_start},
+                {
+                    'auto_start': ParameterValue(
+                        auto_start,
+                        value_type=bool
+                    ),
+                    'start_stage': start_stage,
+                    'end_stage': end_stage,
+                },
             ]
         ),
     ])

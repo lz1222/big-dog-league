@@ -29,7 +29,7 @@ LineFollower
 (PID计算)
     ↓
 CmdVel
-(Twist: 0.2 m/s, ±0.6 rad/s)
+(Twist: mock 0.18 m/s, real 0.08 m/s)
     ↓
 CmdVelBridge
 (安全检查)
@@ -41,7 +41,7 @@ Go2 Motion
 #### 2. **任务协调路径** (状态机 → 执行器)
 ```
 MissionStateMachine
-(12阶段状态机)
+(关卡状态机)
     ├─ LOCOMOTION ───→ MockLocomotionServer
     │                  (腿部运动)
     │
@@ -64,7 +64,7 @@ MissionStateMachine
 | 节点 | 包 | 输入 | 输出 | 功能 |
 |------|------|------|------|------|
 | mock_line_tracker | rk_perception | - | `/perception/line_track` | 发布线路跟踪数据 |
-| line_follower | rk_navigation | `/perception/line_track` | `/navigation/cmd_vel` | 转换为速度命令 |
+| line_follower | rk_navigation | `/perception/line_track`, `/mission/start`, `/mission/stop` | `/navigation/cmd_vel`, `/navigation/line_follower/state` | 巡线状态机+速度命令 |
 | cmd_vel_bridge | rk_unitree_driver | `/navigation/cmd_vel` | `/api/sport/request` | 安全检查+API转换 |
 | mission_state_machine | rk_mission | `/mission/run (action)` | `/locomotion/*`, `/arm/*` (action) | 12阶段任务管理 |
 | mock_locomotion_server | rk_tools | `/locomotion/execute_motion` | result+feedback | 模拟腿部运动 |
@@ -103,10 +103,10 @@ ExecuteMotion Action
 
 | 参数 | 限制值 | 检查点 |
 |------|-------|--------|
-| max_linear_x | 0.20 m/s | CmdVelBridge + SafetyMonitor |
-| max_angular_z | 0.60 rad/s | CmdVelBridge + SafetyMonitor |
+| max_linear_x | mock 0.20 m/s, real 0.08 m/s | CmdVelBridge + SafetyMonitor |
+| max_angular_z | mock 0.60 rad/s, real 0.35 rad/s | CmdVelBridge + SafetyMonitor |
 | cmd_timeout | 0.50 sec | CmdVelBridge Watchdog |
-| confidence_threshold | 0.50 | LineFollower |
+| line_follow_min_confidence | 0.00 default | LineFollower |
 | stop_republish_count | 3 times | CmdVelBridge |
 
 ---
@@ -115,12 +115,19 @@ ExecuteMotion Action
 
 ### 如何调整导航参数
 
-**修改文件**: `src/rk_navigation/rk_navigation/line_follower_node.py`
-```python
-self.confidence_threshold = 0.50    # 改为更严格 0.70
-self.forward_speed = 0.20           # 改为更快 0.30
-self.angular_gain = -1.20           # 改为更敏感 -2.0
-self.max_angular_speed = 0.60       # 改为更大 1.0
+**推荐修改配置文件**:
+
+- `src/rk_navigation/config/navigation.yaml`：通用巡线调试
+- `src/rk_bringup/config/line_nav_params.yaml`：真机/比赛巡线
+
+```yaml
+base_speed: 0.08
+mid_speed: 0.06
+slow_speed: 0.04
+kp_lateral: 1.2
+kp_heading: 0.8
+max_angular_z: 0.35
+line_msg_timeout: 1.5
 ```
 
 ### 如何调整速度限制
@@ -145,28 +152,50 @@ ros2 param set /cmd_vel_bridge_node max_angular_z 0.80
 
 ---
 
-## 任务阶段流程 (12 Stages)
+## 任务阶段流程
 
 ```
 PRECHECK (预检查)
     ↓
-START (启动) ──→ ExecuteMotion("start")
+WAIT_START (等待)
     ↓
-LINE_FOLLOW (线路跟踪) ──→ ExecuteMotion("line_follow")
+START_JUMP ──→ ExecuteMotion("start_jump")
     ↓
-AVOID (避障) ──→ ExecuteMotion("avoid")
+FOLLOW_TO_AVOID_ENTRY ──→ 巡线+ExecuteMotion("follow_to_avoid_entry")
     ↓
-STAIRS (楼梯) ──→ ExecuteMotion("stairs")
+AVOID_ZONE ──→ 巡线+ExecuteMotion("avoid_zone")
     ↓
-PICK_START_ITEM (拾取起始物品) ──→ ExecuteArmTask("pick_start_item", "start_item")
+FOLLOW_TO_STAIRS ──→ 巡线+ExecuteMotion("follow_to_stairs")
     ↓
-TRANSFER_AND_PICK_FIELD_ITEM ──→ ExecuteArmTask("pick_field_item", "field_item")
+STAIRS_UP_DOWN ──→ ExecuteMotion("stairs_up_down")
     ↓
-WARNING_DETECT_ACTION ──→ ExecuteMotion("warning_detect")
+FOLLOW_TO_PICK_PLATFORM
     ↓
-PLACE_ITEM (放置物品) ──→ ExecuteArmTask("place_item", "finish_platform")
+DETECT_PICK_SIGN
     ↓
-JUMP_FINISH (跳跃终点) ──→ ExecuteMotion("jump_finish")
+PICK_START_ITEM ──→ ExecuteArmTask("pick_start_item", "start_item")
+    ↓
+FOLLOW_TO_TRANSFER_PLATFORM
+    ↓
+DROP_START_ITEM ──→ ExecuteArmTask("drop_start_item", "transfer_platform")
+    ↓
+PICK_FIELD_ITEM ──→ ExecuteArmTask("pick_field_item", "field_item")
+    ↓
+FOLLOW_TO_CHECK_POINT
+    ↓
+DETECT_WARNING_SIGN
+    ↓
+DO_WARNING_ACTION
+    ↓
+FOLLOW_TO_PLACE_PLATFORM
+    ↓
+PLACE_FIELD_ITEM
+    ↓
+FOLLOW_TO_FINISH_JUMP
+    ↓
+FINISH_JUMP ──→ ExecuteMotion("finish_jump")
+    ↓
+RETURN_TO_START_ZONE
     ↓
 FINAL_STOP (最终停止) ──→ ExecuteMotion("final_stop")
     ↓
@@ -181,6 +210,8 @@ DONE (完成) ✓
 # 基础监控
 ros2 topic list                        # 列出所有话题
 ros2 topic echo /perception/line_track # 监听线路跟踪
+ros2 topic echo /navigation/line_follower/state # 巡线状态机状态
+ros2 topic echo /navigation/cmd_vel     # 巡线速度输出
 ros2 action list                       # 列出所有动作
 ros2 node list                         # 列出所有节点
 
@@ -191,6 +222,13 @@ ros2 topic bw /navigation/cmd_vel      # 监测带宽
 # 调试任务执行
 ros2 action send_goal /mission/run rk_interfaces/action/RunMission "{start: true}"
 ros2 run rk_tools mission_client_node  # 手动启动
+
+# 单独调试巡线
+ros2 launch rk_bringup vision_nav_debug.launch.py use_mock_perception:=true auto_start:=true debug_log:=true
+ros2 run rk_tools line_nav_test_client_node --ros-args -p duration_sec:=5.0
+
+# 单关卡调试
+ros2 launch rk_bringup mock_competition.launch.py auto_start:=true start_stage:=FOLLOW_TO_STAIRS end_stage:=FOLLOW_TO_STAIRS navigation_debug:=true
 
 # 测试速度命令
 ros2 run rk_tools two_step_walk_test_node

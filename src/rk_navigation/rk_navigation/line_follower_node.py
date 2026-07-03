@@ -6,10 +6,9 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 from rk_interfaces.msg import LineTrack
-from std_msgs.msg import Bool
 
 
 WAIT_START = 'WAIT_START'
@@ -31,18 +30,23 @@ VALID_STATES = {
 
 
 class LineFollowerNode(Node):
-    """Competition line navigation state machine."""
+    """Line navigation finite-state machine for competition segments."""
 
     def __init__(self):
         super().__init__('line_follower_node')
-<<<<<<< Updated upstream
 
         self.declare_parameter('cmd_vel_topic', '/navigation/cmd_vel')
         self.declare_parameter('line_track_topic', '/perception/line_track')
         self.declare_parameter('mission_start_topic', '/mission/start')
         self.declare_parameter('mission_stop_topic', '/mission/stop')
+        self.declare_parameter('control_lock_topic', '/gait/control_lock')
+        self.declare_parameter(
+            'state_topic',
+            '/navigation/line_follower/state'
+        )
         self.declare_parameter('control_rate_hz', 10.0)
         self.declare_parameter('debug_log', False)
+        self.declare_parameter('auto_start', False)
 
         self.declare_parameter('base_speed', 0.18)
         self.declare_parameter('mid_speed', 0.12)
@@ -76,20 +80,10 @@ class LineFollowerNode(Node):
         self.line_track_topic = self.string_parameter('line_track_topic')
         self.mission_start_topic = self.string_parameter(
             'mission_start_topic'
-=======
-        self.confidence_threshold = 0.50
-        self.forward_speed = 0.20
-        self.angular_gain = -1.20
-        self.max_angular_speed = 0.60
-        self.gait_control_locked = False
-
-        self.publisher = self.create_publisher(
-            Twist,
-            '/navigation/cmd_vel',
-            10
->>>>>>> Stashed changes
         )
         self.mission_stop_topic = self.string_parameter('mission_stop_topic')
+        self.control_lock_topic = self.string_parameter('control_lock_topic')
+        self.state_topic = self.string_parameter('state_topic')
 
         self.state = WAIT_START
         self.state_enter_time = self.get_clock().now()
@@ -104,17 +98,22 @@ class LineFollowerNode(Node):
         self.last_debug_log_ns = 0
         self.debug_log_period_ns = 1_000_000_000
         self.last_loss_reason = 'none'
+        self.gait_control_locked = False
 
         self.refresh_parameters()
 
         self.publisher = self.create_publisher(Twist, self.cmd_vel_topic, 10)
+        self.state_publisher = self.create_publisher(
+            String,
+            self.state_topic,
+            10
+        )
         self.line_subscription = self.create_subscription(
             LineTrack,
             self.line_track_topic,
             self.on_line_track,
             10
         )
-<<<<<<< Updated upstream
         self.start_subscription = self.create_subscription(
             Bool,
             self.mission_start_topic,
@@ -127,6 +126,12 @@ class LineFollowerNode(Node):
             self.on_mission_stop,
             10
         )
+        self.lock_subscription = self.create_subscription(
+            Bool,
+            self.control_lock_topic,
+            self.on_gait_control_lock,
+            10
+        )
 
         control_period = 1.0 / max(1.0, self.control_rate_hz)
         self.control_timer = self.create_timer(
@@ -134,27 +139,33 @@ class LineFollowerNode(Node):
             self.on_control_timer
         )
 
+        self.publish_state()
         self.get_logger().info(
             'Line follower state machine started: '
             f'line_track_topic={self.line_track_topic}, '
             f'cmd_vel_topic={self.cmd_vel_topic}, '
             f'start_topic={self.mission_start_topic}, '
             f'stop_topic={self.mission_stop_topic}, '
+            f'lock_topic={self.control_lock_topic}, '
+            f'state_topic={self.state_topic}, '
             f'initial_state={self.state}, '
             f'control_rate_hz={self.control_rate_hz:.1f}'
         )
-        self.get_logger().info(
-            'Enter state WAIT_START: waiting for mission start'
-        )
+
+        if self.bool_parameter('auto_start'):
+            now = self.get_clock().now()
+            self.set_state(LINE_FOLLOW, 'auto_start', now)
+        else:
+            self.get_logger().info(
+                'Enter state WAIT_START: waiting for mission start'
+            )
 
     def refresh_parameters(self):
         """Refresh runtime-tunable control parameters."""
         self.control_rate_hz = self.positive_float_parameter(
             'control_rate_hz'
         )
-        self.debug_log = self.get_parameter(
-            'debug_log'
-        ).get_parameter_value().bool_value
+        self.debug_log = self.bool_parameter('debug_log')
 
         self.base_speed = self.nonnegative_float_parameter('base_speed')
         self.mid_speed = self.nonnegative_float_parameter('mid_speed')
@@ -257,39 +268,28 @@ class LineFollowerNode(Node):
         self.last_loss_reason = 'mission_stop'
         self.set_state(STOP, 'mission_stop', now)
         self.publish_zero()
-=======
-        self.lock_subscription = self.create_subscription(
-            Bool,
-            '/gait/control_lock',
-            self.on_gait_control_lock,
-            10
-        )
-        self.get_logger().info('Line follower node started')
->>>>>>> Stashed changes
 
     def on_gait_control_lock(self, msg):
         locked = bool(msg.data)
-        if locked != self.gait_control_locked:
-            message = (
-                'gait_control_lock=True; line follower cmd_vel output paused'
-                if locked
-                else 'gait_control_lock=False; line follower resumed'
-            )
-            self.get_logger().info(message)
+        if locked == self.gait_control_locked:
+            return
+
         self.gait_control_locked = locked
+        if locked:
+            self.get_logger().warn(
+                'gait_control_lock=True; line follower cmd_vel output paused'
+            )
+            self.publish_zero()
+        else:
+            self.get_logger().info(
+                'gait_control_lock=False; line follower output resumed'
+            )
 
     def on_line_track(self, msg):
-<<<<<<< Updated upstream
         self.refresh_parameters()
         now = self.get_clock().now()
         self.last_line_msg = msg
         self.last_line_msg_time = now
-=======
-        if self.gait_control_locked:
-            return
-
-        cmd = Twist()
->>>>>>> Stashed changes
 
         if not self.is_valid_line_msg(msg):
             self.last_loss_reason = 'invalid_line_track'
@@ -317,7 +317,13 @@ class LineFollowerNode(Node):
 
     def on_control_timer(self):
         self.refresh_parameters()
+        self.publish_state()
         now = self.get_clock().now()
+
+        if self.gait_control_locked:
+            self.publish_zero()
+            self.log_debug('paused by /gait/control_lock')
+            return
 
         if self.state == WAIT_START:
             self.publish_zero()
@@ -499,6 +505,11 @@ class LineFollowerNode(Node):
     def publish_zero(self):
         self.publisher.publish(Twist())
 
+    def publish_state(self):
+        msg = String()
+        msg.data = self.state
+        self.state_publisher.publish(msg)
+
     def set_state(self, new_state, reason, now):
         requested_state = new_state
         if (
@@ -525,6 +536,7 @@ class LineFollowerNode(Node):
 
         self.state = new_state
         self.state_enter_time = now
+        self.publish_state()
 
         if new_state in {LINE_FOLLOW, WAIT_START, STOP}:
             self.stable_seen_count = 0
@@ -735,6 +747,7 @@ class LineFollowerNode(Node):
         self.get_logger().info(
             'navigation debug: '
             f'state={self.state}, '
+            f'locked={self.gait_control_locked}, '
             f'last_line_age={self.current_line_age():.3f}, '
             f'last_turn_direction={self.last_turn_direction}, '
             f'active_turn_direction={self.active_turn_direction}, '
@@ -749,6 +762,9 @@ class LineFollowerNode(Node):
         if not value:
             raise ValueError(f'{name} must not be empty')
         return value
+
+    def bool_parameter(self, name):
+        return bool(self.get_parameter(name).value)
 
     def finite_float_parameter(self, name):
         value = float(self.get_parameter(name).value)

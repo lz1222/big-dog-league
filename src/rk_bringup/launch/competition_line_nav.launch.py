@@ -14,6 +14,7 @@ def generate_launch_description():
     backend = LaunchConfiguration('backend')
     start_realsense = LaunchConfiguration('start_realsense')
     image_topic = LaunchConfiguration('image_topic')
+    line_auto_start = LaunchConfiguration('line_auto_start')
     bridge_max_linear_x = LaunchConfiguration('bridge_max_linear_x')
     bridge_max_angular_z = LaunchConfiguration('bridge_max_angular_z')
     start_keyboard_estop = LaunchConfiguration('start_keyboard_estop')
@@ -54,6 +55,11 @@ def generate_launch_description():
             description='RGB image topic consumed by real_line_tracker_node.'
         ),
         DeclareLaunchArgument(
+            'line_auto_start',
+            default_value='false',
+            description='Start line follower immediately after launch.'
+        ),
+        DeclareLaunchArgument(
             'bridge_max_linear_x',
             default_value='0.08',
             description='cmd_vel bridge linear.x safety limit.'
@@ -85,6 +91,7 @@ def generate_launch_description():
         LogInfo(msg=['debug: ', debug]),
         LogInfo(msg=['cmd_vel bridge backend: ', backend]),
         LogInfo(msg=['start_realsense: ', start_realsense]),
+        LogInfo(msg=['line_auto_start: ', line_auto_start]),
         LogInfo(msg=['keyboard estop key: ', estop_key]),
         Node(
             package='realsense2_camera',
@@ -115,6 +122,10 @@ def generate_launch_description():
                         value_type=bool
                     ),
                     'debug_log': ParameterValue(debug, value_type=bool),
+                    'auto_start': ParameterValue(
+                        line_auto_start,
+                        value_type=bool
+                    ),
                 },
             ],
         ),
