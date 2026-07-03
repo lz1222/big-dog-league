@@ -17,12 +17,13 @@ class CmdVelUdpForwarder(Node):
     MAX_VY = 0.10
     MAX_YAW = 0.5
     DEADBAND = 0.01
-    TIMEOUT_SEC = 0.5
+    TIMEOUT_SEC = 1.0
 
     def __init__(self):
         super().__init__('cmd_vel_udp_forwarder')
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.last_cmd_time = None
+        self.has_sent_stop = False
 
         self.subscription = self.create_subscription(
             Twist,
@@ -42,23 +43,36 @@ class CmdVelUdpForwarder(Node):
         self.last_cmd_time = time.monotonic()
 
         if not self.is_finite_cmd(msg):
-            self.send_cmd(0.0, 0.0, 0.0)
+            self.send_stop_once()
             return
 
         vx = self.apply_deadband_and_limit(msg.linear.x, self.MAX_VX)
         vy = self.apply_deadband_and_limit(msg.linear.y, self.MAX_VY)
         yaw = self.apply_deadband_and_limit(msg.angular.z, self.MAX_YAW)
+
+        if self.is_zero_cmd(vx, vy, yaw):
+            self.send_stop_once()
+            return
+
         self.send_cmd(vx, vy, yaw)
+        self.has_sent_stop = False
 
     def on_timer(self):
         if self.last_cmd_time is None:
             return
 
         if time.monotonic() - self.last_cmd_time >= self.TIMEOUT_SEC:
-            self.send_cmd(0.0, 0.0, 0.0)
+            self.send_stop_once()
 
     def send_stop(self):
+        self.send_stop_once(force=True)
+
+    def send_stop_once(self, force=False):
+        if self.has_sent_stop and not force:
+            return
+
         self.send_cmd(0.0, 0.0, 0.0)
+        self.has_sent_stop = True
 
     def send_cmd(self, vx, vy, yaw):
         payload = f'{vx} {vy} {yaw}'.encode('utf-8')
@@ -88,6 +102,10 @@ class CmdVelUdpForwarder(Node):
             and math.isfinite(msg.angular.z)
         )
 
+    @staticmethod
+    def is_zero_cmd(vx, vy, yaw):
+        return vx == 0.0 and vy == 0.0 and yaw == 0.0
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -98,7 +116,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.send_stop()
+        node.send_stop_once(force=True)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
