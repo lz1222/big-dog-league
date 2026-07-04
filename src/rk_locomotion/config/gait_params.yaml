@@ -6,6 +6,7 @@ gait_control_node:
     debug_topic: /gait/debug
     current_mode_topic: /gait/current_mode
     command_json_topic: /gait/command_json
+    motion_action_name: /locomotion/execute_motion
 
     default_max_vx: 0.25
     default_max_vy: 0.15
@@ -18,6 +19,7 @@ gait_control_node:
     default_hold_duration_sec: 2.0
     default_move_duration_sec: 1.0
     default_turn_duration_sec: 1.0
+    navigation_segment_wait_sec: 3.0
     publish_rate_hz: 10.0
     status_publish_rate_hz: 5.0
     stop_publish_count: 3
@@ -35,3 +37,136 @@ gait_control_node:
       phase2_vx: 0.03
       phase2_duration: 0.5
       recover_sec: 0.5
+
+    obstacle_safety:
+      enable_depth: true
+      enable_scan: false
+      require_fresh_data: false
+      depth_image_topic: /camera/camera/depth/image_rect_raw
+      scan_topic: /scan
+      max_sensor_age_sec: 0.60
+      front_stop_distance_m: 0.35
+      front_slow_distance_m: 0.55
+      slow_vx: 0.03
+      side_stop_distance_m: 0.12
+      side_warn_distance_m: 0.25
+      side_balance_gain: 0.45
+      max_correction_wz: 0.18
+      depth_min_valid_m: 0.08
+      depth_max_valid_m: 2.50
+      depth_sample_step_px: 12
+      depth_roi_top_ratio: 0.30
+      depth_roi_bottom_ratio: 0.72
+      depth_roi_percentile: 0.20
+      scan_front_half_angle_deg: 22.5
+      scan_side_min_angle_deg: 35.0
+      scan_side_max_angle_deg: 110.0
+      scan_percentile: 0.20
+
+    practical_obstacle:
+      timeout_sec: 80.0
+      pre_stop_sec: 0.4
+      recover_sec: 0.6
+      enter_vx: 0.08
+      enter_duration_sec: 6.0
+      forward_vx: 0.08
+      forward_duration_sec: 5.0
+      turn_wz: 0.30
+      turn_duration_sec: 4.8
+      side_adjust_wz: 0.18
+      side_adjust_turn_sec: 0.45
+      side_adjust_forward_sec: 0.45
+      exit_vx: 0.08
+      exit_duration_sec: 4.0
+      step_names:
+        - entry_up
+        - turn_left_to_top
+        - top_left
+        - turn_left_to_middle_down
+        - middle_down
+        - turn_right_to_bottom_left
+        - bottom_left
+        - turn_right_to_left_up
+        - left_up
+        - turn_left_to_exit
+        - exit_left
+      # 调试避障区时优先只改下面 4 组数组：
+      # - step_distance_m：直行步长，单位 m；转弯行填 0.0。
+      # - step_turn_angle_deg：转弯角度，单位 deg；直行行填 0.0。
+      # - step_linear_speed：直行速度，单位 m/s。
+      # - step_turn_speed_deg：转弯角速度，单位 deg/s。
+      # - step_front_target_m：前方墙目标距离，单位 m；0.0 表示不用。
+      #   例如 entry_up 设置 0.50，就是走到离顶部墙 0.50m 就转弯。
+      # 数组顺序必须和 step_names 一一对应。
+      step_types:
+        - forward
+        - turn_left
+        - forward
+        - turn_left
+        - forward
+        - turn_right
+        - forward
+        - turn_right
+        - forward
+        - turn_left
+        - forward
+      step_distance_m:
+        - 0.48
+        - 0.00
+        - 0.40
+        - 0.00
+        - 0.40
+        - 0.00
+        - 0.32
+        - 0.00
+        - 0.40
+        - 0.00
+        - 0.32
+      step_turn_angle_deg:
+        - 0.0
+        - 90.0
+        - 0.0
+        - 90.0
+        - 0.0
+        - 90.0
+        - 0.0
+        - 90.0
+        - 0.0
+        - 90.0
+        - 0.0
+      step_linear_speed:
+        - 0.08
+        - 0.00
+        - 0.08
+        - 0.00
+        - 0.08
+        - 0.00
+        - 0.08
+        - 0.00
+        - 0.08
+        - 0.00
+        - 0.08
+      step_turn_speed_deg:
+        - 0.0
+        - 18.0
+        - 0.0
+        - 18.0
+        - 0.0
+        - 18.0
+        - 0.0
+        - 18.0
+        - 0.0
+        - 18.0
+        - 0.0
+      step_front_target_m:
+        - 0.50
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
