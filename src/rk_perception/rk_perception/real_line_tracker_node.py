@@ -651,22 +651,25 @@ class RealLineTrackerNode(Node):
             self.line_track_topic,
             10
         )
-        self.mask_publisher = self.create_publisher(
+        self.mask_pub = self.create_publisher(
             Image,
             '/perception/debug/line_mask',
-            10
+            1
         )
-        self.overlay_publisher = self.create_publisher(
+        self.overlay_pub = self.create_publisher(
             Image,
             '/perception/debug/line_overlay',
-            10
+            1
         )
-        self.subscription = self.create_subscription(
+        self.mask_publisher = self.mask_pub
+        self.overlay_publisher = self.overlay_pub
+        self.image_sub = self.create_subscription(
             Image,
             self.image_topic,
-            self.on_image,
+            self.image_callback,
             qos_profile_sensor_data
         )
+        self.subscription = self.image_sub
 
         self.get_logger().info(
             'Real line tracker node started: '
@@ -750,7 +753,13 @@ class RealLineTrackerNode(Node):
         ).normalized()
 
     def on_image(self, image_msg):
+        self.image_callback(image_msg)
+
+    def image_callback(self, image_msg):
         self.refresh_parameters()
+        stage = 'cv_bridge'
+        image = None
+        result = None
 
         try:
             image = self.bridge.imgmsg_to_cv2(
@@ -758,16 +767,44 @@ class RealLineTrackerNode(Node):
                 desired_encoding='bgr8'
             )
         except CvBridgeError as exc:
-            self.get_logger().warn(f'Failed to convert image: {exc}')
+            self.log_image_callback_exception(
+                'Failed to convert image',
+                exc,
+                image_msg,
+                stage,
+                image=image,
+                result=result
+            )
             self.publish_line_lost(image_msg, 'convert_failed')
+            self.publish_fallback_debug(
+                image_msg,
+                image,
+                result,
+                reason='convert_failed',
+                stage=stage
+            )
             return
         except Exception as exc:
-            self.get_logger().warn(f'Unexpected image conversion error: {exc}')
+            self.log_image_callback_exception(
+                'Unexpected image conversion error',
+                exc,
+                image_msg,
+                stage,
+                image=image,
+                result=result
+            )
             self.publish_line_lost(image_msg, 'convert_failed')
+            self.publish_fallback_debug(
+                image_msg,
+                image,
+                result,
+                reason='convert_failed',
+                stage=stage
+            )
             return
 
-        result = None
         try:
+            stage = 'detect_line_in_image'
             image_width = image.shape[1]
             preferred_center_x = self.preferred_center_x(image_width)
             current_result = detect_line_in_image(
@@ -776,11 +813,13 @@ class RealLineTrackerNode(Node):
                 preferred_center_x=preferred_center_x,
                 max_track_jump_fraction=self.max_track_jump_fraction
             )
+            stage = 'apply_route_lock'
             result = self.apply_route_lock(
                 current_result,
                 image_width,
                 preferred_center_x
             )
+            stage = 'publish_line_track'
             msg = self.make_line_track_msg(
                 image_msg,
                 result.lateral_error,
@@ -789,26 +828,59 @@ class RealLineTrackerNode(Node):
                 result.line_visible
             )
             self.publisher.publish(msg)
-
-            overlay = None
-            if self.enable_debug_image:
-                overlay = self.make_overlay(image, result)
-            self.publish_debug_images(
+        except cv2.error as exc:
+            self.log_image_callback_exception(
+                'OpenCV line tracking failed',
+                exc,
+                image_msg,
+                stage,
+                image=image,
+                result=result
+            )
+            self.publish_line_lost(image_msg, 'opencv_failed')
+            self.publish_fallback_debug(
                 image_msg,
                 image,
-                result.binary,
-                overlay,
-                result.roi_start_y
+                result,
+                reason='opencv_failed',
+                stage=stage
             )
-            self.log_debug(result)
-        except cv2.error as exc:
-            self.get_logger().warn(f'OpenCV line tracking failed: {exc}')
-            self.publish_line_lost(image_msg, 'opencv_failed')
-            self.publish_fallback_debug(image_msg, image, result)
+            return
         except Exception as exc:
-            self.get_logger().warn(f'Line tracking failed: {exc}')
+            self.log_image_callback_exception(
+                'Line tracking failed',
+                exc,
+                image_msg,
+                stage,
+                image=image,
+                result=result
+            )
             self.publish_line_lost(image_msg, 'tracking_failed')
-            self.publish_fallback_debug(image_msg, image, result)
+            self.publish_fallback_debug(
+                image_msg,
+                image,
+                result,
+                reason='tracking_failed',
+                stage=stage
+            )
+            return
+
+        debug_status = self.publish_debug_images(
+            image_msg,
+            image,
+            result.binary,
+            None,
+            result.roi_start_y,
+            result=result,
+            stage='debug_publish'
+        )
+        self.log_debug(
+            result,
+            image_msg=image_msg,
+            image=image,
+            mask=result.binary,
+            debug_status=debug_status
+        )
 
     def publish_line_lost(self, image_msg, reason='line lost'):
         self.reset_pending_candidate()
@@ -1177,45 +1249,74 @@ class RealLineTrackerNode(Node):
             )
 
         text_lines = [
-            f'reason: {result.reason}',
-            f'line_width_cm: {self.tracker_config.line_width_cm:.1f}',
-            f'dark_fraction: {result.dark_fraction:.3f}',
-            f'valid_bands: {len(result.selected_bands)}/'
+            f'reason={result.reason}',
+            f'line_width_cm={self.tracker_config.line_width_cm:.1f}',
+            f'dark_fraction={result.dark_fraction:.3f}',
+            f'valid_bands={len(result.selected_bands)}/'
             f'{self.tracker_config.num_scan_bands}',
-            f'lateral_error: {result.lateral_error:.3f}',
-            f'heading_error: {result.heading_error:.3f}',
-            f'confidence: {result.confidence:.3f}',
-            f'line_visible: {result.line_visible}',
-            f'bottom_band_valid: {result.bottom_band_valid}',
-            f'candidate_rejected: {result.candidate_rejected}',
-            f'rejection_reason: {result.candidate_rejection_reason}',
-            f'current_bottom_x: '
+            f'lateral_error={result.lateral_error:.3f}',
+            f'heading_error={result.heading_error:.3f}',
+            f'confidence={result.confidence:.3f}',
+            f'line_visible={self.format_bool(result.line_visible)}',
+            f'bottom_band_valid={self.format_bool(result.bottom_band_valid)}',
+            f'candidate_rejected={self.format_bool(result.candidate_rejected)}',
+            f'reject_reason={result.candidate_rejection_reason}',
+            f'current_bottom_x='
             f'{self.format_optional_float(result.current_bottom_x)}',
-            f'last_bottom_x: '
+            f'last_bottom_x='
             f'{self.format_optional_float(result.last_bottom_x)}',
-            f'pending_bottom_x: '
+            f'pending_bottom_x='
             f'{self.format_optional_float(result.pending_bottom_x)}',
-            f'pending_stable_count: {result.pending_stable_count}',
-            f'preferred_center_x: '
+            f'pending_stable_count={result.pending_stable_count}',
+            f'preferred_center_x='
             f'{self.format_optional_float(result.preferred_center_x)}',
-            f'track_lock_enabled: {result.track_lock_enabled}',
-            f'lost_frame_count: {result.lost_frame_count}',
-            f'track_jump_rejected: {result.track_jump_rejected}',
+            f'track_lock_enabled={self.format_bool(result.track_lock_enabled)}',
+            f'lost_frame_count={result.lost_frame_count}',
+            f'track_jump_rejected={self.format_bool(result.track_jump_rejected)}',
         ]
+        self.draw_overlay_text(overlay, text_lines)
+
+        return overlay
+
+    def make_failure_overlay(self, image_msg, image, reason, stage):
+        overlay = self.make_overlay_base(image_msg, image)
+        text_lines = [
+            'line_visible=false',
+            'confidence=0.000',
+            'bottom_band_valid=false',
+            f'reject_reason={reason}',
+            f'stage={stage}',
+            f'input_encoding={self.image_msg_encoding(image_msg)}',
+            f'input_size={self.image_msg_size_text(image_msg)}',
+            f'cv_image_shape={self.shape_text(image)}',
+        ]
+        self.draw_overlay_text(overlay, text_lines)
+        return overlay
+
+    def make_overlay_base(self, image_msg, image):
+        if image is not None:
+            return image.copy()
+
+        height, width = self.debug_image_size(image_msg, image)
+        return np.zeros((height, width, 3), dtype='uint8')
+
+    @staticmethod
+    def draw_overlay_text(overlay, text_lines):
+        height = overlay.shape[0]
         for index, text in enumerate(text_lines):
-            y = 20 + index * 20
+            y = 18 + index * 18
+            if y >= height - 4:
+                break
             cv2.putText(
                 overlay,
                 text,
                 (10, y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.50,
+                0.45,
                 (0, 255, 255),
                 1,
                 cv2.LINE_AA
             )
-
-        return overlay
 
     @staticmethod
     def draw_optional_vertical_line(image, x_value, color):
@@ -1238,58 +1339,187 @@ class RealLineTrackerNode(Node):
             return 'None'
         return f'{float(value):.1f}'
 
+    @staticmethod
+    def format_bool(value):
+        return 'true' if bool(value) else 'false'
+
+    @staticmethod
+    def shape_text(array):
+        if array is None:
+            return 'None'
+        shape = getattr(array, 'shape', None)
+        if shape is None:
+            return 'unknown'
+        return 'x'.join(str(part) for part in shape)
+
+    @staticmethod
+    def image_msg_encoding(image_msg):
+        return str(getattr(image_msg, 'encoding', 'unknown'))
+
+    @staticmethod
+    def image_msg_size_text(image_msg):
+        width = int(getattr(image_msg, 'width', 0) or 0)
+        height = int(getattr(image_msg, 'height', 0) or 0)
+        return f'{width}x{height}'
+
+    @staticmethod
+    def debug_image_size(image_msg, image):
+        if image is not None:
+            height, width = image.shape[:2]
+            return max(1, int(height)), max(1, int(width))
+
+        width = int(getattr(image_msg, 'width', 0) or 0)
+        height = int(getattr(image_msg, 'height', 0) or 0)
+        return max(1, height), max(1, width)
+
+    def make_debug_mask(self, image_msg, image, binary):
+        if binary is None:
+            height, width = self.debug_image_size(image_msg, image)
+            return np.zeros((height, width), dtype='uint8')
+
+        if len(binary.shape) == 3:
+            binary = cv2.cvtColor(binary, cv2.COLOR_BGR2GRAY)
+        if binary.dtype != np.uint8:
+            binary = np.clip(binary, 0, 255).astype('uint8')
+        return binary
+
+    def make_debug_overlay(
+        self,
+        image_msg,
+        image,
+        overlay,
+        result,
+        reason,
+        stage
+    ):
+        if overlay is not None:
+            return overlay
+        if result is None:
+            return self.make_failure_overlay(image_msg, image, reason, stage)
+
+        try:
+            return self.make_overlay(image, result)
+        except Exception as exc:
+            self.get_logger().warn(
+                'Failed to draw debug overlay: '
+                f'{exc}; stage={stage}, '
+                f'input_encoding={self.image_msg_encoding(image_msg)}, '
+                f'input_size={self.image_msg_size_text(image_msg)}, '
+                f'cv_image_shape={self.shape_text(image)}'
+            )
+            return self.make_failure_overlay(
+                image_msg,
+                image,
+                f'overlay_failed:{type(exc).__name__}',
+                stage
+            )
+
     def publish_debug_images(
         self,
         image_msg,
         image,
         binary,
         overlay,
-        roi_start_y
+        roi_start_y,
+        result=None,
+        stage='debug_publish',
+        failure_reason='line_not_visible'
     ):
+        status = {
+            'enabled': self.enable_debug_image,
+            'mask_published': False,
+            'overlay_published': False,
+            'mask_shape': 'None',
+            'overlay_shape': 'None',
+            'stage': stage,
+        }
         if not self.enable_debug_image:
-            return
+            return status
 
         try:
-            if binary is None:
-                height, width = image.shape[:2]
-                binary = np.zeros(
-                    (max(1, height - roi_start_y), width),
-                    dtype='uint8'
-                )
-            if overlay is None:
-                overlay = image.copy()
-
-            mask_msg = self.bridge.cv2_to_imgmsg(binary, encoding='mono8')
-            mask_msg.header.stamp = image_msg.header.stamp
-            mask_msg.header.frame_id = (
-                image_msg.header.frame_id or self.frame_id
-            )
-            self.mask_publisher.publish(mask_msg)
-
-            overlay_msg = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
-            overlay_msg.header.stamp = image_msg.header.stamp
-            overlay_msg.header.frame_id = (
-                image_msg.header.frame_id or self.frame_id
-            )
-            self.overlay_publisher.publish(overlay_msg)
-        except CvBridgeError as exc:
-            self.get_logger().warn(f'Failed to publish debug image: {exc}')
-        except cv2.error as exc:
-            self.get_logger().warn(f'OpenCV debug image failed: {exc}')
-        except Exception as exc:
-            self.get_logger().warn(f'Debug image publishing failed: {exc}')
-
-    def publish_fallback_debug(self, image_msg, image, result):
-        if result is not None:
-            self.publish_debug_images(
+            mask = self.make_debug_mask(image_msg, image, binary)
+            overlay = self.make_debug_overlay(
                 image_msg,
                 image,
-                result.binary,
-                None,
-                result.roi_start_y
+                overlay,
+                result,
+                failure_reason,
+                stage
             )
+            status['mask_shape'] = self.shape_text(mask)
+            status['overlay_shape'] = self.shape_text(overlay)
 
-    def log_debug(self, result):
+            mask_msg = self.bridge.cv2_to_imgmsg(mask, encoding='mono8')
+            overlay_msg = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
+            mask_msg.header = image_msg.header
+            overlay_msg.header = image_msg.header
+
+            self.mask_pub.publish(mask_msg)
+            status['mask_published'] = True
+            self.overlay_pub.publish(overlay_msg)
+            status['overlay_published'] = True
+        except Exception as exc:
+            self.get_logger().warn(
+                f'Failed to publish debug images: {exc}; '
+                f'stage={stage}, '
+                f'input_encoding={self.image_msg_encoding(image_msg)}, '
+                f'input_size={self.image_msg_size_text(image_msg)}, '
+                f'cv_image_shape={self.shape_text(image)}, '
+                f'mask_shape={status["mask_shape"]}, '
+                f'overlay_shape={status["overlay_shape"]}'
+            )
+        return status
+
+    def publish_fallback_debug(
+        self,
+        image_msg,
+        image,
+        result,
+        reason,
+        stage
+    ):
+        binary = result.binary if result is not None else None
+        roi_start_y = result.roi_start_y if result is not None else 0
+        self.publish_debug_images(
+            image_msg,
+            image,
+            binary,
+            None,
+            roi_start_y,
+            result=result,
+            stage=stage,
+            failure_reason=reason
+        )
+
+    def log_image_callback_exception(
+        self,
+        message,
+        exc,
+        image_msg,
+        stage,
+        image=None,
+        result=None,
+        overlay=None
+    ):
+        mask = result.binary if result is not None else None
+        self.get_logger().warn(
+            f'{message}: {exc}; '
+            f'stage={stage}, '
+            f'input_encoding={self.image_msg_encoding(image_msg)}, '
+            f'input_size={self.image_msg_size_text(image_msg)}, '
+            f'cv_image_shape={self.shape_text(image)}, '
+            f'mask_shape={self.shape_text(mask)}, '
+            f'overlay_shape={self.shape_text(overlay)}'
+        )
+
+    def log_debug(
+        self,
+        result,
+        image_msg=None,
+        image=None,
+        mask=None,
+        debug_status=None
+    ):
         if not self.debug_log:
             return
 
@@ -1297,9 +1527,23 @@ class RealLineTrackerNode(Node):
         if now_ns - self.last_debug_log_ns < self.debug_log_period_ns:
             return
 
+        debug_status = debug_status or {}
+        mask_shape = debug_status.get('mask_shape') or self.shape_text(mask)
+        overlay_shape = debug_status.get('overlay_shape') or 'None'
         self.last_debug_log_ns = now_ns
         self.get_logger().info(
             'line debug: '
+            f'enable_debug_image={self.format_bool(self.enable_debug_image)}, '
+            'image_callback_receiving_frames=true, '
+            f'publishing_line_mask='
+            f'{self.format_bool(debug_status.get("mask_published", False))}, '
+            f'publishing_line_overlay='
+            f'{self.format_bool(debug_status.get("overlay_published", False))}, '
+            f'input_encoding={self.image_msg_encoding(image_msg)}, '
+            f'input_size={self.image_msg_size_text(image_msg)}, '
+            f'cv_image_shape={self.shape_text(image)}, '
+            f'mask_shape={mask_shape}, '
+            f'overlay_shape={overlay_shape}, '
             f'reason={result.reason}, '
             f'valid_bands={len(result.selected_bands)}/'
             f'{self.tracker_config.num_scan_bands}, '
@@ -1307,10 +1551,10 @@ class RealLineTrackerNode(Node):
             f'lateral_error={result.lateral_error:.3f}, '
             f'heading_error={result.heading_error:.3f}, '
             f'confidence={result.confidence:.3f}, '
-            f'line_visible={result.line_visible}, '
-            f'bottom_band_valid={result.bottom_band_valid}, '
-            f'candidate_rejected={result.candidate_rejected}, '
-            f'rejection_reason={result.candidate_rejection_reason}, '
+            f'line_visible={self.format_bool(result.line_visible)}, '
+            f'bottom_band_valid={self.format_bool(result.bottom_band_valid)}, '
+            f'candidate_rejected={self.format_bool(result.candidate_rejected)}, '
+            f'reject_reason={result.candidate_rejection_reason}, '
             f'current_bottom_x='
             f'{self.format_optional_float(result.current_bottom_x)}, '
             f'last_bottom_x='
@@ -1320,9 +1564,9 @@ class RealLineTrackerNode(Node):
             f'pending_stable_count={result.pending_stable_count}, '
             f'preferred_center_x='
             f'{self.format_optional_float(result.preferred_center_x)}, '
-            f'track_lock_enabled={result.track_lock_enabled}, '
+            f'track_lock_enabled={self.format_bool(result.track_lock_enabled)}, '
             f'lost_frame_count={result.lost_frame_count}, '
-            f'track_jump_rejected={result.track_jump_rejected}'
+            f'track_jump_rejected={self.format_bool(result.track_jump_rejected)}'
         )
 
     def log_debug_reason(self, reason):
@@ -1342,15 +1586,15 @@ class RealLineTrackerNode(Node):
             'lateral_error=0.000, '
             'heading_error=0.000, '
             'confidence=0.000, '
-            'line_visible=False, '
-            'bottom_band_valid=False, '
-            'candidate_rejected=True, '
-            f'rejection_reason={reason}, '
+            'line_visible=false, '
+            'bottom_band_valid=false, '
+            'candidate_rejected=true, '
+            f'reject_reason={reason}, '
             f'last_bottom_x={self.format_optional_float(self.last_bottom_x)}, '
             f'pending_bottom_x='
             f'{self.format_optional_float(self.pending_bottom_x)}, '
             f'pending_stable_count={self.pending_stable_count}, '
-            f'track_lock_enabled={self.track_lock_enabled}, '
+            f'track_lock_enabled={self.format_bool(self.track_lock_enabled)}, '
             f'lost_frame_count={self.lost_frame_count}'
         )
 

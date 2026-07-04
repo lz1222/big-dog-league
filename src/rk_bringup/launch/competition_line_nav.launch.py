@@ -74,10 +74,11 @@ def generate_launch_description():
             condition=IfCondition(start_realsense),
             parameters=[{
                 'enable_color': True,
-                'enable_depth': False,
+                'enable_depth': True,
                 'enable_gyro': False,
                 'enable_accel': False,
-                'rgb_camera.color_profile': '640,480,30',
+                'rgb_camera.profile': '640x480x15',
+                'depth_module.profile': '640x480x15',
             }],
         ),
         Node(
