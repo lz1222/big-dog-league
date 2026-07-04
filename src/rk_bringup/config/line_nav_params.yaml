@@ -1,20 +1,21 @@
 real_line_tracker_node:
   ros__parameters:
-    image_topic: /camera/camera/color/image_raw
+    image_topic: /camera/color/image_raw
     line_track_topic: /perception/line_track
     enable_debug_image: false
     debug_log: false
-    roi_top_fraction: 0.35
+    roi_top_fraction: 0.55
     threshold_value: 80
     max_lateral_error: 1.0
     line_width_cm: 10.0
     num_scan_bands: 7
     min_valid_bands: 3
-    require_bottom_band: false
+    require_bottom_band: true
     min_line_width_fraction: 0.015
     max_line_width_fraction: 0.20
     max_dark_fraction: 0.35
     visible_min_confidence: 0.45
+    max_reacquire_jump_fraction: 0.20
     frame_id: d435i_color_optical_frame
 
 line_follower_node:
@@ -27,9 +28,9 @@ line_follower_node:
     control_rate_hz: 10.0
     debug_log: false
 
-    base_speed: 0.18
-    mid_speed: 0.12
-    slow_speed: 0.08
+    base_speed: 0.08
+    mid_speed: 0.06
+    slow_speed: 0.05
     error_slow_threshold: 0.20
     error_slowest_threshold: 0.50
     kp_lateral: 1.2
@@ -46,11 +47,16 @@ line_follower_node:
     turn_direction_mode: last_error
     default_turn_direction: 1
     turn_direction_deadband: 0.02
+    turn_lost_keep_time: 0.8
+    lost_turn_linear_speed: 0.0
+    lost_turn_angular_speed: 0.20
+    turn_lost_min_angular_z: 0.12
 
     search_linear_speed: 0.05
     search_line_angular_speed: 0.20
     search_timeout: 5.0
     line_reacquire_count: 5
+    reacquire_confirm_frames: 4
     reacquire_min_confidence: 0.45
     reacquire_max_lateral_error: 0.75
     line_msg_timeout: 0.5

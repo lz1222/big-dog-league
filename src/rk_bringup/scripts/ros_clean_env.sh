@@ -1,4 +1,8 @@
 #!/bin/bash
+_RK_CLEAN_ENV_ERREXIT_SET=0
+case "$-" in
+    *e*) _RK_CLEAN_ENV_ERREXIT_SET=1 ;;
+esac
 set -e
 
 WORKSPACE_DIR="${RK_INSPECTION_WS:-$HOME/rk_inspection_ws}"
@@ -32,3 +36,8 @@ export ROS_DOMAIN_ID=10
 
 remove_ld_path_entry "/usr/local/lib"
 remove_ld_path_entry "/home/unitree/cyclonedds_ws/install/cyclonedds/lib"
+
+if [ "$_RK_CLEAN_ENV_ERREXIT_SET" -eq 0 ]; then
+    set +e
+fi
+unset _RK_CLEAN_ENV_ERREXIT_SET

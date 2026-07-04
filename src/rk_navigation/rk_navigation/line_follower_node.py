@@ -14,15 +14,23 @@ from rk_interfaces.msg import LineTrack
 WAIT_START = 'WAIT_START'
 LINE_FOLLOW = 'LINE_FOLLOW'
 SHORT_LOST = 'SHORT_LOST'
+TURN_LOST_KEEP = 'TURN_LOST_KEEP'
 TURN_90 = 'TURN_90'
 SEARCH_LINE = 'SEARCH_LINE'
 STOP = 'STOP'
 
-RUNNING_STATES = {LINE_FOLLOW, SHORT_LOST, TURN_90, SEARCH_LINE}
+RUNNING_STATES = {
+    LINE_FOLLOW,
+    SHORT_LOST,
+    TURN_LOST_KEEP,
+    TURN_90,
+    SEARCH_LINE,
+}
 VALID_STATES = {
     WAIT_START,
     LINE_FOLLOW,
     SHORT_LOST,
+    TURN_LOST_KEEP,
     TURN_90,
     SEARCH_LINE,
     STOP,
@@ -62,11 +70,16 @@ class LineFollowerNode(Node):
         self.declare_parameter('turn_direction_mode', 'last_error')
         self.declare_parameter('default_turn_direction', 1)
         self.declare_parameter('turn_direction_deadband', 0.02)
+        self.declare_parameter('turn_lost_keep_time', 0.8)
+        self.declare_parameter('lost_turn_linear_speed', 0.0)
+        self.declare_parameter('lost_turn_angular_speed', 0.20)
+        self.declare_parameter('turn_lost_min_angular_z', 0.12)
 
         self.declare_parameter('search_linear_speed', 0.05)
         self.declare_parameter('search_line_angular_speed', 0.20)
         self.declare_parameter('search_timeout', 5.0)
         self.declare_parameter('line_reacquire_count', 5)
+        self.declare_parameter('reacquire_confirm_frames', 4)
         self.declare_parameter('reacquire_min_confidence', 0.45)
         self.declare_parameter('reacquire_max_lateral_error', 0.75)
         self.declare_parameter('line_msg_timeout', 0.5)
@@ -85,10 +98,13 @@ class LineFollowerNode(Node):
         self.state_enter_time = self.get_clock().now()
         self.last_line_msg = None
         self.last_line_msg_time = None
+        self.last_seen_time = None
         self.last_seen_line_time = None
         self.last_lateral_error = 0.0
         self.last_heading_error = 0.0
+        self.last_angular_z = 0.0
         self.last_turn_direction = 1
+        self.expected_turn_direction = 1
         self.active_turn_direction = 1
         self.stable_seen_count = 0
         self.last_debug_log_ns = 0
@@ -198,6 +214,18 @@ class LineFollowerNode(Node):
         self.turn_direction_deadband = self.nonnegative_float_parameter(
             'turn_direction_deadband'
         )
+        self.turn_lost_keep_time = self.nonnegative_float_parameter(
+            'turn_lost_keep_time'
+        )
+        self.lost_turn_linear_speed = self.nonnegative_float_parameter(
+            'lost_turn_linear_speed'
+        )
+        self.lost_turn_angular_speed = self.nonnegative_float_parameter(
+            'lost_turn_angular_speed'
+        )
+        self.turn_lost_min_angular_z = self.nonnegative_float_parameter(
+            'turn_lost_min_angular_z'
+        )
 
         self.search_linear_speed = self.nonnegative_float_parameter(
             'search_linear_speed'
@@ -212,6 +240,12 @@ class LineFollowerNode(Node):
             1,
             int(self.get_parameter(
                 'line_reacquire_count'
+            ).get_parameter_value().integer_value)
+        )
+        self.reacquire_confirm_frames = max(
+            1,
+            int(self.get_parameter(
+                'reacquire_confirm_frames'
             ).get_parameter_value().integer_value)
         )
         self.reacquire_min_confidence = self.clamp(
@@ -281,6 +315,7 @@ class LineFollowerNode(Node):
             return
 
         if self.is_trackable_line(msg):
+            self.last_seen_time = now
             self.last_seen_line_time = now
             self.last_lateral_error = float(msg.lateral_error)
             self.last_heading_error = float(msg.heading_error)
@@ -290,11 +325,22 @@ class LineFollowerNode(Node):
                 self.log_line_recovered('line_recovered', msg)
                 self.set_state(LINE_FOLLOW, 'line_recovered', now)
         elif self.state == LINE_FOLLOW:
-            self.last_loss_reason = self.line_loss_reason(msg)
-            self.set_state(SHORT_LOST, self.last_loss_reason, now)
+            self.enter_line_lost_state(msg, now)
 
         if self.state == SEARCH_LINE:
-            self.update_reacquire_count(msg, now)
+            self.update_reacquire_count(
+                msg,
+                now,
+                self.line_reacquire_count,
+                'line_reacquired'
+            )
+        elif self.state == TURN_LOST_KEEP:
+            self.update_reacquire_count(
+                msg,
+                now,
+                self.reacquire_confirm_frames,
+                'turn_lost_reacquired'
+            )
 
     def on_control_timer(self):
         self.refresh_parameters()
@@ -330,6 +376,8 @@ class LineFollowerNode(Node):
             cmd = self.command_line_follow(now)
         elif self.state == SHORT_LOST:
             cmd = self.command_short_lost(now)
+        elif self.state == TURN_LOST_KEEP:
+            cmd = self.command_turn_lost_keep(now)
         elif self.state == TURN_90:
             cmd = self.command_turn_90(now)
         elif self.state == SEARCH_LINE:
@@ -361,9 +409,7 @@ class LineFollowerNode(Node):
             return Twist()
 
         if not self.is_trackable_line(msg):
-            self.last_loss_reason = self.line_loss_reason(msg)
-            self.set_state(SHORT_LOST, self.last_loss_reason, now)
-            return self.make_short_lost_cmd()
+            return self.enter_line_lost_state(msg, now)
 
         cmd = Twist()
         angular = -(
@@ -384,7 +430,25 @@ class LineFollowerNode(Node):
         else:
             cmd.linear.x = self.slow_speed
 
+        self.last_angular_z = cmd.angular.z
+        self.expected_turn_direction = self.direction_from_angular(
+            self.last_angular_z
+        )
         return cmd
+
+    def enter_line_lost_state(self, msg, now):
+        self.last_loss_reason = self.line_loss_reason(msg)
+        if self.was_turning_before_loss():
+            self.expected_turn_direction = self.direction_from_angular(
+                self.last_angular_z
+            )
+            self.active_turn_direction = self.expected_turn_direction
+            self.stable_seen_count = 0
+            self.set_state(TURN_LOST_KEEP, self.last_loss_reason, now)
+            return self.make_turn_lost_keep_cmd()
+
+        self.set_state(SHORT_LOST, self.last_loss_reason, now)
+        return self.make_short_lost_cmd()
 
     def command_short_lost(self, now):
         if self.is_trackable_line(self.last_line_msg):
@@ -422,6 +486,29 @@ class LineFollowerNode(Node):
 
         return self.make_turn_90_cmd()
 
+    def command_turn_lost_keep(self, now):
+        if self.stable_seen_count >= self.reacquire_confirm_frames:
+            self.log_line_recovered(
+                'turn_lost_reacquired',
+                self.last_line_msg
+            )
+            self.set_state(LINE_FOLLOW, 'turn_lost_reacquired', now)
+            return self.command_line_follow(now)
+
+        elapsed = self.elapsed_in_state(now)
+        if elapsed >= self.turn_lost_keep_time:
+            self.get_logger().error(
+                'Turn lost keep timeout: '
+                f'elapsed={elapsed:.3f}s, '
+                f'timeout={self.turn_lost_keep_time:.3f}s, '
+                f'expected_turn_direction={self.expected_turn_direction}, '
+                f'stable_seen_count={self.stable_seen_count}'
+            )
+            self.set_state(STOP, 'turn_lost_keep_timeout', now)
+            return Twist()
+
+        return self.make_turn_lost_keep_cmd()
+
     def command_search_line(self, now):
         if self.stable_seen_count >= self.line_reacquire_count:
             self.log_line_recovered('line_reacquired', self.last_line_msg)
@@ -442,12 +529,12 @@ class LineFollowerNode(Node):
 
         return self.make_search_line_cmd()
 
-    def update_reacquire_count(self, msg, now):
+    def update_reacquire_count(self, msg, now, required_count, recover_reason):
         if self.is_reacquired_line(msg):
             self.stable_seen_count += 1
-            if self.stable_seen_count >= self.line_reacquire_count:
-                self.log_line_recovered('line_reacquired', msg)
-                self.set_state(LINE_FOLLOW, 'line_reacquired', now)
+            if self.stable_seen_count >= required_count:
+                self.log_line_recovered(recover_reason, msg)
+                self.set_state(LINE_FOLLOW, recover_reason, now)
         else:
             if self.stable_seen_count > 0:
                 self.get_logger().info(
@@ -459,10 +546,21 @@ class LineFollowerNode(Node):
                 )
             self.stable_seen_count = 0
 
+    def was_turning_before_loss(self):
+        return abs(float(self.last_angular_z)) >= self.turn_lost_min_angular_z
+
     def make_short_lost_cmd(self):
         cmd = Twist()
         cmd.linear.x = self.short_lost_linear_speed
         cmd.angular.z = self.last_turn_direction * self.search_angular_speed
+        return cmd
+
+    def make_turn_lost_keep_cmd(self):
+        cmd = Twist()
+        cmd.linear.x = self.lost_turn_linear_speed
+        cmd.angular.z = (
+            self.expected_turn_direction * self.lost_turn_angular_speed
+        )
         return cmd
 
     def make_turn_90_cmd(self):
@@ -535,6 +633,21 @@ class LineFollowerNode(Node):
                 f'short_lost_timeout={self.short_lost_timeout:.3f}s, '
                 f'last_seen_age={self.last_seen_line_age(now):.3f}s, '
                 f'last_line_age={self.line_msg_age(now):.3f}s, '
+                f'{self.line_msg_summary(self.last_line_msg)}'
+            )
+            return
+        if new_state == TURN_LOST_KEEP:
+            self.get_logger().warn(
+                'Enter state TURN_LOST_KEEP: '
+                f'reason={reason}, '
+                f'loss_reason={self.last_loss_reason}, '
+                f'expected_turn_direction={self.expected_turn_direction}, '
+                f'last_angular_z={self.last_angular_z:.3f}, '
+                f'timeout={self.turn_lost_keep_time:.3f}s, '
+                f'lost_turn_linear_speed={self.lost_turn_linear_speed:.3f}, '
+                f'lost_turn_angular_speed={self.lost_turn_angular_speed:.3f}, '
+                f'reacquire_confirm_frames={self.reacquire_confirm_frames}, '
+                f'last_seen_age={self.last_seen_line_age(now):.3f}s, '
                 f'{self.line_msg_summary(self.last_line_msg)}'
             )
             return
@@ -633,12 +746,15 @@ class LineFollowerNode(Node):
         )
 
     def log_line_recovered(self, reason, msg):
+        required_count = self.line_reacquire_count
+        if reason == 'turn_lost_reacquired' or self.state == TURN_LOST_KEEP:
+            required_count = self.reacquire_confirm_frames
         self.get_logger().info(
             'Line recovered: '
             f'state={self.state}, '
             f'reason={reason}, '
             f'stable_seen_count={self.stable_seen_count}, '
-            f'required_count={self.line_reacquire_count}, '
+            f'required_count={required_count}, '
             f'{self.line_msg_summary(msg)}'
         )
 
@@ -666,6 +782,14 @@ class LineFollowerNode(Node):
         if correction > self.turn_direction_deadband:
             return 1
         if correction < -self.turn_direction_deadband:
+            return -1
+        return self.last_turn_direction or self.default_turn_direction
+
+    def direction_from_angular(self, angular_z):
+        angular_z = float(angular_z)
+        if angular_z > 0.0:
+            return 1
+        if angular_z < 0.0:
             return -1
         return self.last_turn_direction or self.default_turn_direction
 
@@ -701,6 +825,10 @@ class LineFollowerNode(Node):
             self.kp_heading,
             self.max_angular_z,
             self.short_lost_timeout,
+            self.turn_lost_keep_time,
+            self.lost_turn_linear_speed,
+            self.lost_turn_angular_speed,
+            self.turn_lost_min_angular_z,
             self.turn_90_duration,
             self.turn_90_angular_speed,
             self.search_timeout,
@@ -721,7 +849,9 @@ class LineFollowerNode(Node):
             'navigation debug: '
             f'state={self.state}, '
             f'last_line_age={self.current_line_age():.3f}, '
+            f'last_angular_z={self.last_angular_z:.3f}, '
             f'last_turn_direction={self.last_turn_direction}, '
+            f'expected_turn_direction={self.expected_turn_direction}, '
             f'active_turn_direction={self.active_turn_direction}, '
             f'{message}'
         )

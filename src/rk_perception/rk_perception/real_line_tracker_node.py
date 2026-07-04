@@ -12,6 +12,7 @@ try:
     from cv_bridge import CvBridge, CvBridgeError
     from rclpy.executors import ExternalShutdownException
     from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
     from sensor_msgs.msg import Image
 
     from rk_interfaces.msg import LineTrack
@@ -23,6 +24,7 @@ except ImportError:
     Image = None
     LineTrack = None
     Node = object
+    qos_profile_sensor_data = 10
 
 
 def clamp(value, minimum, maximum):
@@ -34,13 +36,13 @@ PENDING_SWITCH_STABLE_FRAMES = 3
 
 @dataclass(frozen=True)
 class LineTrackerConfig:
-    roi_top_fraction: float = 0.35
+    roi_top_fraction: float = 0.55
     threshold_value: int = 80
     max_lateral_error: float = 1.0
     line_width_cm: float = 10.0
     num_scan_bands: int = 7
     min_valid_bands: int = 3
-    require_bottom_band: bool = False
+    require_bottom_band: bool = True
     min_line_width_fraction: float = 0.015
     max_line_width_fraction: float = 0.20
     max_dark_fraction: float = 0.35
@@ -128,6 +130,9 @@ class LineDetectionResult:
     pending_stable_count: int = 0
     track_lock_enabled: bool = False
     lost_frame_count: int = 0
+    bottom_band_valid: bool = False
+    candidate_rejected: bool = False
+    candidate_rejection_reason: str = 'none'
     track_jump_rejected: bool = False
 
 
@@ -160,6 +165,7 @@ def detect_line_in_image(
         binary,
         config
     )
+    bottom_band_valid = _bottom_band_valid(candidates)
 
     if dark_fraction > config.max_dark_fraction:
         return _lost_result(
@@ -272,7 +278,17 @@ def detect_line_in_image(
         selected_bands=selected_bands,
         fitted_line=(x_top, y_top, x_bottom, y_bottom),
         preferred_center_x=preferred_center_x,
-        current_bottom_x=float(x_bottom)
+        current_bottom_x=float(x_bottom),
+        bottom_band_valid=bottom_band_valid,
+        candidate_rejected=False,
+        candidate_rejection_reason='none'
+    )
+
+
+def _bottom_band_valid(candidates):
+    return any(
+        candidate.accepted and candidate.band_index == 0
+        for candidate in candidates
     )
 
 
@@ -541,8 +557,15 @@ def _lost_result(
     pending_stable_count=0,
     track_lock_enabled=False,
     lost_frame_count=0,
+    bottom_band_valid=None,
+    candidate_rejected=True,
+    candidate_rejection_reason=None,
     track_jump_rejected=False
 ):
+    if bottom_band_valid is None:
+        bottom_band_valid = _bottom_band_valid(candidates)
+    if candidate_rejection_reason is None:
+        candidate_rejection_reason = reason
     return LineDetectionResult(
         binary=binary,
         roi_start_y=roi_start_y,
@@ -563,6 +586,9 @@ def _lost_result(
         pending_stable_count=pending_stable_count,
         track_lock_enabled=track_lock_enabled,
         lost_frame_count=lost_frame_count,
+        bottom_band_valid=bool(bottom_band_valid),
+        candidate_rejected=bool(candidate_rejected),
+        candidate_rejection_reason=str(candidate_rejection_reason),
         track_jump_rejected=track_jump_rejected
     )
 
@@ -575,24 +601,25 @@ class RealLineTrackerNode(Node):
 
         self.declare_parameter(
             'image_topic',
-            '/camera/camera/color/image_raw'
+            '/camera/color/image_raw'
         )
         self.declare_parameter('line_track_topic', '/perception/line_track')
         self.declare_parameter('enable_debug_image', False)
         self.declare_parameter('debug_log', False)
-        self.declare_parameter('roi_top_fraction', 0.35)
+        self.declare_parameter('roi_top_fraction', 0.55)
         self.declare_parameter('threshold_value', 80)
         self.declare_parameter('max_lateral_error', 1.0)
         self.declare_parameter('line_width_cm', 10.0)
         self.declare_parameter('num_scan_bands', 7)
         self.declare_parameter('min_valid_bands', 3)
-        self.declare_parameter('require_bottom_band', False)
+        self.declare_parameter('require_bottom_band', True)
         self.declare_parameter('min_line_width_fraction', 0.015)
         self.declare_parameter('max_line_width_fraction', 0.20)
         self.declare_parameter('max_dark_fraction', 0.35)
         self.declare_parameter('visible_min_confidence', 0.45)
         self.declare_parameter('track_lock_enabled', True)
         self.declare_parameter('max_track_jump_fraction', 0.30)
+        self.declare_parameter('max_reacquire_jump_fraction', 0.20)
         self.declare_parameter('bottom_band_preference_weight', 2.0)
         self.declare_parameter('previous_center_weight', 2.0)
         self.declare_parameter('frame_id', 'd435i_color_optical_frame')
@@ -638,7 +665,7 @@ class RealLineTrackerNode(Node):
             Image,
             self.image_topic,
             self.on_image,
-            10
+            qos_profile_sensor_data
         )
 
         self.get_logger().info(
@@ -661,6 +688,13 @@ class RealLineTrackerNode(Node):
         self.max_track_jump_fraction = clamp(
             self.get_parameter(
                 'max_track_jump_fraction'
+            ).get_parameter_value().double_value,
+            0.0,
+            1.0
+        )
+        self.max_reacquire_jump_fraction = clamp(
+            self.get_parameter(
+                'max_reacquire_jump_fraction'
             ).get_parameter_value().double_value,
             0.0,
             1.0
@@ -787,7 +821,6 @@ class RealLineTrackerNode(Node):
     def preferred_center_x(self, image_width):
         if (
             self.track_lock_enabled
-            and self.last_line_visible
             and self.last_bottom_x is not None
         ):
             return _normalize_preferred_center(
@@ -821,9 +854,23 @@ class RealLineTrackerNode(Node):
 
         if (
             not self.last_line_visible
-            or self.last_bottom_x is None
-            or current_bottom_x is None
+            and self.last_bottom_x is not None
+            and current_bottom_x is not None
         ):
+            reacquire_jump_threshold = (
+                image_width * self.max_reacquire_jump_fraction
+            )
+            if abs(current_bottom_x - self.last_bottom_x) > (
+                reacquire_jump_threshold
+            ):
+                return self.handle_reacquire_jump(
+                    result,
+                    preferred_center_x,
+                    current_bottom_x,
+                    reacquire_jump_threshold
+                )
+
+        if self.last_bottom_x is None or current_bottom_x is None:
             self.reset_pending_candidate()
             self.record_published_result(result)
             return self.annotate_result(
@@ -849,6 +896,37 @@ class RealLineTrackerNode(Node):
             preferred_center_x,
             current_bottom_x,
             track_jump_rejected=False
+        )
+
+    def handle_reacquire_jump(
+        self,
+        result,
+        preferred_center_x,
+        current_bottom_x,
+        jump_threshold
+    ):
+        self.reset_pending_candidate()
+        lost_result = _lost_result(
+            result.binary,
+            result.roi_start_y,
+            'reacquire_jump_rejected',
+            result.dark_fraction,
+            result.band_rows,
+            result.candidates,
+            result.selected_bands,
+            result.fitted_line,
+            preferred_center_x=preferred_center_x,
+            current_bottom_x=current_bottom_x,
+            candidate_rejection_reason=(
+                f'reacquire_jump>{jump_threshold:.1f}px'
+            )
+        )
+        self.record_published_result(lost_result)
+        return self.annotate_result(
+            lost_result,
+            preferred_center_x,
+            current_bottom_x,
+            track_jump_rejected=True
         )
 
     def handle_track_jump(
@@ -907,7 +985,9 @@ class RealLineTrackerNode(Node):
             reason='track_jump_rejected_hold_last',
             selected_bands=self.last_result.selected_bands,
             fitted_line=self.last_result.fitted_line,
-            current_bottom_x=current_bottom_x
+            current_bottom_x=current_bottom_x,
+            candidate_rejected=True,
+            candidate_rejection_reason='track_jump_rejected_hold_last'
         )
 
     def record_published_result(self, result):
@@ -1033,12 +1113,31 @@ class RealLineTrackerNode(Node):
 
         for row in result.band_rows:
             y = roi_start_y + row.y
+            color = (80, 80, 80)
+            thickness = 1
+            if row.index == 0:
+                color = (
+                    (0, 180, 0)
+                    if result.bottom_band_valid
+                    else (0, 0, 255)
+                )
+                thickness = 2
+                cv2.rectangle(
+                    overlay,
+                    (0, roi_start_y + row.y_min),
+                    (
+                        max(0, width - 1),
+                        roi_start_y + max(row.y_min, row.y_max - 1)
+                    ),
+                    color,
+                    2
+                )
             cv2.line(
                 overlay,
                 (0, y),
                 (max(0, width - 1), y),
-                (80, 80, 80),
-                1
+                color,
+                thickness
             )
 
         for candidate in result.candidates:
@@ -1087,6 +1186,9 @@ class RealLineTrackerNode(Node):
             f'heading_error: {result.heading_error:.3f}',
             f'confidence: {result.confidence:.3f}',
             f'line_visible: {result.line_visible}',
+            f'bottom_band_valid: {result.bottom_band_valid}',
+            f'candidate_rejected: {result.candidate_rejected}',
+            f'rejection_reason: {result.candidate_rejection_reason}',
             f'current_bottom_x: '
             f'{self.format_optional_float(result.current_bottom_x)}',
             f'last_bottom_x: '
@@ -1101,15 +1203,15 @@ class RealLineTrackerNode(Node):
             f'track_jump_rejected: {result.track_jump_rejected}',
         ]
         for index, text in enumerate(text_lines):
-            y = 24 + index * 24
+            y = 20 + index * 20
             cv2.putText(
                 overlay,
                 text,
                 (10, y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.60,
+                0.50,
                 (0, 255, 255),
-                2,
+                1,
                 cv2.LINE_AA
             )
 
@@ -1206,6 +1308,9 @@ class RealLineTrackerNode(Node):
             f'heading_error={result.heading_error:.3f}, '
             f'confidence={result.confidence:.3f}, '
             f'line_visible={result.line_visible}, '
+            f'bottom_band_valid={result.bottom_band_valid}, '
+            f'candidate_rejected={result.candidate_rejected}, '
+            f'rejection_reason={result.candidate_rejection_reason}, '
             f'current_bottom_x='
             f'{self.format_optional_float(result.current_bottom_x)}, '
             f'last_bottom_x='
@@ -1238,6 +1343,9 @@ class RealLineTrackerNode(Node):
             'heading_error=0.000, '
             'confidence=0.000, '
             'line_visible=False, '
+            'bottom_band_valid=False, '
+            'candidate_rejected=True, '
+            f'rejection_reason={reason}, '
             f'last_bottom_x={self.format_optional_float(self.last_bottom_x)}, '
             f'pending_bottom_x='
             f'{self.format_optional_float(self.pending_bottom_x)}, '

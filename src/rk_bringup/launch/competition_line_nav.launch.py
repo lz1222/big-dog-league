@@ -45,7 +45,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'image_topic',
-            default_value='/camera/camera/color/image_raw',
+            default_value='/camera/color/image_raw',
             description='RGB image topic consumed by real_line_tracker_node.'
         ),
         DeclareLaunchArgument(
