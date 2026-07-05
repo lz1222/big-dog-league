@@ -177,6 +177,7 @@ def generate_launch_description():
             executable='gait_control_node',
             name='gait_control_node',
             output='screen',
+            additional_env=FORWARDER_ENV,
             parameters=[
                 gait_config,
                 {
