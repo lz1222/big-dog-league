@@ -68,6 +68,10 @@ Start all line-system nodes without starting motion:
 ~/rk_inspection_ws/src/rk_bringup/scripts/start_line_system.sh
 ```
 
+The startup script defaults to the verified SDK UDP bridge
+(`RK_GO2_BRIDGE_TYPE=sdk_udp`). Use `RK_GO2_BRIDGE_TYPE=unitree_driver` only
+when intentionally testing the older `rk_unitree_driver` path.
+
 Attach to the tmux session:
 
 ```bash

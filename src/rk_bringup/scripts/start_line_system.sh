@@ -33,13 +33,14 @@ send_window_command() {
 }
 
 ENV_SCRIPT="$(resolve_env_script)"
-BRIDGE_BACKEND="${RK_GO2_BACKEND:-unitree_ros2}"
+BRIDGE_TYPE="${RK_GO2_BRIDGE_TYPE:-sdk_udp}"
+BRIDGE_BACKEND="${RK_GO2_BACKEND:-mock}"
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
 tmux new-session -d -s "$SESSION" -n line_nav
 send_window_command "line_nav" \
-    "source \"${ENV_SCRIPT}\" && ros2 launch rk_bringup competition_line_nav.launch.py image_topic:=/camera/color/image_raw debug:=true backend:=${BRIDGE_BACKEND} start_realsense:=true"
+    "source \"${ENV_SCRIPT}\" && ros2 launch rk_bringup competition_line_nav.launch.py image_topic:=/camera/color/image_raw debug:=true bridge_type:=${BRIDGE_TYPE} backend:=${BRIDGE_BACKEND} start_realsense:=true"
 
 tmux new-window -t "$SESSION" -n line_track
 send_window_command "line_track" \
@@ -56,7 +57,8 @@ send_window_command "system_check" \
 tmux select-window -t "${SESSION}:line_nav"
 
 echo "RK line system tmux session started: ${SESSION}"
-echo "Bridge backend: ${BRIDGE_BACKEND}"
+echo "Bridge type: ${BRIDGE_TYPE}"
+echo "Unitree driver backend, only used with bridge_type=unitree_driver: ${BRIDGE_BACKEND}"
 echo "Attach: tmux attach -t ${SESSION}"
 echo "Confirm line_visible=true before running mission_start.sh."
 echo "Emergency stop: stop_line_system.sh"

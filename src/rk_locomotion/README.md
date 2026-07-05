@@ -91,12 +91,16 @@ Launch the single-area test stack:
 
 ```bash
 ros2 launch rk_bringup obstacle_practical.launch.py \
-  backend:=mock \
+  bridge_type:=sdk_udp \
+  bridge_max_linear_x:=0.60 \
+  bridge_max_angular_z:=1.00 \
   require_safety_data:=true
 ```
 
-Switch `backend:=unitree_ros2` only after the mock run shows sane
-`/navigation/cmd_vel` and `/gait/debug` output.
+This uses the same SDK UDP bridge as the working line-following stack:
+`/navigation/cmd_vel -> cmd_vel_udp_forwarder.py -> go2_sdk_udp_server ->
+Unitree SportClient.Move()`. If the SDK server is already running in another
+terminal, add `start_sdk_server:=false`.
 
 Run the full practical sequence through the action API:
 
@@ -141,10 +145,10 @@ ros2 topic pub --once /gait/command_json std_msgs/msg/String \
 ros2 launch rk_locomotion gait_control.launch.py
 ```
 
-With the existing Unitree bridge:
+With the working SDK UDP bridge:
 
 ```bash
-ros2 launch rk_unitree_driver go2_cmd_vel_bridge.launch.py
+ros2 launch rk_go2_sdk_bridge go2_sdk_udp_bridge.launch.py
 ros2 launch rk_locomotion gait_control.launch.py
 ```
 

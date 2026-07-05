@@ -212,7 +212,7 @@ ros2 run rk_tools mission_client_node
 | `real_line_tracker_node` | `rk_perception` | 真实黑线检测 | `line_nav_params.yaml` |
 | `line_follower_node` | `rk_navigation` | 巡线控制 | `line_nav_params.yaml` |
 | `gait_control_node` | `rk_locomotion` | 固定动作和 action server | `gait_params.yaml` |
-| `cmd_vel_bridge_node` | `rk_unitree_driver` | `/navigation/cmd_vel` 到 Go2 | `go2_driver.yaml` |
+| `cmd_vel_udp_forwarder.py` | `rk_go2_sdk_bridge` | `/navigation/cmd_vel` 到 Go2 SDK UDP server | launch 参数 |
 | `mission_state_machine_node` | `rk_mission` | 完整任务状态机 | `competition.yaml` |
 | arm mock/adapter | `rk_tools` 或后续机械臂包 | `/arm/execute_task` | `d1_presets.yaml` |
 
@@ -221,7 +221,7 @@ launch 参数规划：
 | 参数 | 默认值 | 用途 |
 | --- | --- | --- |
 | `debug` | `false` | 打开视觉和导航 debug。 |
-| `backend` | `mock` | Unitree bridge backend。 |
+| `bridge_type` | `sdk_udp` | 默认使用巡线已验证的 Go2 SDK UDP 桥接。 |
 | `start_realsense` | `true` | 是否由 launch 启动相机。 |
 | `use_mock_arm` | `true` | 机械臂真实 SDK 未接入前使用 mock。 |
 | `auto_start` | `false` | 比赛前默认不自动开始，等待裁判信号。 |
@@ -249,4 +249,3 @@ python3 -m py_compile src/rk_locomotion/rk_locomotion/gait_control_node.py
 PYTHONPATH=src/rk_perception:$PYTHONPATH python3 -m pytest src/rk_perception/test/test_real_line_tracker_node.py
 colcon build --symlink-install
 ```
-

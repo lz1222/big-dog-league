@@ -12,6 +12,7 @@
   <exec_depend>rk_navigation</exec_depend>
   <exec_depend>rk_config</exec_depend>
   <exec_depend>rk_locomotion</exec_depend>
+  <exec_depend>rk_go2_sdk_bridge</exec_depend>
   <exec_depend>rk_unitree_driver</exec_depend>
   <exec_depend>rk_tools</exec_depend>
   <exec_depend>rk_mission</exec_depend>
