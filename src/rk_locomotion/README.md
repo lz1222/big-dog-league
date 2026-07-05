@@ -106,6 +106,15 @@ ros2 action send_goal /locomotion/execute_motion \
   --feedback
 ```
 
+Run the open-loop movement smoke test. This ignores depth safety and only
+checks whether the robot can visibly move, so use it in open space:
+
+```bash
+ros2 action send_goal /locomotion/execute_motion \
+  rk_interfaces/action/ExecuteMotion "{motion_name: open_loop_obstacle_test}" \
+  --feedback
+```
+
 Run one primitive at a time:
 
 ```bash

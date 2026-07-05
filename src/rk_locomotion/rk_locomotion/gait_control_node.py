@@ -144,6 +144,7 @@ class GaitControlNode(Node):
         'JUMP_END_OBSTACLE',
         'PRACTICAL_OBSTACLE_ZONE',
         'AVOID_ZONE',
+        'OBSTACLE_OPEN_LOOP_TEST',
         'ENTER_OBSTACLE_ZONE',
         'OBSTACLE_FORWARD_SLOW',
         'OBSTACLE_TURN_LEFT',
@@ -727,6 +728,15 @@ class GaitControlNode(Node):
                 'command': 'PRACTICAL_OBSTACLE_ZONE'
             },
             'obstacle_zone': {'command': 'PRACTICAL_OBSTACLE_ZONE'},
+            'open_loop_obstacle_test': {
+                'command': 'OBSTACLE_OPEN_LOOP_TEST'
+            },
+            'obstacle_open_loop_test': {
+                'command': 'OBSTACLE_OPEN_LOOP_TEST'
+            },
+            'avoid_zone_open_loop': {
+                'command': 'OBSTACLE_OPEN_LOOP_TEST'
+            },
             'enter_obstacle_zone': {'command': 'ENTER_OBSTACLE_ZONE'},
             'obstacle_forward_slow': {'command': 'OBSTACLE_FORWARD_SLOW'},
             'obstacle_turn_left': {'command': 'OBSTACLE_TURN_LEFT'},
@@ -820,6 +830,8 @@ class GaitControlNode(Node):
                 result = self.execute_jump_obstacle('end')
             elif command in ('PRACTICAL_OBSTACLE_ZONE', 'AVOID_ZONE'):
                 result = self.execute_practical_obstacle_zone()
+            elif command == 'OBSTACLE_OPEN_LOOP_TEST':
+                result = self.execute_obstacle_open_loop_test()
             elif command == 'ENTER_OBSTACLE_ZONE':
                 result = self.execute_obstacle_velocity_command(
                     command,
@@ -1110,6 +1122,73 @@ class GaitControlNode(Node):
             STATUS_DONE,
             'PRACTICAL_OBSTACLE_ZONE completed'
         )
+
+    def execute_obstacle_open_loop_test(self):
+        start_time = time.monotonic()
+        steps = [
+            ObstacleStep('open_loop_forward_1', 0.12, 0.0, 1.5),
+            ObstacleStep('open_loop_turn_left', 0.0, 0.60, 1.5),
+            ObstacleStep('open_loop_forward_2', 0.12, 0.0, 1.0),
+            ObstacleStep('open_loop_turn_right', 0.0, -0.60, 1.5),
+        ]
+
+        self.publish_action_feedback('open loop pre-stop', 0.02)
+        self.zero_velocity('open loop obstacle test pre-stop')
+
+        total_steps = len(steps)
+        for index, step in enumerate(steps):
+            self.publish_debug(
+                'open loop obstacle test step '
+                f'{index + 1}/{total_steps}: {step.name} '
+                f'vx={step.vx:.3f}, wz={step.wz:.3f}, '
+                f'duration={step.duration_sec:.2f}s'
+            )
+            check = self._run_open_loop_obstacle_step(
+                step,
+                start_time,
+                index,
+                total_steps
+            )
+            self.zero_velocity(f'open loop step {step.name} stop')
+            if check is not None:
+                return check
+
+        return CommandResult(
+            True,
+            STATUS_DONE,
+            'OBSTACLE_OPEN_LOOP_TEST completed'
+        )
+
+    def _run_open_loop_obstacle_step(
+        self,
+        step,
+        start_time,
+        step_index,
+        total_steps
+    ):
+        end_time = time.monotonic() + float(step.duration_sec)
+        period = 1.0 / self.publish_rate_hz
+
+        while time.monotonic() < end_time:
+            check = self._pre_motion_check(start_time)
+            if check is not None:
+                return check
+            self.send_velocity(step.vx, 0.0, step.wz)
+            elapsed = max(
+                0.0,
+                step.duration_sec - (end_time - time.monotonic())
+            )
+            step_fraction = elapsed / max(step.duration_sec, 0.001)
+            progress = (
+                step_index + step_fraction
+            ) / float(max(1, total_steps))
+            self.publish_action_feedback(
+                f'open_loop: {step.name}',
+                progress
+            )
+            time.sleep(period)
+
+        return None
 
     def execute_obstacle_velocity_command(
         self,
