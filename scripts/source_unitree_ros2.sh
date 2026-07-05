@@ -10,7 +10,16 @@ _rk_source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _rk_ws_dir="$(cd "${_rk_source_dir}/.." && pwd)"
 _rk_iface="${1:-lo}"
 
-source /opt/ros/humble/setup.bash
+if [[ -n "${ROS_DISTRO:-}" && -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
+  source "/opt/ros/${ROS_DISTRO}/setup.bash"
+elif [[ -f /opt/ros/humble/setup.bash ]]; then
+  source /opt/ros/humble/setup.bash
+elif [[ -f /opt/ros/foxy/setup.bash ]]; then
+  source /opt/ros/foxy/setup.bash
+else
+  echo "Error: no supported ROS 2 setup.bash found under /opt/ros"
+  return 1
+fi
 
 if [[ -f "${_rk_ws_dir}/third_party/unitree_ros2/cyclonedds_ws/install/setup.bash" ]]; then
   source "${_rk_ws_dir}/third_party/unitree_ros2/cyclonedds_ws/install/setup.bash"
@@ -36,10 +45,13 @@ fi
 export ROS_LOG_DIR="${ROS_LOG_DIR:-${_rk_ws_dir}/log/ros}"
 mkdir -p "${ROS_LOG_DIR}"
 
-export CYCLONEDDS_URI="<CycloneDDS><Domain><General><Interfaces><NetworkInterface name=\"${_rk_iface}\" priority=\"default\" multicast=\"default\" /></Interfaces></General></Domain></CycloneDDS>"
+# Use the older NetworkInterfaceAddress element because the Go2 onboard image
+# commonly runs ROS 2 Foxy with a CycloneDDS version that rejects Interfaces.
+export CYCLONEDDS_URI="<CycloneDDS><Domain><General><NetworkInterfaceAddress>${_rk_iface}</NetworkInterfaceAddress></General></Domain></CycloneDDS>"
 
 echo "Unitree ROS2 environment sourced."
 echo "  workspace: ${_rk_ws_dir}"
+echo "  ROS_DISTRO=${ROS_DISTRO:-unknown}"
 echo "  RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION}"
 echo "  ROS_LOG_DIR=${ROS_LOG_DIR}"
 echo "  CycloneDDS interface: ${_rk_iface}"
