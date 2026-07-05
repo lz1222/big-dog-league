@@ -26,6 +26,8 @@ setup(
             'two_step_walk_test_node = rk_tools.two_step_walk_test_node:main',
             'cmd_vel_speed_sweep_node = '
             'rk_tools.cmd_vel_speed_sweep_node:main',
+            'obstacle_direct_route_node = '
+            'rk_tools.obstacle_direct_route_node:main',
             'depth_wall_distance_node = '
             'rk_tools.depth_wall_distance_node:main',
         ],
