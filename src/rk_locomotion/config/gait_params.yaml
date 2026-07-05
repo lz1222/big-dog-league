@@ -7,6 +7,7 @@ gait_control_node:
     current_mode_topic: /gait/current_mode
     command_json_topic: /gait/command_json
     motion_action_name: /locomotion/execute_motion
+    enable_motion_action: true
 
     default_max_vx: 0.60
     default_max_vy: 0.15

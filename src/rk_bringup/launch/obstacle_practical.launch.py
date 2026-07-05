@@ -181,6 +181,7 @@ def generate_launch_description():
             parameters=[
                 gait_config,
                 {
+                    'enable_motion_action': False,
                     'obstacle_safety.depth_image_topic': depth_image_topic,
                     'obstacle_safety.scan_topic': scan_topic,
                     'obstacle_safety.enable_scan': ParameterValue(

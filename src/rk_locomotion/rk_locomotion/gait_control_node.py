@@ -161,6 +161,9 @@ class GaitControlNode(Node):
         self.cmd_vel_topic = self._string_parameter('cmd_vel_topic')
         self.command_json_topic = self._string_parameter('command_json_topic')
         self.motion_action_name = self._string_parameter('motion_action_name')
+        self.enable_motion_action = self._bool_parameter(
+            'enable_motion_action'
+        )
 
         self.max_vx = self._positive_float_parameter('default_max_vx')
         self.max_vy = self._positive_float_parameter('default_max_vy')
@@ -423,15 +426,21 @@ class GaitControlNode(Node):
                 callback_group=self.callback_group
             )
 
-        self.action_server = ActionServer(
-            self,
-            ExecuteMotion,
-            self.motion_action_name,
-            self._execute_motion_action,
-            goal_callback=self._motion_goal_callback,
-            cancel_callback=self._motion_cancel_callback,
-            callback_group=self.callback_group
-        )
+        self.action_server = None
+        if self.enable_motion_action:
+            self.action_server = ActionServer(
+                self,
+                ExecuteMotion,
+                self.motion_action_name,
+                self._execute_motion_action,
+                goal_callback=self._motion_goal_callback,
+                cancel_callback=self._motion_cancel_callback,
+                callback_group=self.callback_group
+            )
+        else:
+            self.get_logger().warn(
+                'Motion action server disabled; use /gait/command_json.'
+            )
 
         status_period = 1.0 / self._positive_float_parameter(
             'status_publish_rate_hz'
@@ -447,7 +456,8 @@ class GaitControlNode(Node):
         self.publish_mode('IDLE')
         self.get_logger().info(
             'Gait control node ready: json_topic='
-            f'{self.command_json_topic}, action={self.motion_action_name}'
+            f'{self.command_json_topic}, action='
+            f'{"enabled" if self.enable_motion_action else "disabled"}'
         )
         self.get_logger().info(
             'Obstacle safety: '
@@ -466,6 +476,7 @@ class GaitControlNode(Node):
             'current_mode_topic': '/gait/current_mode',
             'command_json_topic': '/gait/command_json',
             'motion_action_name': '/locomotion/execute_motion',
+            'enable_motion_action': True,
             'default_max_vx': 0.60,
             'default_max_vy': 0.15,
             'default_max_wz': 1.00,
