@@ -67,16 +67,16 @@ gait_control_node:
       timeout_sec: 80.0
       pre_stop_sec: 0.4
       recover_sec: 0.6
-      enter_vx: 0.08
+      enter_vx: 0.12
       enter_duration_sec: 6.0
-      forward_vx: 0.08
+      forward_vx: 0.12
       forward_duration_sec: 5.0
-      turn_wz: 0.30
+      turn_wz: 0.60
       turn_duration_sec: 4.8
       side_adjust_wz: 0.18
       side_adjust_turn_sec: 0.45
       side_adjust_forward_sec: 0.45
-      exit_vx: 0.08
+      exit_vx: 0.12
       exit_duration_sec: 4.0
       step_names:
         - entry_up
@@ -135,28 +135,28 @@ gait_control_node:
         - 90.0
         - 0.0
       step_linear_speed:
-        - 0.08
+        - 0.12
         - 0.00
-        - 0.08
+        - 0.12
         - 0.00
-        - 0.08
+        - 0.12
         - 0.00
-        - 0.08
+        - 0.12
         - 0.00
-        - 0.08
+        - 0.12
         - 0.00
-        - 0.08
+        - 0.12
       step_turn_speed_deg:
         - 0.0
-        - 18.0
+        - 35.0
         - 0.0
-        - 18.0
+        - 35.0
         - 0.0
-        - 18.0
+        - 35.0
         - 0.0
-        - 18.0
+        - 35.0
         - 0.0
-        - 18.0
+        - 35.0
         - 0.0
       step_front_target_m:
         - 0.50

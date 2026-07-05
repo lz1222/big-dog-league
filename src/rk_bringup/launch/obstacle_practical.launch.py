@@ -72,7 +72,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'bridge_max_angular_z',
-            default_value='0.40',
+            default_value='0.70',
             description=(
                 'cmd_vel bridge angular.z safety limit for obstacle tests.'
             )
