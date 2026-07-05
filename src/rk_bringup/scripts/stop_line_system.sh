@@ -32,8 +32,6 @@ fi
 set +e
 
 timeout 3s ros2 topic pub --once /mission/stop std_msgs/msg/Bool "{data: true}" || true
-timeout 3s ros2 topic pub --once /navigation/cmd_vel geometry_msgs/msg/Twist \
-    "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" || true
 
 pkill -f "ros2 topic pub" || true
 pkill -f "go2_sdk_udp_server" || true

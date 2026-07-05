@@ -28,6 +28,8 @@ class CmdVelBridgeNode(Node):
         self.declare_parameter('cmd_timeout_sec', 0.50)
         self.declare_parameter('stop_publish_count', 3)
         self.declare_parameter('stop_publish_period_sec', 0.05)
+        self.declare_parameter('zero_cmd_debounce_time', 0.20)
+        self.declare_parameter('stop_publish_min_interval', 0.50)
 
         self.backend = self._backend_parameter()
         self.cmd_vel_topic = self._string_parameter('cmd_vel_topic')
@@ -42,6 +44,12 @@ class CmdVelBridgeNode(Node):
         )
         self.stop_publish_period_sec = self._nonnegative_float_parameter(
             'stop_publish_period_sec'
+        )
+        self.zero_cmd_debounce_time = self._nonnegative_float_parameter(
+            'zero_cmd_debounce_time'
+        )
+        self.stop_publish_min_interval = self._nonnegative_float_parameter(
+            'stop_publish_min_interval'
         )
 
         max_linear_x = self._positive_float_parameter('max_linear_x')
@@ -59,6 +67,9 @@ class CmdVelBridgeNode(Node):
         self._last_vx = 0.0
         self._last_vyaw = 0.0
         self._shutdown_stop_sent = False
+        self._zero_cmd_start_time = None
+        self._last_stop_publish_time = None
+        self._last_suppressed_stop_log_time = None
 
         self._subscription = self.create_subscription(
             Twist,
@@ -80,11 +91,14 @@ class CmdVelBridgeNode(Node):
             f'{self.cmd_vel_topic} -> {self.sport_request_topic}, '
             f'backend={self.backend}, '
             f'max_linear_x={max_linear_x:.3f}, '
-            f'max_angular_z={max_angular_z:.3f}'
+            f'max_angular_z={max_angular_z:.3f}, '
+            f'zero_cmd_debounce_time={self.zero_cmd_debounce_time:.3f}, '
+            f'stop_publish_min_interval={self.stop_publish_min_interval:.3f}'
         )
 
     def _on_cmd_vel(self, msg):
-        self._last_cmd_time = self.get_clock().now()
+        now = self.get_clock().now()
+        self._last_cmd_time = now
 
         decision = self._safety_monitor.evaluate(
             msg.linear.x,
@@ -92,34 +106,104 @@ class CmdVelBridgeNode(Node):
         )
 
         if decision.should_stop:
-            self._motion_active = False
-            self._last_vx = 0.0
-            self._last_vyaw = 0.0
-            self._motion_client.send_stop(decision.reason)
+            self._handle_stop_decision(decision, now)
             return
 
+        self._zero_cmd_start_time = None
+        self._last_stop_publish_time = None
         self._motion_client.send_move(decision.vx, decision.vyaw)
         self._motion_active = True
         self._last_vx = decision.vx
         self._last_vyaw = decision.vyaw
+
+    def _handle_stop_decision(self, decision, now):
+        if decision.reason == 'zero velocity command':
+            self._handle_zero_cmd(decision.reason, now)
+            return
+
+        self._zero_cmd_start_time = None
+        self._send_stop(decision.reason, now)
+
+    def _handle_zero_cmd(self, reason, now):
+        if not self._motion_active:
+            self._zero_cmd_start_time = now
+            self._log_suppressed_stop(
+                'ignore repeated zero velocity command',
+                now
+            )
+            return
+
+        if self._zero_cmd_start_time is None:
+            self._zero_cmd_start_time = now
+
+        elapsed_sec = self._elapsed_since(now, self._zero_cmd_start_time)
+        if elapsed_sec < self.zero_cmd_debounce_time:
+            self._log_suppressed_stop(
+                'debounced zero velocity command: '
+                f'elapsed={elapsed_sec:.3f}s, '
+                f'debounce={self.zero_cmd_debounce_time:.3f}s',
+                now
+            )
+            return
+
+        self._send_stop(reason, now)
+
+    def _send_stop(self, reason, now):
+        if not self._motion_active:
+            self._log_suppressed_stop(
+                f'ignore repeated StopMove: reason="{reason}"',
+                now
+            )
+            return False
+
+        if self._last_stop_publish_time is not None:
+            elapsed_sec = self._elapsed_since(
+                now,
+                self._last_stop_publish_time
+            )
+            if elapsed_sec < self.stop_publish_min_interval:
+                self._log_suppressed_stop(
+                    'ignore repeated StopMove: '
+                    f'elapsed={elapsed_sec:.3f}s, '
+                    f'min_interval={self.stop_publish_min_interval:.3f}s, '
+                    f'reason="{reason}"',
+                    now
+                )
+                return False
+
+        self._motion_active = False
+        self._last_vx = 0.0
+        self._last_vyaw = 0.0
+        self._last_stop_publish_time = now
+        self._zero_cmd_start_time = None
+        self._motion_client.send_stop(reason)
+        return True
+
+    def _log_suppressed_stop(self, message, now):
+        if self._last_suppressed_stop_log_time is not None:
+            elapsed_sec = self._elapsed_since(
+                now,
+                self._last_suppressed_stop_log_time
+            )
+            if elapsed_sec < self.stop_publish_min_interval:
+                return
+
+        self._last_suppressed_stop_log_time = now
+        self.get_logger().info(message)
 
     def _on_watchdog_timer(self):
         if not self._motion_active or self._last_cmd_time is None:
             return
 
         now = self.get_clock().now()
-        elapsed_sec = (
-            now.nanoseconds - self._last_cmd_time.nanoseconds
-        ) / 1_000_000_000.0
+        elapsed_sec = self._elapsed_since(now, self._last_cmd_time)
 
         if elapsed_sec <= self.cmd_timeout_sec:
             return
 
-        self._motion_active = False
-        self._last_vx = 0.0
-        self._last_vyaw = 0.0
-        self._motion_client.send_stop(
-            f'cmd_vel timeout after {elapsed_sec:.3f}s'
+        self._send_stop(
+            f'cmd_vel timeout after {elapsed_sec:.3f}s',
+            now
         )
 
     def _on_parameter_update(self, parameters):
@@ -159,9 +243,9 @@ class CmdVelBridgeNode(Node):
         )
 
         if self._motion_active and self._current_motion_exceeds_limits():
-            self._motion_active = False
-            self._motion_client.send_stop(
-                'current command exceeds updated speed limits'
+            self._send_stop(
+                'current command exceeds updated speed limits',
+                self.get_clock().now()
             )
 
         return SetParametersResult(successful=True)
@@ -171,6 +255,10 @@ class CmdVelBridgeNode(Node):
             abs(self._last_vx) > self._safety_monitor.max_linear_x
             or abs(self._last_vyaw) > self._safety_monitor.max_angular_z
         )
+
+    @staticmethod
+    def _elapsed_since(now, start_time):
+        return (now.nanoseconds - start_time.nanoseconds) / 1_000_000_000.0
 
     def shutdown(self):
         if self._shutdown_stop_sent:

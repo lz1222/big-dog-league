@@ -14,6 +14,7 @@ try:
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
     from sensor_msgs.msg import Image
+    from std_msgs.msg import Header
 
     from rk_interfaces.msg import LineTrack
 except ImportError:
@@ -21,6 +22,7 @@ except ImportError:
     CvBridge = None
     CvBridgeError = Exception
     ExternalShutdownException = Exception
+    Header = None
     Image = None
     LineTrack = None
     Node = object
@@ -624,9 +626,12 @@ class RealLineTrackerNode(Node):
         self.declare_parameter('previous_center_weight', 2.0)
         self.declare_parameter('frame_id', 'd435i_color_optical_frame')
 
-        self.image_topic = self.get_parameter(
-            'image_topic'
-        ).get_parameter_value().string_value
+        self.image_topic = self.get_parameter('image_topic').value
+        self.enable_debug_image = self._get_bool_parameter(
+            'enable_debug_image',
+            False
+        )
+        self.debug_log = self._get_bool_parameter('debug_log', False)
         self.line_track_topic = self.get_parameter(
             'line_track_topic'
         ).get_parameter_value().string_value
@@ -674,17 +679,33 @@ class RealLineTrackerNode(Node):
         self.get_logger().info(
             'Real line tracker node started: '
             f'image_topic={self.image_topic}, '
-            f'line_track_topic={self.line_track_topic}'
+            f'line_track_topic={self.line_track_topic}, '
+            f'enable_debug_image={self.enable_debug_image}, '
+            f'debug_log={self.debug_log}, '
+            'line_mask_topic=/perception/debug/line_mask, '
+            'line_overlay_topic=/perception/debug/line_overlay'
+        )
+        raw_enable_debug_image = self.get_parameter(
+            'enable_debug_image'
+        ).value
+        raw_debug_log = self.get_parameter('debug_log').value
+        self.get_logger().info(
+            'debug params: '
+            f'enable_debug_image={self.enable_debug_image}, '
+            f'raw_enable_debug_image={raw_enable_debug_image!r}, '
+            f'type={type(raw_enable_debug_image).__name__}, '
+            f'debug_log={self.debug_log}, '
+            f'raw_debug_log={raw_debug_log!r}, '
+            f'type={type(raw_debug_log).__name__}'
         )
 
     def refresh_parameters(self):
         """Refresh runtime-tunable parameters from the ROS parameter store."""
-        self.enable_debug_image = self.get_parameter(
-            'enable_debug_image'
-        ).get_parameter_value().bool_value
-        self.debug_log = self.get_parameter(
-            'debug_log'
-        ).get_parameter_value().bool_value
+        self.enable_debug_image = self._get_bool_parameter(
+            'enable_debug_image',
+            False
+        )
+        self.debug_log = self._get_bool_parameter('debug_log', False)
         self.track_lock_enabled = self.get_parameter(
             'track_lock_enabled'
         ).get_parameter_value().bool_value
@@ -751,6 +772,18 @@ class RealLineTrackerNode(Node):
             bottom_band_preference_weight=self.bottom_band_preference_weight,
             previous_center_weight=self.previous_center_weight,
         ).normalized()
+
+    def _get_bool_parameter(self, name: str, default: bool = False) -> bool:
+        value = self.get_parameter(name).value
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in ('true', '1', 'yes', 'on'):
+                return True
+            if normalized in ('false', '0', 'no', 'off'):
+                return False
+        return bool(default)
 
     def on_image(self, image_msg):
         self.image_callback(image_msg)
@@ -1140,13 +1173,32 @@ class RealLineTrackerNode(Node):
         line_visible
     ):
         msg = LineTrack()
-        msg.header.stamp = image_msg.header.stamp
-        msg.header.frame_id = image_msg.header.frame_id or self.frame_id
-        msg.lateral_error = float(lateral_error)
-        msg.heading_error = float(heading_error)
-        msg.confidence = float(confidence)
+        header = getattr(image_msg, 'header', None)
+        if header is not None:
+            msg.header.stamp = header.stamp
+            msg.header.frame_id = header.frame_id or self.frame_id
+        elif Header is not None:
+            msg.header = Header()
+            msg.header.frame_id = self.frame_id
+        else:
+            msg.header.frame_id = self.frame_id
+
+        msg.lateral_error = self.safe_float(lateral_error)
+        msg.heading_error = self.safe_float(heading_error)
+        msg.confidence = clamp(self.safe_float(confidence), 0.0, 1.0)
         msg.line_visible = bool(line_visible)
         return msg
+
+    @staticmethod
+    def safe_float(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+        if not math.isfinite(number):
+            return 0.0
+        return number
 
     def make_overlay(self, image, result):
         overlay = image.copy()

@@ -31,16 +31,8 @@ set +e
 timeout 3s ros2 topic pub --once /mission/stop std_msgs/msg/Bool "{data: true}"
 STOP_STATUS=$?
 
-timeout 3s ros2 topic pub --once /navigation/cmd_vel geometry_msgs/msg/Twist \
-    "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}"
-ZERO_STATUS=$?
-
 if [ "$STOP_STATUS" -ne 0 ]; then
-    echo "WARN: failed to publish /mission/stop; zero cmd_vel was still attempted." >&2
-fi
-
-if [ "$ZERO_STATUS" -ne 0 ]; then
-    echo "WARN: failed to publish zero /navigation/cmd_vel." >&2
+    echo "WARN: failed to publish /mission/stop." >&2
     exit 1
 fi
 

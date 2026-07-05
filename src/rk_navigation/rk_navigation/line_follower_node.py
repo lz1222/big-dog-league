@@ -111,6 +111,9 @@ class LineFollowerNode(Node):
         self.debug_log_period_ns = 1_000_000_000
         self.last_loss_reason = 'none'
         self.gait_control_locked = False
+        self.mission_started = False
+        self.last_published_cmd_is_zero = True
+        self.last_stop_reason = 'startup'
 
         self.refresh_parameters()
 
@@ -274,6 +277,7 @@ class LineFollowerNode(Node):
         )
         self.stable_seen_count = 0
         self.last_loss_reason = 'mission_start'
+        self.mission_started = True
         self.set_state(LINE_FOLLOW, 'mission_start', now)
 
     def on_mission_stop(self, msg):
@@ -286,8 +290,9 @@ class LineFollowerNode(Node):
             f'state={self.state}, target_state={STOP}'
         )
         self.last_loss_reason = 'mission_stop'
+        self.mission_started = False
         self.set_state(STOP, 'mission_stop', now)
-        self.publish_zero()
+        self.publish_zero('mission_stop')
 
     def on_gait_control_lock(self, msg):
         locked = bool(msg.data)
@@ -299,6 +304,8 @@ class LineFollowerNode(Node):
             )
             self.get_logger().info(message)
         self.gait_control_locked = locked
+        if locked:
+            self.publish_zero('gait_control_lock')
 
     def on_line_track(self, msg):
         self.refresh_parameters()
@@ -311,7 +318,7 @@ class LineFollowerNode(Node):
             if self.state in RUNNING_STATES:
                 self.log_invalid_line_track_stop(msg, now)
                 self.set_state(STOP, 'invalid_line_track', now)
-                self.publish_zero()
+                self.publish_zero('invalid_line_track')
             return
 
         if self.is_trackable_line(msg):
@@ -347,17 +354,15 @@ class LineFollowerNode(Node):
         now = self.get_clock().now()
 
         if self.gait_control_locked:
-            self.log_debug('gait_control_lock active; cmd_vel output paused')
+            self.log_control_debug(Twist(), 'gait_control_lock')
             return
 
         if self.state == WAIT_START:
-            self.publish_zero()
-            self.log_debug('waiting for /mission/start')
+            self.log_control_debug(Twist(), 'waiting_for_mission_start')
             return
 
         if self.state == STOP:
-            self.publish_zero()
-            self.log_debug('stopped')
+            self.log_control_debug(Twist(), self.last_stop_reason)
             return
 
         if self.state in RUNNING_STATES and self.line_message_timed_out(now):
@@ -369,7 +374,7 @@ class LineFollowerNode(Node):
                 f'timeout={self.line_msg_timeout:.3f}s'
             )
             self.set_state(STOP, 'line_msg_timeout', now)
-            self.publish_zero()
+            self.publish_zero('line_msg_timeout')
             return
 
         if self.state == LINE_FOLLOW:
@@ -384,18 +389,10 @@ class LineFollowerNode(Node):
             cmd = self.command_search_line(now)
         else:
             self.set_state(STOP, f'unhandled_state_{self.state}', now)
-            self.publish_zero()
+            self.publish_zero(f'unhandled_state_{self.state}')
             return
 
-        self.publisher.publish(cmd)
-        self.log_debug(
-            'cmd_vel: '
-            f'state={self.state}, '
-            f'linear.x={cmd.linear.x:.3f}, '
-            f'angular.z={cmd.angular.z:.3f}, '
-            f'last_loss_reason={self.last_loss_reason}, '
-            f'stable_seen_count={self.stable_seen_count}'
-        )
+        self.publish_cmd(cmd, self.last_loss_reason)
 
     def command_line_follow(self, now):
         msg = self.last_line_msg
@@ -579,8 +576,26 @@ class LineFollowerNode(Node):
         )
         return cmd
 
-    def publish_zero(self):
-        self.publisher.publish(Twist())
+    def publish_cmd(self, cmd, stop_reason='none'):
+        if self.is_zero_cmd(cmd):
+            self.publish_zero(stop_reason)
+            return
+
+        self.publisher.publish(cmd)
+        self.last_published_cmd_is_zero = False
+        self.last_stop_reason = 'none'
+        self.log_control_debug(cmd, stop_reason)
+
+    def publish_zero(self, reason='stop'):
+        cmd = Twist()
+        self.last_stop_reason = reason
+        if self.last_published_cmd_is_zero:
+            self.log_control_debug(cmd, reason)
+            return
+
+        self.publisher.publish(cmd)
+        self.last_published_cmd_is_zero = True
+        self.log_control_debug(cmd, reason)
 
     def set_state(self, new_state, reason, now):
         requested_state = new_state
@@ -608,6 +623,7 @@ class LineFollowerNode(Node):
 
         self.state = new_state
         self.state_enter_time = now
+        self.mission_started = new_state in RUNNING_STATES
 
         if new_state in {LINE_FOLLOW, WAIT_START, STOP}:
             self.stable_seen_count = 0
@@ -835,6 +851,40 @@ class LineFollowerNode(Node):
             self.line_msg_timeout,
         ]
         return all(math.isfinite(float(value)) for value in values)
+
+    @staticmethod
+    def is_zero_cmd(cmd):
+        return (
+            float(cmd.linear.x) == 0.0
+            and float(cmd.linear.y) == 0.0
+            and float(cmd.linear.z) == 0.0
+            and float(cmd.angular.x) == 0.0
+            and float(cmd.angular.y) == 0.0
+            and float(cmd.angular.z) == 0.0
+        )
+
+    def log_control_debug(self, cmd, stop_reason):
+        line_visible = False
+        lateral_error = 0.0
+        heading_error = 0.0
+        if self.last_line_msg is not None:
+            line_visible = bool(self.last_line_msg.line_visible)
+            lateral_error = float(self.last_line_msg.lateral_error)
+            heading_error = float(self.last_line_msg.heading_error)
+
+        self.log_debug(
+            'control: '
+            f'mission_started={self.mission_started}, '
+            f'line_visible={line_visible}, '
+            f'control_lock={self.gait_control_locked}, '
+            f'lateral_error={lateral_error:.3f}, '
+            f'heading_error={heading_error:.3f}, '
+            f'cmd_vel.linear.x={cmd.linear.x:.3f}, '
+            f'cmd_vel.angular.z={cmd.angular.z:.3f}, '
+            f'stop_reason={stop_reason}, '
+            f'last_loss_reason={self.last_loss_reason}, '
+            f'stable_seen_count={self.stable_seen_count}'
+        )
 
     def log_debug(self, message):
         if not self.debug_log:

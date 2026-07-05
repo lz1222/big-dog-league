@@ -8,3 +8,5 @@ cmd_vel_bridge_node:
     cmd_timeout_sec: 0.50
     stop_publish_count: 3
     stop_publish_period_sec: 0.05
+    zero_cmd_debounce_time: 0.20
+    stop_publish_min_interval: 0.50

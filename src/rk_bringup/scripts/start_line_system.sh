@@ -33,20 +33,13 @@ send_window_command() {
 }
 
 ENV_SCRIPT="$(resolve_env_script)"
+BRIDGE_BACKEND="${RK_GO2_BACKEND:-unitree_ros2}"
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
-tmux new-session -d -s "$SESSION" -n bridge
-send_window_command "bridge" \
-    "cd \"${WORKSPACE_DIR}\" && source /opt/ros/foxy/setup.bash && source \"${WORKSPACE_DIR}/install/setup.bash\" && ros2 launch rk_go2_sdk_bridge go2_sdk_udp_bridge.launch.py"
-
-tmux new-window -t "$SESSION" -n camera
-send_window_command "camera" \
-    "source \"${ENV_SCRIPT}\" && ros2 launch realsense2_camera rs_launch.py"
-
-tmux new-window -t "$SESSION" -n vision_nav
-send_window_command "vision_nav" \
-    "source \"${ENV_SCRIPT}\" && ros2 launch rk_bringup vision_nav_debug.launch.py image_topic:=/camera/color/image_raw enable_debug_image:=true debug_log:=true"
+tmux new-session -d -s "$SESSION" -n line_nav
+send_window_command "line_nav" \
+    "source \"${ENV_SCRIPT}\" && ros2 launch rk_bringup competition_line_nav.launch.py image_topic:=/camera/color/image_raw debug:=true backend:=${BRIDGE_BACKEND} start_realsense:=true"
 
 tmux new-window -t "$SESSION" -n line_track
 send_window_command "line_track" \
@@ -60,9 +53,10 @@ tmux new-window -t "$SESSION" -n system_check
 send_window_command "system_check" \
     "source \"${ENV_SCRIPT}\" && watch -n 1 'ros2 topic list | grep -E \"camera|line_track|cmd_vel|mission|perception\"'"
 
-tmux select-window -t "${SESSION}:bridge"
+tmux select-window -t "${SESSION}:line_nav"
 
 echo "RK line system tmux session started: ${SESSION}"
+echo "Bridge backend: ${BRIDGE_BACKEND}"
 echo "Attach: tmux attach -t ${SESSION}"
 echo "Confirm line_visible=true before running mission_start.sh."
 echo "Emergency stop: stop_line_system.sh"
