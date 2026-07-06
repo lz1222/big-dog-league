@@ -13,9 +13,11 @@ from rclpy.node import Node
 @dataclass(frozen=True)
 class RouteStage:
     name: str
+    description: str
     forward_steps: int = 0
     turn_direction: str = 'none'
     turn_degrees: float = 0.0
+    action_order: str = 'forward_then_turn'
     forward_speed_mps: float = 0.35
     turn_speed_radps: float = 0.80
 
@@ -39,22 +41,27 @@ class RouteStage:
 # 2. 再调每一个阶段：
 #    每个 RouteStage 都可以同时写：
 #      - forward_steps：这个阶段先走多少步；0 表示不走。
-#      - turn_direction：这个阶段走完后是否转弯。
+#      - turn_direction：这个阶段是否转弯。
 #          'none'  = 不转
 #          'left'  = 左转
 #          'right' = 右转
 #      - turn_degrees：转多少度；turn_direction='none' 时填 0.0。
+#      - action_order：如果这个阶段既要走又要转，决定先后顺序。
+#          'forward_then_turn' = 先走，再转
+#          'turn_then_forward' = 先转，再走
 #      - forward_speed_mps：这一阶段直行速度，可不填，默认 0.35。
 #      - turn_speed_radps：这一阶段转弯速度，可不填，默认 0.80。
 #
 #    例子：
 #      RouteStage(
 #          name='turn_left_to_top',
-#          forward_steps=1,
+#          description='第2阶段：先左转进入顶部横向通道，再向前走',
+#          forward_steps=5,
 #          turn_direction='left',
-#          turn_degrees=88.0,
+#          turn_degrees=90.0,
+#          action_order='turn_then_forward',
 #      )
-#    表示：先补走 1 步，然后左转 88 度。
+#    表示：先左转 90 度，然后向前走 5 步。
 #
 # 3. 推荐调试顺序：
 #    - 先把每个阶段的 forward_steps 设小一点，确认方向顺序正确。
@@ -79,86 +86,109 @@ DEFAULT_TURN_SPEED_RADPS = 0.80
 # 每一行就是一个阶段。你可以给任何阶段同时设置“走几步”和“转多少”。
 # forward_steps 必须是整数，方便你现场按“多一步/少一步”调。
 ROUTE_STAGES = [
+    # 第1阶段：从入口沿竖直通道向上走，靠近顶部墙前的直行段。
     RouteStage(
         name='entry_up',
+        description='第1阶段：入口向上直走',
         forward_steps=5,
         turn_direction='none',
         turn_degrees=0.0,
+        action_order='forward_then_turn',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
     ),
+    # 第2阶段：按你的要求，先左转90度，再沿顶部通道向前走5步。
     RouteStage(
         name='turn_left_to_top',
-        forward_steps=0,
+        description='第2阶段：先左转90度，再向前走5步',
+        forward_steps=5,
         turn_direction='left',
         turn_degrees=90.0,
+        action_order='turn_then_forward',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
         turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
     ),
-    RouteStage(
-        name='top_left',
-        forward_steps=4,
-        turn_direction='none',
-        turn_degrees=0.0,
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-    ),
+    # 第3阶段：到顶部横向通道末端后，左转进入中间向下通道。
     RouteStage(
         name='turn_left_to_middle_down',
+        description='第3阶段：左转进入中间向下通道',
         forward_steps=0,
         turn_direction='left',
         turn_degrees=90.0,
+        action_order='forward_then_turn',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
         turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
     ),
+    # 第4阶段：沿中间通道向下走。
     RouteStage(
         name='middle_down',
+        description='第4阶段：中间通道向下直走',
         forward_steps=4,
         turn_direction='none',
         turn_degrees=0.0,
+        action_order='forward_then_turn',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
     ),
+    # 第5阶段：中间通道末端右转，准备走底部横向通道。
     RouteStage(
         name='turn_right_to_bottom_left',
+        description='第5阶段：右转进入底部横向通道',
         forward_steps=0,
         turn_direction='right',
         turn_degrees=90.0,
+        action_order='forward_then_turn',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
         turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
     ),
+    # 第6阶段：沿底部通道向左走。
     RouteStage(
         name='bottom_left',
+        description='第6阶段：底部通道向左直走',
         forward_steps=3,
         turn_direction='none',
         turn_degrees=0.0,
+        action_order='forward_then_turn',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
     ),
+    # 第7阶段：底部通道末端右转，准备沿左侧通道向上走。
     RouteStage(
         name='turn_right_to_left_up',
+        description='第7阶段：右转进入左侧向上通道',
         forward_steps=0,
         turn_direction='right',
         turn_degrees=90.0,
+        action_order='forward_then_turn',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
         turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
     ),
+    # 第8阶段：沿左侧通道向上走。
     RouteStage(
         name='left_up',
+        description='第8阶段：左侧通道向上直走',
         forward_steps=4,
         turn_direction='none',
         turn_degrees=0.0,
+        action_order='forward_then_turn',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
     ),
+    # 第9阶段：左侧通道末端左转，对准出口方向。
     RouteStage(
         name='turn_left_to_exit',
+        description='第9阶段：左转对准出口',
         forward_steps=0,
         turn_direction='left',
         turn_degrees=90.0,
+        action_order='forward_then_turn',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
         turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
     ),
+    # 第10阶段：向出口方向直走，离开避障区。
     RouteStage(
         name='exit_left',
+        description='第10阶段：向出口直走离开避障区',
         forward_steps=3,
         turn_direction='none',
         turn_degrees=0.0,
+        action_order='forward_then_turn',
         forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
     ),
 ]
@@ -170,6 +200,7 @@ class ObstacleDirectRouteNode(Node):
     """Publish a hardcoded obstacle-zone route directly to cmd_vel."""
 
     VALID_TURN_DIRECTIONS = {'none', 'left', 'right'}
+    VALID_ACTION_ORDERS = {'forward_then_turn', 'turn_then_forward'}
 
     def __init__(self):
         super().__init__('obstacle_direct_route_node')
@@ -241,10 +272,19 @@ class ObstacleDirectRouteNode(Node):
                 )
 
         for stage in ROUTE_STAGES:
+            if not stage.description:
+                raise ValueError(f'{stage.name} description must not be empty')
+
             if stage.turn_direction not in self.VALID_TURN_DIRECTIONS:
                 raise ValueError(
                     f'{stage.name} invalid turn_direction: '
                     f'{stage.turn_direction}'
+                )
+
+            if stage.action_order not in self.VALID_ACTION_ORDERS:
+                raise ValueError(
+                    f'{stage.name} invalid action_order: '
+                    f'{stage.action_order}'
                 )
 
             if stage.forward_steps < 0:
@@ -273,9 +313,23 @@ class ObstacleDirectRouteNode(Node):
                         f'{stage.name} turn_speed_radps must be positive'
                     )
 
-            if stage.forward_steps == 0 and stage.turn_direction == 'none':
+            has_forward = stage.forward_steps > 0
+            has_turn = stage.turn_direction != 'none'
+            if not has_forward and not has_turn:
                 raise ValueError(
                     f'{stage.name} does nothing; set forward_steps or turn'
+                )
+
+            if not has_forward and stage.action_order == 'turn_then_forward':
+                raise ValueError(
+                    f'{stage.name} action_order turn_then_forward requires '
+                    'forward_steps > 0'
+                )
+
+            if not has_turn and stage.action_order == 'turn_then_forward':
+                raise ValueError(
+                    f'{stage.name} action_order turn_then_forward requires '
+                    "turn_direction other than 'none'"
                 )
 
     def run(self):
@@ -301,6 +355,20 @@ class ObstacleDirectRouteNode(Node):
         self.get_logger().info('Direct obstacle route completed.')
 
     def _run_stage(self, index, total, stage):
+        self.get_logger().info(
+            f'route stage {index}/{total}: {stage.description}, '
+            f'order={stage.action_order}'
+        )
+
+        if stage.action_order == 'turn_then_forward':
+            self._run_turn(index, total, stage)
+            self._publish_stop(
+                f'between {stage.name} turn and forward',
+                self.step_stop_sec
+            )
+            self._run_forward(index, total, stage)
+            return
+
         if stage.forward_steps > 0:
             self._run_forward(index, total, stage)
             if stage.turn_direction != 'none':
