@@ -32,12 +32,22 @@ if(unitree_sdk2_FOUND)
     BUILD_RPATH "${RK_UNITREE_SDK2_PREFIX}/lib"
     INSTALL_RPATH "${RK_UNITREE_SDK2_PREFIX}/lib"
   )
-  install(TARGETS go2_sdk_speed_sweep
+  add_executable(go2_sdk_motion_action
+    src/go2_sdk_motion_action.cpp
+  )
+  target_link_libraries(go2_sdk_motion_action unitree_sdk2)
+  set_target_properties(go2_sdk_motion_action PROPERTIES
+    BUILD_RPATH "${RK_UNITREE_SDK2_PREFIX}/lib"
+    INSTALL_RPATH "${RK_UNITREE_SDK2_PREFIX}/lib"
+  )
+  install(TARGETS
+    go2_sdk_speed_sweep
+    go2_sdk_motion_action
     DESTINATION lib/${PROJECT_NAME}
   )
 else()
   message(WARNING
-    "unitree_sdk2 not found; go2_sdk_speed_sweep will not be built. "
+    "unitree_sdk2 not found; SDK direct tools will not be built. "
     "Build/install third_party/unitree_sdk2 first if SDK direct tests are needed."
   )
 endif()

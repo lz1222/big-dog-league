@@ -27,6 +27,8 @@ def generate_launch_description():
     distance_scale = LaunchConfiguration('distance_scale')
     turn_scale = LaunchConfiguration('turn_scale')
     speed_scale = LaunchConfiguration('speed_scale')
+    sdk_network_interface = LaunchConfiguration('sdk_network_interface')
+    sdk_action_executable = LaunchConfiguration('sdk_action_executable')
 
     sdk_bridge_launch = PathJoinSubstitution([
         FindPackageShare('rk_go2_sdk_bridge'),
@@ -78,9 +80,24 @@ def generate_launch_description():
             default_value='1.0',
             description='Scale all hardcoded linear and yaw speeds.'
         ),
+        DeclareLaunchArgument(
+            'sdk_network_interface',
+            default_value='eth0',
+            description='Go2 SDK2 network interface for FrontJump actions.'
+        ),
+        DeclareLaunchArgument(
+            'sdk_action_executable',
+            default_value=(
+                '/home/unitree/rk_inspection_ws/install/'
+                'rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/'
+                'go2_sdk_motion_action'
+            ),
+            description='Helper executable used for SDK actions.'
+        ),
         LogInfo(
-            msg='Starting direct hardcoded obstacle route through SDK UDP. '
-            'No gait/action/rk_interfaces nodes are started.'
+            msg='Starting direct hardcoded full route through SDK UDP plus '
+            'small SDK action helper. No gait/action/rk_interfaces nodes '
+            'are started.'
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(sdk_bridge_launch),
@@ -115,6 +132,8 @@ def generate_launch_description():
                     speed_scale,
                     value_type=float
                 ),
+                'sdk_network_interface': sdk_network_interface,
+                'sdk_action_executable': sdk_action_executable,
             }],
         ),
     ])
