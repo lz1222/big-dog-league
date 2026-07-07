@@ -52,7 +52,7 @@ class RouteStage:
 #
 # 2. 避障区现在只改 OBSTACLE_ROUTE：
 #    forward(步数) = 直走几步。
-#    left(角度) / right(角度) = 边走边左/右转多少度。
+#    left(角度) / right(角度) = 续航步态左/右转多少度。
 #    你想怎么跑，就按顺序写一行一行动作。
 #
 # 3. 巡线阶段 RouteStage 的字段：
@@ -95,12 +95,11 @@ LINE_FOLLOW_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.30
 LINE_FOLLOW_START_SETTLE_SEC = 0.0
 LINE_FOLLOW_STOP_SETTLE_SEC = 0.0
-DEFAULT_FORWARD_SPEED_MPS = 0.35
+DEFAULT_FORWARD_SPEED_MPS = 0.25
 DEFAULT_TURN_SPEED_RADPS = 0.80
-# 避障区转弯时也要给前进速度，避免原地扭腿。
-# 你的 Go2 实测 0.27m/s 以下基本不往前走，所以这里默认用 0.30。
-# 如果转弯半径太大容易撞墙，先降到 0.27；如果还是像原地转，升到 0.35。
-DEFAULT_TURN_FORWARD_SPEED_MPS = 0.30
+# 当前避障区先切续航步态，所以转弯默认不额外给前进速度。
+# 如果后面想恢复边走边转，把这里改成 0.25/0.30，或单独给 left/right 传 vx_mps。
+DEFAULT_TURN_FORWARD_SPEED_MPS = 0.0
 START_FORWARD_SPEED_MPS = 0.35
 USE_DIRECT_START_FORWARD = True
 
@@ -153,7 +152,7 @@ def forward(steps, speed_mps=DEFAULT_FORWARD_SPEED_MPS):
 
 def left(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
          wz_radps=DEFAULT_TURN_SPEED_RADPS):
-    """避障区：边走边左转多少度。"""
+    """避障区：左转多少度。默认续航步态原地转。"""
     return {
         'type': 'turn',
         'direction': 'left',
@@ -165,7 +164,7 @@ def left(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
 
 def right(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
           wz_radps=DEFAULT_TURN_SPEED_RADPS):
-    """避障区：边走边右转多少度。"""
+    """避障区：右转多少度。默认续航步态原地转。"""
     return {
         'type': 'turn',
         'direction': 'right',
@@ -197,7 +196,7 @@ def build_obstacle_route_stages(commands):
             stages.append(RouteStage(
                 name=f'obstacle_{index:02d}_{direction}',
                 description=(
-                    f'避障动作{index}：边走边'
+                    f'避障动作{index}：'
                     f'{"左" if direction == "left" else "右"}转 '
                     f'{degrees:.1f} 度'
                 ),
@@ -219,14 +218,13 @@ def build_obstacle_route_stages(commands):
 # 写法非常直接：直走、左转、直走、右转……
 # 例子：
 #   forward(13)      # 直走13步
-#   left(140)        # 边走边左转140度
-#   right(120, vx_mps=0.35)  # 右转120度，转弯时前进速度0.35
+#   left(140)        # 续航步态左转140度，不额外前进
+#   right(120, vx_mps=0.25)  # 如果想边走边转，可以单独加 vx_mps
 #
 # 调参建议：
 #   - 直走距离不够：改 forward(...) 里的步数。
 #   - 转弯角度不够：改 left/right(...) 里的角度。
-#   - 转弯像原地转：把 vx_mps 加到 0.35。
-#   - 转弯半径太大：把 vx_mps 降到 0.27。
+#   - 默认是原地转；如果需要弧线转弯，就给 left/right 加 vx_mps=0.25。
 OBSTACLE_ROUTE = [
     forward(13),      # 入口向上直走
     left(140),        # 左转进入顶部横向通道
@@ -314,6 +312,15 @@ ROUTE_STAGES = [
         line_follow_steps=0 if USE_DIRECT_START_FORWARD else 12,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         enabled=ENABLE_START_SEQUENCE,
+    ),
+
+    # 避障区开始前：切换续航步态，让转弯和低速行走更柔和。
+    RouteStage(
+        name='obstacle_economic_gait',
+        description='避障区开始前：切换续航步态',
+        sdk_action='economic_gait',
+        sdk_wait_sec=0.30,
+        enabled=ENABLE_OBSTACLE_ROUTE,
     ),
 
     *build_obstacle_route_stages(OBSTACLE_ROUTE),
