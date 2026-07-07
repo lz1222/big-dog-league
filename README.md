@@ -1,18 +1,35 @@
 # RK Inspection ROS2 Mock Workspace
 
-This workspace contains the stage-one mock skeleton for the RK multimodal
-inspection robot project. It targets ROS2 Humble and keeps all Unitree Go2,
-Unitree D1 arm, and RealSense D435i integration points mocked.
+This workspace contains the stage-one skeleton for the RK multimodal inspection
+robot project. The VM development environment uses ROS2 Humble, while the
+actual Unitree Go2 runtime environment uses ROS2 Foxy.
+
+Do not treat a VM/Humble-only build issue as evidence that the robot/Foxy
+workspace is broken.
 
 ## Build
 
 ```bash
 cd ~/rk_inspection_ws
+source /opt/ros/foxy/setup.bash
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-The helper script runs the same build flow and attempts rosdep first:
+On the Humble VM, this checkout may live under a non-ASCII path. If `rosidl`
+fails while generating `rk_interfaces`, keep the install space in the workspace
+but put the build space under an ASCII path:
+
+```bash
+cd /home/lzbb/桌面/rk_inspection_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install \
+  --build-base /tmp/rk_inspection_build \
+  --install-base install
+source install/setup.bash
+```
+
+The helper script runs the standard build flow and attempts rosdep first:
 
 ```bash
 ./scripts/build_all.sh

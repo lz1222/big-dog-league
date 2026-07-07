@@ -2,7 +2,7 @@ real_line_tracker_node:
   ros__parameters:
     image_topic: /camera/color/image_raw
     line_track_topic: /perception/line_track
-    enable_debug_image: true
+    enable_debug_image: false
     debug_log: true
     use_full_frame_roi: true
     roi_top_fraction: 0.05
@@ -13,14 +13,26 @@ real_line_tracker_node:
     max_lateral_error: 1.0
     line_width_cm: 10.0
     num_scan_bands: 11
-    min_path_bands: 3
-    min_valid_bands: 3
-    require_bottom_band: false
+    min_path_bands: 4
+    min_valid_bands: 4
+    require_bottom_band: true
     min_line_width_fraction: 0.015
     max_line_width_fraction: 0.20
-    max_dark_fraction: 0.35
-    visible_min_confidence: 0.45
-    max_reacquire_jump_fraction: 0.20
+    perspective_width_enabled: true
+    min_line_width_top_fraction: 0.006
+    min_line_width_bottom_fraction: 0.018
+    max_line_width_top_fraction: 0.12
+    max_line_width_bottom_fraction: 0.35
+    max_dark_fraction: 0.28
+    visible_min_confidence: 0.50
+    track_lock_enabled: true
+    max_track_jump_fraction: 0.18
+    max_reacquire_jump_fraction: 0.12
+    bottom_band_preference_weight: 5.0
+    previous_center_weight: 6.0
+    bottom_start_max_center_error_fraction: 0.35
+    max_band_center_jump_fraction: 0.20
+    max_band_gap: 2
     frame_id: d435i_color_optical_frame
 
 line_follower_node:
@@ -34,6 +46,7 @@ line_follower_node:
     debug_log: true
 
     # Go2 实测低于约 0.27m/s 时腿基本不走；巡线速度先用 0.30。
+    min_driving_speed: 0.27
     base_speed: 0.30
     mid_speed: 0.28
     slow_speed: 0.27
@@ -44,25 +57,26 @@ line_follower_node:
     max_angular_z: 0.8
     line_follow_min_confidence: 0.0
 
-    short_lost_timeout: 0.6
+    short_lost_timeout: 1.2
     short_lost_linear_speed: 0.27
-    search_angular_speed: 0.25
+    search_angular_speed: 0.20
 
     turn_90_duration: 1.6
-    turn_90_angular_speed: 0.45
+    turn_90_angular_speed: 0.35
     turn_direction_mode: last_error
     default_turn_direction: 1
     turn_direction_deadband: 0.02
-    turn_lost_keep_time: 0.8
-    lost_turn_linear_speed: 0.0
-    lost_turn_angular_speed: 0.20
+    turn_lost_keep_time: 2.0
+    lost_turn_linear_speed: 0.27
+    lost_turn_angular_speed: 0.15
     turn_lost_min_angular_z: 0.12
 
     search_linear_speed: 0.27
-    search_line_angular_speed: 0.20
-    search_timeout: 5.0
-    line_reacquire_count: 5
-    reacquire_confirm_frames: 4
-    reacquire_min_confidence: 0.45
+    search_line_angular_speed: 0.15
+    search_timeout: 8.0
+    line_reacquire_count: 2
+    reacquire_confirm_frames: 2
+    reacquire_min_confidence: 0.50
     reacquire_max_lateral_error: 0.75
-    line_msg_timeout: 0.5
+    line_msg_timeout: 1.0
+    continuous_search_enabled: true
