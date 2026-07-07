@@ -211,6 +211,7 @@ Keyboard controls:
 - `s`: backward.
 - `a`: turn left.
 - `d`: turn right.
+- Each motion key press runs one fixed-duration action.
 - `x`: switch to `economic_gait`.
 - `c`: switch to normal gait, mapped to `balance_stand` by default.
 - Space: stop and record a pause.
@@ -234,13 +235,20 @@ Replay the saved route:
 Useful tuning variables:
 
 ```bash
-export RK_KEYBOARD_FORWARD_SPEED=0.30
-export RK_KEYBOARD_BACKWARD_SPEED=0.20
-export RK_KEYBOARD_TURN_SPEED=0.60
+export RK_KEYBOARD_SPEED=0.30
+export RK_KEYBOARD_ACTION_SEC=1.0
 export RK_KEYBOARD_LINE_FOLLOW_SEC=3.0
 export RK_KEYBOARD_REPLAY_SPEED_SCALE=0.8
 export RK_KEYBOARD_REPLAY_DURATION_SCALE=1.0
 ```
+
+`RK_KEYBOARD_SPEED` sets the default value for forward, backward, and turning
+commands. If one direction needs separate tuning, override
+`RK_KEYBOARD_FORWARD_SPEED`, `RK_KEYBOARD_BACKWARD_SPEED`, or
+`RK_KEYBOARD_TURN_SPEED`. The source defaults live in
+`src/rk_tools/rk_tools/keyboard_route_node.py`; the easiest robot-side runtime
+edits are the environment variables in
+`src/rk_bringup/scripts/start_keyboard_route_record.sh`.
 
 During keyboard replay, direct route segments publish `/navigation/cmd_vel`.
 Line-follow stages first send `/mission/start`, wait for the recorded condition
