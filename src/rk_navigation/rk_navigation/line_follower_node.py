@@ -51,9 +51,9 @@ class LineFollowerNode(Node):
         self.declare_parameter('control_rate_hz', 10.0)
         self.declare_parameter('debug_log', False)
 
-        self.declare_parameter('base_speed', 0.18)
-        self.declare_parameter('mid_speed', 0.12)
-        self.declare_parameter('slow_speed', 0.08)
+        self.declare_parameter('base_speed', 0.30)
+        self.declare_parameter('mid_speed', 0.28)
+        self.declare_parameter('slow_speed', 0.27)
         self.declare_parameter('error_slow_threshold', 0.20)
         self.declare_parameter('error_slowest_threshold', 0.50)
         self.declare_parameter('kp_lateral', 1.2)
@@ -62,7 +62,7 @@ class LineFollowerNode(Node):
         self.declare_parameter('line_follow_min_confidence', 0.0)
 
         self.declare_parameter('short_lost_timeout', 0.6)
-        self.declare_parameter('short_lost_linear_speed', 0.06)
+        self.declare_parameter('short_lost_linear_speed', 0.27)
         self.declare_parameter('search_angular_speed', 0.25)
 
         self.declare_parameter('turn_90_duration', 1.6)
@@ -75,7 +75,7 @@ class LineFollowerNode(Node):
         self.declare_parameter('lost_turn_angular_speed', 0.20)
         self.declare_parameter('turn_lost_min_angular_z', 0.12)
 
-        self.declare_parameter('search_linear_speed', 0.05)
+        self.declare_parameter('search_linear_speed', 0.27)
         self.declare_parameter('search_line_angular_speed', 0.20)
         self.declare_parameter('search_timeout', 5.0)
         self.declare_parameter('line_reacquire_count', 5)

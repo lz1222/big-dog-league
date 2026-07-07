@@ -30,7 +30,7 @@ class RouteStage:
     sdk_wait_sec: float = 0.0
     line_follow_steps: int = 0
     line_follow_duration_sec: float = 0.0
-    line_follow_speed_mps: float = 0.08
+    line_follow_speed_mps: float = 0.30
     enabled: bool = True
 
 
@@ -68,7 +68,7 @@ class RouteStage:
 #    - line_follow_steps：巡线走几步；比如赛前段填 3，跳后填 4。
 #    - line_follow_duration_sec：手动指定巡线多久；0 表示按步数自动算。
 #    - line_follow_speed_mps：自动计算时间时使用的巡线估算速度。
-#      你的 line_nav_params.yaml 当前 base_speed 是 0.08，所以默认填 0.08。
+#      你的 Go2 低于 0.27m/s 基本不动，所以默认按 0.30m/s 计算。
 #
 # 4. SDK动作阶段 RouteStage 的字段：
 #    - sdk_action：'balance_stand' / 'economic_gait' / 'front_jump' /
@@ -95,7 +95,7 @@ class RouteStage:
 
 FORWARD_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_STEP_LENGTH_M = 0.10
-LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.08
+LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.30
 LINE_FOLLOW_START_SETTLE_SEC = 0.30
 LINE_FOLLOW_STOP_SETTLE_SEC = 0.50
 DEFAULT_FORWARD_SPEED_MPS = 0.35
@@ -164,11 +164,12 @@ ROUTE_STAGES = [
         sdk_wait_sec=0.3,
         enabled=ENABLE_START_SEQUENCE,
     ),
-    # 第0-4阶段：调用已经跑通过的巡线系统，一边巡线一边向前走3步。
+    # 第0-4阶段：调用已经跑通过的巡线系统，一边巡线一边向前走。
+    # 如果这里看起来只是原地踏步，就优先加 line_follow_steps。
     RouteStage(
         name='line_follow_before_jump',
-        description='第0-4阶段：巡线向前走3步，到跳跃前位置',
-        line_follow_steps=3,
+        description='第0-4阶段：巡线向前走10步，到跳跃前位置',
+        line_follow_steps=10,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         enabled=ENABLE_START_SEQUENCE,
     ),
@@ -195,11 +196,12 @@ ROUTE_STAGES = [
         sdk_wait_sec=0.3,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
-    # 第0-8阶段：继续调用巡线系统，一边巡线一边向前走4步，进入避障区入口。
+    # 第0-8阶段：继续调用巡线系统，一边巡线一边向前走，进入避障区入口。
+    # 如果跳完后进入避障区距离不够，就优先加 line_follow_steps。
     RouteStage(
         name='line_follow_to_obstacle_entry',
-        description='第0-8阶段：跳完后巡线向前走4步，进入避障区入口',
-        line_follow_steps=4,
+        description='第0-8阶段：跳完后巡线向前走12步，进入避障区入口',
+        line_follow_steps=12,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         enabled=ENABLE_START_SEQUENCE,
     ),

@@ -8,9 +8,10 @@ line_follower_node:
     control_rate_hz: 10.0
     debug_log: false
 
-    base_speed: 0.08
-    mid_speed: 0.06
-    slow_speed: 0.05
+    # Go2 实测低于约 0.27m/s 时腿基本不走；巡线速度先用 0.30。
+    base_speed: 0.30
+    mid_speed: 0.28
+    slow_speed: 0.27
     error_slow_threshold: 0.3
     error_slowest_threshold: 0.75
     kp_lateral: 0.18
@@ -19,7 +20,7 @@ line_follower_node:
     line_follow_min_confidence: 0.0
 
     short_lost_timeout: 0.6
-    short_lost_linear_speed: 0.06
+    short_lost_linear_speed: 0.27
     search_angular_speed: 0.25
 
     turn_90_duration: 1.6
@@ -32,7 +33,7 @@ line_follower_node:
     lost_turn_angular_speed: 0.20
     turn_lost_min_angular_z: 0.12
 
-    search_linear_speed: 0.05
+    search_linear_speed: 0.27
     search_line_angular_speed: 0.20
     search_timeout: 5.0
     line_reacquire_count: 5
