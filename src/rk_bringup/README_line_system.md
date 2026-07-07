@@ -32,7 +32,7 @@ build issues in the VM do not imply the robot workspace is broken.
 Install system tools:
 
 ```bash
-sudo apt install tmux procps coreutils
+sudo apt install procps coreutils
 ```
 
 Install image debug tools on the robot/Foxy runtime:
@@ -76,8 +76,8 @@ Start all line-system nodes without starting motion:
 ```
 
 The startup script defaults to the verified SDK UDP bridge
-(`RK_GO2_BRIDGE_TYPE=sdk_udp`). Use `RK_GO2_BRIDGE_TYPE=unitree_driver` only
-when intentionally testing the older `rk_unitree_driver` path.
+and starts every process with `nohup` in the background. It does not use tmux,
+so closing the SSH terminal will not stop the nodes.
 
 Set line-following speeds before starting the script:
 
@@ -146,10 +146,11 @@ colcon build --symlink-install \
 That `--build-base` workaround is only for VM/Humble builds from a non-ASCII
 path. It is not a robot/Foxy runtime requirement.
 
-Attach to the tmux session:
+The startup script writes logs and PID files here:
 
 ```bash
-tmux attach -t rk_line
+~/rk_line_logs/
+~/rk_line_runtime/pids
 ```
 
 After confirming `line_visible=true`, start line following once:
@@ -162,7 +163,7 @@ With `continuous_search_enabled: true`, this mission start remains active until
 `mission_stop.sh` is sent. If the line is briefly lost, navigation keeps
 searching and resumes line following after the configured reacquire frames.
 
-Stop line following without killing all windows:
+Stop line following without killing the background nodes:
 
 ```bash
 ~/rk_inspection_ws/src/rk_bringup/scripts/mission_stop.sh
@@ -189,22 +190,31 @@ Check the ROS topic chain:
 For installed scripts, replace `~/rk_inspection_ws/src/rk_bringup/scripts/`
 with `~/rk_inspection_ws/install/rk_bringup/share/rk_bringup/scripts/`.
 
-## Tmux Windows
+## Background Processes
 
-`start_line_system.sh` creates the `rk_line` tmux session with these windows:
+`start_line_system.sh` starts these processes in the background:
 
-- `line_nav`: `competition_line_nav.launch.py`.
-- `line_track`: `/perception/line_track` echo.
-- `cmd_vel`: `/navigation/cmd_vel` echo.
-- `system_check`: live topic list watch.
+- `sdk_server`: existing Go2 SDK UDP server.
+- `cmd_vel_udp_forwarder`: `/navigation/cmd_vel` to SDK UDP.
+- `realsense_camera`: low-bandwidth color stream.
+- `real_line_tracker`: `/camera/color/image_raw` to `/perception/line_track`.
+- `line_follower`: `/perception/line_track` to `/navigation/cmd_vel`.
+
+Useful log commands:
+
+```bash
+tail -f ~/rk_line_logs/real_line_tracker.log
+tail -f ~/rk_line_logs/line_follower.log
+tail -f ~/rk_line_logs/cmd_vel_udp_forwarder.log
+```
 
 ## Troubleshooting
 
 `/navigation/cmd_vel` is always zero:
 
-- Confirm `line_visible=true` in the `line_track` tmux window.
+- Confirm `line_visible=true` in `~/rk_line_logs/real_line_tracker.log`.
 - Confirm `/mission/start` was sent manually with `mission_start.sh`.
-- Check `line_follower_node` logs in the `vision_nav` window.
+- Check `line_follower_node` logs in `~/rk_line_logs/line_follower.log`.
 
 `line_visible=false`:
 
