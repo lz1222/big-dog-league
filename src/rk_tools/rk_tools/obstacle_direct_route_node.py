@@ -2,6 +2,7 @@
 
 import math
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -49,20 +50,10 @@ class RouteStage:
 #    FORWARD_STEP_LENGTH_M 不是机械狗真实腿步长，而是硬编码路线的小距离单位。
 #    例子：FORWARD_STEP_LENGTH_M=0.10, forward_steps=5，直行约 0.50m。
 #
-# 2. 普通行走阶段 RouteStage 的字段：
-#    - forward_steps：走几步；0 表示不走。
-#    - turn_direction：'none' / 'left' / 'right'。
-#    - turn_degrees：转多少度。
-#    - action_order：
-#        'forward_then_turn' = 先走再转
-#        'turn_then_forward' = 先转再走
-#    - forward_speed_mps：直行速度。
-#    - turn_speed_radps：转弯角速度。
-#    - turn_forward_speed_mps：转弯时同时给多少前进速度。
-#        0.00 = 原地转，不推荐。
-#        0.26~0.35 = 边小步前进边转，推荐先从 0.28 试。
-#        如果还是像原地转，就改到 0.30 / 0.35。
-#        如果转弯半径太大、容易撞墙，就降到 0.25 / 0.26。
+# 2. 避障区现在只改 OBSTACLE_ROUTE：
+#    forward(步数) = 直走几步。
+#    left(角度) / right(角度) = 边走边左/右转多少度。
+#    你想怎么跑，就按顺序写一行一行动作。
 #
 # 3. 巡线阶段 RouteStage 的字段：
 #    - line_follow_steps：巡线走几步；比如赛前段填 3，跳后填 4。
@@ -96,9 +87,8 @@ class RouteStage:
 #    - 最后接巡线4步和避障区。
 #
 # 急停：
-#   Ctrl+C 停 launch 后，再发一次 0 速度：
-#   ros2 topic pub --once /navigation/cmd_vel geometry_msgs/msg/Twist \
-#     "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {z: 0.0}}"
+#   Ctrl+C 后本节点会立刻连续发布 0 速度和 mission_stop，并尽量调用
+#   SDK stop_move。现场仍建议手放急停/遥控器，真机调试不要只依赖软件。
 
 FORWARD_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_STEP_LENGTH_M = 0.10
@@ -107,14 +97,21 @@ LINE_FOLLOW_START_SETTLE_SEC = 0.0
 LINE_FOLLOW_STOP_SETTLE_SEC = 0.0
 DEFAULT_FORWARD_SPEED_MPS = 0.35
 DEFAULT_TURN_SPEED_RADPS = 0.80
-DEFAULT_TURN_FORWARD_SPEED_MPS = 0.16
+# 避障区转弯时也要给前进速度，避免原地扭腿。
+# 你的 Go2 实测 0.27m/s 以下基本不往前走，所以这里默认用 0.30。
+# 如果转弯半径太大容易撞墙，先降到 0.27；如果还是像原地转，升到 0.35。
+DEFAULT_TURN_FORWARD_SPEED_MPS = 0.30
 START_FORWARD_SPEED_MPS = 0.35
 USE_DIRECT_START_FORWARD = True
 
 SDK_NETWORK_INTERFACE = 'eth0'
 SDK_ACTION_EXECUTABLE = ''
 SDK_ACTION_TIMEOUT_PADDING_SEC = 6.0
-SDK_ACTION_PRE_STOP_SEC = 0.0
+# 普通 SDK 动作前先发一小段 0 速度，避免 UDP Move 还在持续上一次速度。
+SDK_ACTION_PRE_STOP_SEC = 0.25
+# 前跳对状态要求更严格：必须完全停住、站稳后再调用 FrontJump。
+FRONT_JUMP_CMD_STOP_SEC = 1.00
+EMERGENCY_STOP_SEC = 1.20
 RUN_WITHOUT_SDK_ACTIONS = False
 ALLOW_ROS_TOPIC_SDK_ACTIONS = False
 SPORT_REQUEST_TOPIC = '/api/sport/request'
@@ -136,17 +133,117 @@ SDK_LD_LIBRARY_PATH_PREFIX = (
     '/home/unitree/cyclonedds_ws/install/cyclonedds/lib',
 )
 
-ENABLE_START_SEQUENCE = True
+ENABLE_START_SEQUENCE = False
 START_FROM_PRONE = False
-ENABLE_FRONT_JUMP = True
+ENABLE_FRONT_JUMP = False
 ENABLE_OBSTACLE_ROUTE = True
 
 MISSION_START_TOPIC = '/mission/start'
 MISSION_STOP_TOPIC = '/mission/stop'
 
 
-# 每一行就是一个阶段。你可以在同一个表里同时调：
-#   可选趴下起步、巡线三步、前跳、巡线四步、避障区。
+def forward(steps, speed_mps=DEFAULT_FORWARD_SPEED_MPS):
+    """避障区：直走多少步。"""
+    return {
+        'type': 'forward',
+        'steps': int(steps),
+        'speed_mps': float(speed_mps),
+    }
+
+
+def left(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
+         wz_radps=DEFAULT_TURN_SPEED_RADPS):
+    """避障区：边走边左转多少度。"""
+    return {
+        'type': 'turn',
+        'direction': 'left',
+        'degrees': float(degrees),
+        'vx_mps': float(vx_mps),
+        'wz_radps': float(wz_radps),
+    }
+
+
+def right(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
+          wz_radps=DEFAULT_TURN_SPEED_RADPS):
+    """避障区：边走边右转多少度。"""
+    return {
+        'type': 'turn',
+        'direction': 'right',
+        'degrees': float(degrees),
+        'vx_mps': float(vx_mps),
+        'wz_radps': float(wz_radps),
+    }
+
+
+def build_obstacle_route_stages(commands):
+    stages = []
+    for index, command in enumerate(commands, start=1):
+        command_type = command.get('type')
+        if command_type == 'forward':
+            steps = int(command['steps'])
+            stages.append(RouteStage(
+                name=f'obstacle_{index:02d}_forward',
+                description=f'避障动作{index}：直走 {steps} 步',
+                forward_steps=steps,
+                turn_direction='none',
+                turn_degrees=0.0,
+                action_order='forward_then_turn',
+                forward_speed_mps=float(command['speed_mps']),
+                enabled=ENABLE_OBSTACLE_ROUTE,
+            ))
+        elif command_type == 'turn':
+            direction = str(command['direction'])
+            degrees = float(command['degrees'])
+            stages.append(RouteStage(
+                name=f'obstacle_{index:02d}_{direction}',
+                description=(
+                    f'避障动作{index}：边走边'
+                    f'{"左" if direction == "left" else "右"}转 '
+                    f'{degrees:.1f} 度'
+                ),
+                forward_steps=0,
+                turn_direction=direction,
+                turn_degrees=degrees,
+                action_order='forward_then_turn',
+                forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
+                turn_speed_radps=float(command['wz_radps']),
+                turn_forward_speed_mps=float(command['vx_mps']),
+                enabled=ENABLE_OBSTACLE_ROUTE,
+            ))
+        else:
+            raise ValueError(f'Unknown obstacle command: {command}')
+    return stages
+
+
+# ========================= 避障区路线，只改这里 =========================
+# 写法非常直接：直走、左转、直走、右转……
+# 例子：
+#   forward(13)      # 直走13步
+#   left(140)        # 边走边左转140度
+#   right(120, vx_mps=0.35)  # 右转120度，转弯时前进速度0.35
+#
+# 调参建议：
+#   - 直走距离不够：改 forward(...) 里的步数。
+#   - 转弯角度不够：改 left/right(...) 里的角度。
+#   - 转弯像原地转：把 vx_mps 加到 0.35。
+#   - 转弯半径太大：把 vx_mps 降到 0.27。
+OBSTACLE_ROUTE = [
+    forward(13),      # 入口向上直走
+    left(140),        # 左转进入顶部横向通道
+    forward(5),       # 顶部横向通道前进
+    left(140),        # 左转进入中间向下通道
+    forward(3),       # 中间通道向下
+    right(140),       # 右转进入底部横向通道
+    forward(3),       # 底部通道前进
+    right(160),       # 右转进入左侧向上通道
+    forward(3),       # 左侧通道向上
+    left(140),        # 左转对准出口
+    forward(3),       # 出口直走
+]
+
+
+# 下面是程序内部用的阶段表；避障区会由 OBSTACLE_ROUTE 自动生成。
+# 一般调试避障时不要改这里。
 ROUTE_STAGES = [
     # 第0-1阶段：如果比赛要求趴下起步，就把 START_FROM_PRONE 改成 True。
     # 你现在说开始不用蹲下，所以默认跳过这一段。
@@ -219,127 +316,7 @@ ROUTE_STAGES = [
         enabled=ENABLE_START_SEQUENCE,
     ),
 
-    # ========================= 避障区路线 =========================
-    # 第1阶段：从入口沿竖直通道向上走，靠近顶部墙前的直行段。
-    RouteStage(
-        name='entry_up',
-        description='第1阶段：入口向上直走',
-        forward_steps=13,
-        turn_direction='none',
-        turn_degrees=0.0,
-        action_order='forward_then_turn',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
-    # 第2阶段：按你的要求，先左转90度，再沿顶部通道向前走5步。
-    RouteStage(
-        name='turn_left_to_top',
-        description='第2阶段：先左转90度，再向前走5步',
-        forward_steps=5,
-        turn_direction='left',
-        turn_degrees=140.0,
-        action_order='turn_then_forward',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
-        turn_forward_speed_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
-    # 第3阶段：到顶部横向通道末端后，左转进入中间向下通道。
-    RouteStage(
-        name='turn_left_to_middle_down',
-        description='第3阶段：左转进入中间向下通道',
-        forward_steps=0,
-        turn_direction='left',
-        turn_degrees=140.0,
-        action_order='forward_then_turn',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
-        turn_forward_speed_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
-    # 第4阶段：沿中间通道向下走。
-    RouteStage(
-        name='middle_down',
-        description='第4阶段：中间通道向下直走',
-        forward_steps=3,
-        turn_direction='none',
-        turn_degrees=0.0,
-        action_order='forward_then_turn',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
-    # 第5阶段：中间通道末端右转，准备走底部横向通道。
-    RouteStage(
-        name='turn_right_to_bottom_left',
-        description='第5阶段：右转进入底部横向通道',
-        forward_steps=0,
-        turn_direction='right',
-        turn_degrees=140.0,
-        action_order='forward_then_turn',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
-        turn_forward_speed_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
-    # 第6阶段：沿底部通道向左走。
-    RouteStage(
-        name='bottom_left',
-        description='第6阶段：底部通道向左直走',
-        forward_steps=3,
-        turn_direction='none',
-        turn_degrees=0.0,
-        action_order='forward_then_turn',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
-    # 第7阶段：底部通道末端右转，准备沿左侧通道向上走。
-    RouteStage(
-        name='turn_right_to_left_up',
-        description='第7阶段：右转进入左侧向上通道',
-        forward_steps=0,
-        turn_direction='right',
-        turn_degrees=160.0,
-        action_order='forward_then_turn',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
-        turn_forward_speed_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
-    # 第8阶段：沿左侧通道向上走。
-    RouteStage(
-        name='left_up',
-        description='第8阶段：左侧通道向上直走',
-        forward_steps=3,
-        turn_direction='none',
-        turn_degrees=0.0,
-        action_order='forward_then_turn',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
-    # 第9阶段：左侧通道末端左转，对准出口方向。
-    RouteStage(
-        name='turn_left_to_exit',
-        description='第9阶段：左转对准出口',
-        forward_steps=0,
-        turn_direction='left',
-        turn_degrees=140.0,
-        action_order='forward_then_turn',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        turn_speed_radps=DEFAULT_TURN_SPEED_RADPS,
-        turn_forward_speed_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
-    # 第10阶段：向出口方向直走，离开避障区。
-    RouteStage(
-        name='exit_left',
-        description='第10阶段：向出口直走离开避障区',
-        forward_steps=3,
-        turn_direction='none',
-        turn_degrees=0.0,
-        action_order='forward_then_turn',
-        forward_speed_mps=DEFAULT_FORWARD_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE,
-    ),
+    *build_obstacle_route_stages(OBSTACLE_ROUTE),
 ]
 
 # ======================= 用户调试修改区结束 =======================
@@ -441,6 +418,8 @@ class ObstacleDirectRouteNode(Node):
         self._sdk_action_backend = 'none'
         self._sport_request_msg_cls = None
         self._sport_request_publisher = None
+        self.stop_requested = False
+        self._active_sdk_process = None
 
         self._validate_parameters()
         self.publisher = self.create_publisher(Twist, self.cmd_vel_topic, 10)
@@ -648,15 +627,24 @@ class ObstacleDirectRouteNode(Node):
 
         try:
             for index, stage in enumerate(active_stages, start=1):
+                self._raise_if_stop_requested()
                 self._run_stage(index, len(active_stages), stage)
                 self._publish_stop(
                     f'after {stage.name}',
                     self.step_stop_sec
                 )
         finally:
-            self._publish_stop('final stop', self.final_stop_sec)
+            if self.stop_requested:
+                self._send_sdk_stop_move_best_effort()
+                self._publish_emergency_stop(
+                    'final emergency stop',
+                    max(self.final_stop_sec, EMERGENCY_STOP_SEC)
+                )
+            else:
+                self._publish_stop('final stop', self.final_stop_sec)
 
-        self.get_logger().info('Direct full route completed.')
+        if not self.stop_requested:
+            self.get_logger().info('Direct full route completed.')
 
     def _should_skip_stage(self, stage):
         return (
@@ -666,6 +654,7 @@ class ObstacleDirectRouteNode(Node):
         )
 
     def _run_stage(self, index, total, stage):
+        self._raise_if_stop_requested()
         self.get_logger().info(
             f'route stage {index}/{total}: {stage.description}, '
             f'order={stage.action_order}'
@@ -819,26 +808,94 @@ class ObstacleDirectRouteNode(Node):
         ]
 
         try:
-            result = subprocess.run(
-                command,
-                env=self._sdk_action_env(),
-                timeout=timeout_sec,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise RuntimeError(
-                f'{stage.name} sdk_action timeout after '
-                f'{timeout_sec:.2f}s'
-            ) from error
+            process = subprocess.Popen(command, env=self._sdk_action_env())
+            self._active_sdk_process = process
+            deadline = time.monotonic() + timeout_sec
+
+            while rclpy.ok():
+                self._raise_if_stop_requested()
+                return_code = process.poll()
+                if return_code is not None:
+                    break
+                if time.monotonic() >= deadline:
+                    self._terminate_active_sdk_process()
+                    raise RuntimeError(
+                        f'{stage.name} sdk_action timeout after '
+                        f'{timeout_sec:.2f}s'
+                    )
+                rclpy.spin_once(self, timeout_sec=0.0)
+                time.sleep(0.05)
+            else:
+                self._terminate_active_sdk_process()
+                raise KeyboardInterrupt()
         except OSError as error:
             raise RuntimeError(
                 f'{stage.name} failed to start sdk action helper: {error}'
             ) from error
+        finally:
+            self._active_sdk_process = None
 
-        if result.returncode != 0:
+        if return_code != 0:
             raise RuntimeError(
                 f'{stage.name} sdk_action {stage.sdk_action} failed with '
-                f'exit code {result.returncode}'
+                f'exit code {return_code}'
+            )
+
+    def request_stop(self, reason):
+        if self.stop_requested:
+            return
+
+        self.stop_requested = True
+        self.get_logger().warn(f'Emergency stop requested: {reason}')
+        self._terminate_active_sdk_process()
+        self._publish_emergency_stop('immediate emergency stop', 0.35)
+
+    def _raise_if_stop_requested(self):
+        if self.stop_requested:
+            raise KeyboardInterrupt()
+
+    def _terminate_active_sdk_process(self):
+        process = self._active_sdk_process
+        if process is None or process.poll() is not None:
+            return
+
+        try:
+            process.terminate()
+            process.wait(timeout=0.30)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+                process.wait(timeout=0.30)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        except OSError:
+            pass
+
+    def _send_sdk_stop_move_best_effort(self):
+        try:
+            executable = self._resolve_sdk_action_executable()
+        except FileNotFoundError as error:
+            self.get_logger().warn(
+                f'skip SDK stop_move during emergency stop: {error}'
+            )
+            return
+
+        command = [
+            executable,
+            self.sdk_network_interface,
+            'stop_move',
+            '0.000',
+        ]
+        try:
+            subprocess.run(
+                command,
+                env=self._sdk_action_env(),
+                timeout=2.0,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            self.get_logger().warn(
+                f'SDK stop_move during emergency stop failed: {error}'
             )
 
     def _resolve_sdk_action_executable(self):
@@ -986,6 +1043,7 @@ class ObstacleDirectRouteNode(Node):
         period_sec = 1.0 / self.publish_rate_hz
         end_time = time.monotonic() + max(0.30, period_sec)
         while rclpy.ok() and time.monotonic() < end_time:
+            self._raise_if_stop_requested()
             self._sport_request_publisher.publish(request)
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
@@ -1057,6 +1115,7 @@ class ObstacleDirectRouteNode(Node):
             f'{label}: publish {msg.data} for {max(duration_sec, period_sec):.2f}s'
         )
         while rclpy.ok() and time.monotonic() < end_time:
+            self._raise_if_stop_requested()
             publisher.publish(msg)
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
@@ -1066,6 +1125,7 @@ class ObstacleDirectRouteNode(Node):
         end_time = time.monotonic() + duration_sec
 
         while rclpy.ok() and time.monotonic() < end_time:
+            self._raise_if_stop_requested()
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
 
@@ -1074,8 +1134,30 @@ class ObstacleDirectRouteNode(Node):
         end_time = time.monotonic() + duration_sec
 
         while rclpy.ok() and time.monotonic() < end_time:
+            self._raise_if_stop_requested()
             self.publisher.publish(cmd)
             rclpy.spin_once(self, timeout_sec=0.0)
+            time.sleep(period_sec)
+
+    def _publish_zero_once(self):
+        self.publisher.publish(Twist())
+        msg = Bool()
+        msg.data = True
+        self.mission_stop_publisher.publish(msg)
+
+    def _publish_emergency_stop(self, label, duration_sec):
+        duration_sec = max(float(duration_sec), 0.10)
+        period_sec = 1.0 / max(self.publish_rate_hz, 10.0)
+        end_time = time.monotonic() + duration_sec
+
+        self.get_logger().warn(
+            f'{label}: publish zero cmd_vel and mission_stop for '
+            f'{duration_sec:.2f}s'
+        )
+        while time.monotonic() < end_time:
+            self._publish_zero_once()
+            if rclpy.ok():
+                rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
 
 
@@ -1085,10 +1167,24 @@ def main(args=None):
 
     try:
         node = ObstacleDirectRouteNode()
+
+        def handle_stop_signal(signum, _frame):
+            node.request_stop(f'signal {signum}')
+            raise KeyboardInterrupt()
+
+        signal.signal(signal.SIGINT, handle_stop_signal)
+        signal.signal(signal.SIGTERM, handle_stop_signal)
+
         node.run()
     except (KeyboardInterrupt, ExternalShutdownException):
         if node is not None:
-            node.get_logger().warn('Interrupted by user')
+            node.request_stop('KeyboardInterrupt')
+            node._send_sdk_stop_move_best_effort()
+            node._publish_emergency_stop(
+                'interrupt final stop',
+                max(node.final_stop_sec, EMERGENCY_STOP_SEC)
+            )
+            node.get_logger().warn('Interrupted by user; robot stop sent')
     except Exception as error:
         if node is not None:
             node.get_logger().error(f'Route aborted: {error}')
