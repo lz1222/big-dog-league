@@ -6,7 +6,7 @@ line_follower_node:
     mission_stop_topic: /mission/stop
     gait_control_lock_topic: /gait/control_lock
     control_rate_hz: 10.0
-    debug_log: false
+    debug_log: true
 
     # Go2 实测低于约 0.27m/s 时腿基本不走；巡线速度先用 0.30。
     base_speed: 0.30

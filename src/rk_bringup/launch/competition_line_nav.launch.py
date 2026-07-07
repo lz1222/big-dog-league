@@ -179,7 +179,7 @@ def generate_launch_description():
             parameters=[
                 line_nav_config,
                 {
-                    'debug_log': ParameterValue(debug, value_type=bool),
+                    'debug_log': True,
                 },
             ],
         ),

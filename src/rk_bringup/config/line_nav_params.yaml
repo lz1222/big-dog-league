@@ -2,15 +2,20 @@ real_line_tracker_node:
   ros__parameters:
     image_topic: /camera/color/image_raw
     line_track_topic: /perception/line_track
-    enable_debug_image: false
-    debug_log: false
-    roi_top_fraction: 0.55
+    enable_debug_image: true
+    debug_log: true
+    use_full_frame_roi: true
+    roi_top_fraction: 0.05
+    roi_bottom_margin_fraction: 0.03
+    roi_left_margin_fraction: 0.03
+    roi_right_margin_fraction: 0.03
     threshold_value: 80
     max_lateral_error: 1.0
     line_width_cm: 10.0
-    num_scan_bands: 7
+    num_scan_bands: 11
+    min_path_bands: 3
     min_valid_bands: 3
-    require_bottom_band: true
+    require_bottom_band: false
     min_line_width_fraction: 0.015
     max_line_width_fraction: 0.20
     max_dark_fraction: 0.35
@@ -26,7 +31,7 @@ line_follower_node:
     mission_stop_topic: /mission/stop
     gait_control_lock_topic: /gait/control_lock
     control_rate_hz: 10.0
-    debug_log: false
+    debug_log: true
 
     # Go2 实测低于约 0.27m/s 时腿基本不走；巡线速度先用 0.30。
     base_speed: 0.30

@@ -38,13 +38,18 @@ PENDING_SWITCH_STABLE_FRAMES = 3
 
 @dataclass(frozen=True)
 class LineTrackerConfig:
-    roi_top_fraction: float = 0.55
+    use_full_frame_roi: bool = True
+    roi_top_fraction: float = 0.05
+    roi_bottom_margin_fraction: float = 0.03
+    roi_left_margin_fraction: float = 0.03
+    roi_right_margin_fraction: float = 0.03
     threshold_value: int = 80
     max_lateral_error: float = 1.0
     line_width_cm: float = 10.0
-    num_scan_bands: int = 7
-    min_valid_bands: int = 3
-    require_bottom_band: bool = True
+    num_scan_bands: int = 11
+    min_path_bands: int = 3
+    min_valid_bands: Optional[int] = None
+    require_bottom_band: bool = False
     min_line_width_fraction: float = 0.015
     max_line_width_fraction: float = 0.20
     max_dark_fraction: float = 0.35
@@ -56,19 +61,35 @@ class LineTrackerConfig:
         min_width = clamp(float(self.min_line_width_fraction), 0.001, 1.0)
         max_width = clamp(float(self.max_line_width_fraction), min_width, 1.0)
         num_scan_bands = max(1, int(self.num_scan_bands))
-        min_valid_bands = clamp(
-            int(self.min_valid_bands),
-            1,
-            num_scan_bands
-        )
+        min_path_bands = self.min_path_bands
+        if self.min_valid_bands is not None:
+            min_path_bands = self.min_valid_bands
+        min_path_bands = clamp(int(min_path_bands), 1, num_scan_bands)
 
         return LineTrackerConfig(
+            use_full_frame_roi=bool(self.use_full_frame_roi),
             roi_top_fraction=clamp(float(self.roi_top_fraction), 0.0, 0.95),
+            roi_bottom_margin_fraction=clamp(
+                float(self.roi_bottom_margin_fraction),
+                0.0,
+                0.45
+            ),
+            roi_left_margin_fraction=clamp(
+                float(self.roi_left_margin_fraction),
+                0.0,
+                0.45
+            ),
+            roi_right_margin_fraction=clamp(
+                float(self.roi_right_margin_fraction),
+                0.0,
+                0.45
+            ),
             threshold_value=int(clamp(int(self.threshold_value), 0, 255)),
             max_lateral_error=max(0.01, float(self.max_lateral_error)),
             line_width_cm=max(0.1, float(self.line_width_cm)),
             num_scan_bands=num_scan_bands,
-            min_valid_bands=min_valid_bands,
+            min_path_bands=min_path_bands,
+            min_valid_bands=min_path_bands,
             require_bottom_band=bool(self.require_bottom_band),
             min_line_width_fraction=min_width,
             max_line_width_fraction=max_width,
@@ -125,7 +146,11 @@ class LineDetectionResult:
     candidates: Sequence[ScanCandidate]
     selected_bands: Sequence[ScanCandidate]
     fitted_line: Optional[Tuple[int, int, int, int]]
+    roi_start_x: int = 0
+    roi_end_x: Optional[int] = None
+    roi_end_y: Optional[int] = None
     preferred_center_x: Optional[float] = None
+    tracking_anchor_x: Optional[float] = None
     current_bottom_x: Optional[float] = None
     last_bottom_x: Optional[float] = None
     pending_bottom_x: Optional[float] = None
@@ -150,22 +175,33 @@ def detect_line_in_image(
         preferred_center_x,
         width
     )
-    roi_start_y = int(height * config.roi_top_fraction)
-    roi = image[roi_start_y:height, :]
+    roi_start_x, roi_start_y, roi_end_x, roi_end_y = _effective_roi_bounds(
+        height,
+        width,
+        config
+    )
+    roi_bounds = {
+        'roi_start_x': roi_start_x,
+        'roi_end_x': roi_end_x,
+        'roi_end_y': roi_end_y,
+    }
+    roi = image[roi_start_y:roi_end_y, roi_start_x:roi_end_x]
 
     if roi.size == 0:
         return _lost_result(
             np.zeros((1, max(1, width)), dtype='uint8'),
             roi_start_y,
             'empty_roi',
-            preferred_center_x=preferred_center_x
+            preferred_center_x=preferred_center_x,
+            **roi_bounds
         )
 
     binary = _make_binary_mask(roi, config.threshold_value)
     dark_fraction = float(cv2.countNonZero(binary)) / float(binary.size)
     band_rows, candidates_by_band, candidates = _scan_line_candidates(
         binary,
-        config
+        config,
+        roi_start_x
     )
     bottom_band_valid = _bottom_band_valid(candidates)
 
@@ -177,7 +213,8 @@ def detect_line_in_image(
             dark_fraction,
             band_rows,
             candidates,
-            preferred_center_x=preferred_center_x
+            preferred_center_x=preferred_center_x,
+            **roi_bounds
         )
 
     selected_bands = _select_best_band_path(
@@ -202,10 +239,11 @@ def detect_line_in_image(
             dark_fraction,
             band_rows,
             candidates,
-            preferred_center_x=preferred_center_x
+            preferred_center_x=preferred_center_x,
+            **roi_bounds
         )
 
-    if len(selected_bands) < config.min_valid_bands:
+    if len(selected_bands) < config.min_path_bands:
         reason = _candidate_rejection_reason(
             candidates,
             fallback='not_enough_bands'
@@ -218,7 +256,8 @@ def detect_line_in_image(
             band_rows,
             candidates,
             selected_bands,
-            preferred_center_x=preferred_center_x
+            preferred_center_x=preferred_center_x,
+            **roi_bounds
         )
 
     fitted_line = _fit_line_to_bands(selected_bands, binary.shape[0])
@@ -231,13 +270,21 @@ def detect_line_in_image(
             band_rows,
             candidates,
             selected_bands,
-            preferred_center_x=preferred_center_x
+            preferred_center_x=preferred_center_x,
+            **roi_bounds
         )
 
     x_top, y_top, x_bottom, y_bottom, slope = fitted_line
+    tracking_anchor_x = _select_lateral_anchor_x(
+        selected_bands,
+        preferred_center_x,
+        width
+    )
+    if tracking_anchor_x is None:
+        tracking_anchor_x = float(x_bottom)
     image_center_x = width / 2.0
     lateral_error = (
-        (float(x_bottom) - image_center_x) / image_center_x
+        (float(tracking_anchor_x) - image_center_x) / image_center_x
         if image_center_x > 0.0 else 0.0
     )
     lateral_error = clamp(
@@ -245,11 +292,7 @@ def detect_line_in_image(
         -config.max_lateral_error,
         config.max_lateral_error
     )
-    heading_error = clamp(
-        math.atan(float(slope)),
-        -math.pi / 2.0,
-        math.pi / 2.0
-    )
+    heading_error = _heading_error_from_path(selected_bands, slope)
     confidence = _compute_confidence(len(selected_bands), config)
 
     if confidence < config.visible_min_confidence:
@@ -263,7 +306,9 @@ def detect_line_in_image(
             selected_bands,
             (x_top, y_top, x_bottom, y_bottom),
             preferred_center_x=preferred_center_x,
-            current_bottom_x=float(x_bottom)
+            tracking_anchor_x=tracking_anchor_x,
+            current_bottom_x=tracking_anchor_x,
+            **roi_bounds
         )
 
     return LineDetectionResult(
@@ -279,8 +324,12 @@ def detect_line_in_image(
         candidates=candidates,
         selected_bands=selected_bands,
         fitted_line=(x_top, y_top, x_bottom, y_bottom),
+        roi_start_x=roi_start_x,
+        roi_end_x=roi_end_x,
+        roi_end_y=roi_end_y,
         preferred_center_x=preferred_center_x,
-        current_bottom_x=float(x_bottom),
+        tracking_anchor_x=tracking_anchor_x,
+        current_bottom_x=tracking_anchor_x,
         bottom_band_valid=bottom_band_valid,
         candidate_rejected=False,
         candidate_rejection_reason='none'
@@ -292,6 +341,31 @@ def _bottom_band_valid(candidates):
         candidate.accepted and candidate.band_index == 0
         for candidate in candidates
     )
+
+
+def _effective_roi_bounds(height, width, config):
+    height = max(0, int(height))
+    width = max(0, int(width))
+    if height <= 0 or width <= 0:
+        return 0, 0, max(0, width), max(0, height)
+
+    roi_start_y = int(round(height * config.roi_top_fraction))
+    roi_start_x = 0
+    roi_end_x = width
+    roi_end_y = height
+
+    if config.use_full_frame_roi:
+        roi_start_x = int(round(width * config.roi_left_margin_fraction))
+        roi_end_x = width - int(round(width * config.roi_right_margin_fraction))
+        roi_end_y = height - int(
+            round(height * config.roi_bottom_margin_fraction)
+        )
+
+    roi_start_y = int(clamp(roi_start_y, 0, max(0, height - 1)))
+    roi_end_y = int(clamp(roi_end_y, roi_start_y + 1, height))
+    roi_start_x = int(clamp(roi_start_x, 0, max(0, width - 1)))
+    roi_end_x = int(clamp(roi_end_x, roi_start_x + 1, width))
+    return roi_start_x, roi_start_y, roi_end_x, roi_end_y
 
 
 def _normalize_preferred_center(preferred_center_x, image_width):
@@ -323,8 +397,9 @@ def _make_binary_mask(roi, threshold_value):
     return binary
 
 
-def _scan_line_candidates(binary, config):
+def _scan_line_candidates(binary, config, x_offset=0):
     roi_height, width = binary.shape[:2]
+    x_offset = int(x_offset)
     band_height = max(3, roi_height // max(1, config.num_scan_bands * 4))
     if band_height % 2 == 0:
         band_height += 1
@@ -376,9 +451,9 @@ def _scan_line_candidates(binary, config):
                 y=y,
                 y_min=y_min,
                 y_max=y_max,
-                x_start=x_start,
-                x_end=x_end,
-                center_x=(x_start + x_end - 1) / 2.0,
+                x_start=x_offset + x_start,
+                x_end=x_offset + x_end,
+                center_x=x_offset + (x_start + x_end - 1) / 2.0,
                 width_px=width_px,
                 accepted=accepted,
                 reason=reason
@@ -426,8 +501,7 @@ def _select_best_band_path(
                 for candidate in candidates_by_band[0]
             ]
     else:
-        max_start_band = min(3, len(candidates_by_band) - 1)
-        for band_index in range(max_start_band + 1):
+        for band_index in range(len(candidates_by_band)):
             candidates = candidates_by_band[band_index]
             start_candidates.extend(
                 (band_index, candidate)
@@ -446,6 +520,7 @@ def _select_best_band_path(
         float(bottom_band_preference_weight)
     )
     previous_center_weight = max(0.0, float(previous_center_weight))
+    max_band_gap = 2
 
     for start_index, start_candidate in start_candidates:
         path = [start_candidate]
@@ -470,6 +545,9 @@ def _select_best_band_path(
             )
             eligible = []
             for candidate in candidates:
+                band_gap = candidate.band_index - last_candidate.band_index
+                if band_gap > max_band_gap:
+                    continue
                 center_delta = abs(
                     candidate.center_x - last_candidate.center_x
                 )
@@ -500,6 +578,51 @@ def _select_best_band_path(
             best_cost = cost
 
     return best_path
+
+
+def _select_lateral_anchor_x(selected_bands, preferred_center_x, image_width):
+    if not selected_bands:
+        return None
+
+    center_x = _normalize_preferred_center(preferred_center_x, image_width)
+    top_y = min(candidate.y for candidate in selected_bands)
+    bottom_y = max(candidate.y for candidate in selected_bands)
+    path_height = max(1, bottom_y - top_y)
+    bottom_window_min_y = bottom_y - max(1, int(round(path_height * 0.25)))
+    anchor_candidates = [
+        candidate
+        for candidate in selected_bands
+        if candidate.y >= bottom_window_min_y
+    ]
+    if not anchor_candidates:
+        anchor_candidates = list(selected_bands)
+
+    anchor = min(
+        anchor_candidates,
+        key=lambda candidate: (
+            abs(candidate.center_x - center_x),
+            -candidate.y
+        )
+    )
+    return float(anchor.center_x)
+
+
+def _heading_error_from_path(selected_bands, fallback_slope):
+    if selected_bands:
+        top_candidate = min(selected_bands, key=lambda candidate: candidate.y)
+        bottom_candidate = max(
+            selected_bands,
+            key=lambda candidate: candidate.y
+        )
+        delta_y = float(bottom_candidate.y - top_candidate.y)
+        if abs(delta_y) >= 1.0:
+            slope = (
+                float(bottom_candidate.center_x - top_candidate.center_x)
+                / delta_y
+            )
+            return clamp(math.atan(slope), -math.pi / 2.0, math.pi / 2.0)
+
+    return clamp(math.atan(float(fallback_slope)), -math.pi / 2.0, math.pi / 2.0)
 
 
 def _fit_line_to_bands(selected_bands, roi_height):
@@ -552,7 +675,11 @@ def _lost_result(
     candidates=(),
     selected_bands=(),
     fitted_line=None,
+    roi_start_x=0,
+    roi_end_x=None,
+    roi_end_y=None,
     preferred_center_x=None,
+    tracking_anchor_x=None,
     current_bottom_x=None,
     last_bottom_x=None,
     pending_bottom_x=None,
@@ -581,7 +708,11 @@ def _lost_result(
         candidates=candidates,
         selected_bands=selected_bands,
         fitted_line=fitted_line,
+        roi_start_x=roi_start_x,
+        roi_end_x=roi_end_x,
+        roi_end_y=roi_end_y,
         preferred_center_x=preferred_center_x,
+        tracking_anchor_x=tracking_anchor_x,
         current_bottom_x=current_bottom_x,
         last_bottom_x=last_bottom_x,
         pending_bottom_x=pending_bottom_x,
@@ -606,15 +737,20 @@ class RealLineTrackerNode(Node):
             '/camera/color/image_raw'
         )
         self.declare_parameter('line_track_topic', '/perception/line_track')
-        self.declare_parameter('enable_debug_image', False)
-        self.declare_parameter('debug_log', False)
-        self.declare_parameter('roi_top_fraction', 0.55)
+        self.declare_parameter('enable_debug_image', True)
+        self.declare_parameter('debug_log', True)
+        self.declare_parameter('use_full_frame_roi', True)
+        self.declare_parameter('roi_top_fraction', 0.05)
+        self.declare_parameter('roi_bottom_margin_fraction', 0.03)
+        self.declare_parameter('roi_left_margin_fraction', 0.03)
+        self.declare_parameter('roi_right_margin_fraction', 0.03)
         self.declare_parameter('threshold_value', 80)
         self.declare_parameter('max_lateral_error', 1.0)
         self.declare_parameter('line_width_cm', 10.0)
-        self.declare_parameter('num_scan_bands', 7)
+        self.declare_parameter('num_scan_bands', 11)
+        self.declare_parameter('min_path_bands', 3)
         self.declare_parameter('min_valid_bands', 3)
-        self.declare_parameter('require_bottom_band', True)
+        self.declare_parameter('require_bottom_band', False)
         self.declare_parameter('min_line_width_fraction', 0.015)
         self.declare_parameter('max_line_width_fraction', 0.20)
         self.declare_parameter('max_dark_fraction', 0.35)
@@ -629,9 +765,9 @@ class RealLineTrackerNode(Node):
         self.image_topic = self.get_parameter('image_topic').value
         self.enable_debug_image = self._get_bool_parameter(
             'enable_debug_image',
-            False
+            True
         )
-        self.debug_log = self._get_bool_parameter('debug_log', False)
+        self.debug_log = self._get_bool_parameter('debug_log', True)
         self.line_track_topic = self.get_parameter(
             'line_track_topic'
         ).get_parameter_value().string_value
@@ -703,9 +839,9 @@ class RealLineTrackerNode(Node):
         """Refresh runtime-tunable parameters from the ROS parameter store."""
         self.enable_debug_image = self._get_bool_parameter(
             'enable_debug_image',
-            False
+            True
         )
-        self.debug_log = self._get_bool_parameter('debug_log', False)
+        self.debug_log = self._get_bool_parameter('debug_log', True)
         self.track_lock_enabled = self.get_parameter(
             'track_lock_enabled'
         ).get_parameter_value().bool_value
@@ -736,8 +872,21 @@ class RealLineTrackerNode(Node):
             ).get_parameter_value().double_value
         )
         self.tracker_config = LineTrackerConfig(
+            use_full_frame_roi=self._get_bool_parameter(
+                'use_full_frame_roi',
+                True
+            ),
             roi_top_fraction=self.get_parameter(
                 'roi_top_fraction'
+            ).get_parameter_value().double_value,
+            roi_bottom_margin_fraction=self.get_parameter(
+                'roi_bottom_margin_fraction'
+            ).get_parameter_value().double_value,
+            roi_left_margin_fraction=self.get_parameter(
+                'roi_left_margin_fraction'
+            ).get_parameter_value().double_value,
+            roi_right_margin_fraction=self.get_parameter(
+                'roi_right_margin_fraction'
             ).get_parameter_value().double_value,
             threshold_value=self.get_parameter(
                 'threshold_value'
@@ -751,9 +900,7 @@ class RealLineTrackerNode(Node):
             num_scan_bands=self.get_parameter(
                 'num_scan_bands'
             ).get_parameter_value().integer_value,
-            min_valid_bands=self.get_parameter(
-                'min_valid_bands'
-            ).get_parameter_value().integer_value,
+            min_path_bands=self.effective_min_path_bands(),
             require_bottom_band=self.get_parameter(
                 'require_bottom_band'
             ).get_parameter_value().bool_value,
@@ -773,7 +920,7 @@ class RealLineTrackerNode(Node):
             previous_center_weight=self.previous_center_weight,
         ).normalized()
 
-    def _get_bool_parameter(self, name: str, default: bool = False) -> bool:
+    def _get_bool_parameter(self, name: str, default: bool = True) -> bool:
         value = self.get_parameter(name).value
         if isinstance(value, bool):
             return value
@@ -784,6 +931,18 @@ class RealLineTrackerNode(Node):
             if normalized in ('false', '0', 'no', 'off'):
                 return False
         return bool(default)
+
+    def effective_min_path_bands(self):
+        min_path_bands = self.get_parameter(
+            'min_path_bands'
+        ).get_parameter_value().integer_value
+        legacy_min_valid_bands = self.get_parameter(
+            'min_valid_bands'
+        ).get_parameter_value().integer_value
+
+        if min_path_bands == 3 and legacy_min_valid_bands != 3:
+            return legacy_min_valid_bands
+        return min_path_bands
 
     def on_image(self, image_msg):
         self.image_callback(image_msg)
@@ -1020,7 +1179,11 @@ class RealLineTrackerNode(Node):
             result.candidates,
             result.selected_bands,
             result.fitted_line,
+            roi_start_x=result.roi_start_x,
+            roi_end_x=result.roi_end_x,
+            roi_end_y=result.roi_end_y,
             preferred_center_x=preferred_center_x,
+            tracking_anchor_x=result.tracking_anchor_x,
             current_bottom_x=current_bottom_x,
             candidate_rejection_reason=(
                 f'reacquire_jump>{jump_threshold:.1f}px'
@@ -1070,7 +1233,13 @@ class RealLineTrackerNode(Node):
             result.dark_fraction,
             result.band_rows,
             result.candidates,
+            result.selected_bands,
+            result.fitted_line,
+            roi_start_x=result.roi_start_x,
+            roi_end_x=result.roi_end_x,
+            roi_end_y=result.roi_end_y,
             preferred_center_x=preferred_center_x,
+            tracking_anchor_x=result.tracking_anchor_x,
             current_bottom_x=current_bottom_x
         )
         return self.annotate_result(
@@ -1088,8 +1257,12 @@ class RealLineTrackerNode(Node):
             heading_error=self.last_result.heading_error,
             confidence=self.last_result.confidence,
             reason='track_jump_rejected_hold_last',
+            roi_start_x=self.last_result.roi_start_x,
+            roi_end_x=self.last_result.roi_end_x,
+            roi_end_y=self.last_result.roi_end_y,
             selected_bands=self.last_result.selected_bands,
             fitted_line=self.last_result.fitted_line,
+            tracking_anchor_x=self.last_result.tracking_anchor_x,
             current_bottom_x=current_bottom_x,
             candidate_rejected=True,
             candidate_rejection_reason='track_jump_rejected_hold_last'
@@ -1144,7 +1317,9 @@ class RealLineTrackerNode(Node):
     def result_bottom_x(result):
         if result is None:
             return None
-        if result.current_bottom_x is not None:
+        if result.tracking_anchor_x is not None:
+            bottom_x = float(result.tracking_anchor_x)
+        elif result.current_bottom_x is not None:
             bottom_x = float(result.current_bottom_x)
         elif result.fitted_line is not None:
             bottom_x = float(result.fitted_line[2])
@@ -1204,11 +1379,20 @@ class RealLineTrackerNode(Node):
         overlay = image.copy()
         height, width = overlay.shape[:2]
         roi_start_y = result.roi_start_y
+        roi_start_x = int(clamp(result.roi_start_x, 0, max(0, width - 1)))
+        roi_end_x = result.roi_end_x
+        if roi_end_x is None:
+            roi_end_x = width
+        roi_end_y = result.roi_end_y
+        if roi_end_y is None:
+            roi_end_y = min(height, roi_start_y + result.binary.shape[0])
+        roi_end_x = int(clamp(roi_end_x, roi_start_x + 1, width))
+        roi_end_y = int(clamp(roi_end_y, roi_start_y + 1, height))
 
         cv2.rectangle(
             overlay,
-            (0, roi_start_y),
-            (max(0, width - 1), max(0, height - 1)),
+            (roi_start_x, roi_start_y),
+            (roi_end_x - 1, roi_end_y - 1),
             (255, 255, 0),
             2
         )
@@ -1248,9 +1432,9 @@ class RealLineTrackerNode(Node):
                 thickness = 2
                 cv2.rectangle(
                     overlay,
-                    (0, roi_start_y + row.y_min),
+                    (roi_start_x, roi_start_y + row.y_min),
                     (
-                        max(0, width - 1),
+                        roi_end_x - 1,
                         roi_start_y + max(row.y_min, row.y_max - 1)
                     ),
                     color,
@@ -1258,8 +1442,8 @@ class RealLineTrackerNode(Node):
                 )
             cv2.line(
                 overlay,
-                (0, y),
-                (max(0, width - 1), y),
+                (roi_start_x, y),
+                (roi_end_x - 1, y),
                 color,
                 thickness
             )
@@ -1304,6 +1488,8 @@ class RealLineTrackerNode(Node):
             f'reason={result.reason}',
             f'line_width_cm={self.tracker_config.line_width_cm:.1f}',
             f'dark_fraction={result.dark_fraction:.3f}',
+            f'roi=({roi_start_x},{roi_start_y})-'
+            f'({roi_end_x - 1},{roi_end_y - 1})',
             f'valid_bands={len(result.selected_bands)}/'
             f'{self.tracker_config.num_scan_bands}',
             f'lateral_error={result.lateral_error:.3f}',
@@ -1315,6 +1501,8 @@ class RealLineTrackerNode(Node):
             f'reject_reason={result.candidate_rejection_reason}',
             f'current_bottom_x='
             f'{self.format_optional_float(result.current_bottom_x)}',
+            f'tracking_anchor_x='
+            f'{self.format_optional_float(result.tracking_anchor_x)}',
             f'last_bottom_x='
             f'{self.format_optional_float(result.last_bottom_x)}',
             f'pending_bottom_x='
@@ -1390,6 +1578,12 @@ class RealLineTrackerNode(Node):
         if value is None:
             return 'None'
         return f'{float(value):.1f}'
+
+    @staticmethod
+    def format_optional_int(value):
+        if value is None:
+            return 'None'
+        return str(int(value))
 
     @staticmethod
     def format_bool(value):
@@ -1597,6 +1791,11 @@ class RealLineTrackerNode(Node):
             f'mask_shape={mask_shape}, '
             f'overlay_shape={overlay_shape}, '
             f'reason={result.reason}, '
+            f'use_full_frame_roi='
+            f'{self.format_bool(self.tracker_config.use_full_frame_roi)}, '
+            f'roi=({result.roi_start_x},{result.roi_start_y})-'
+            f'({self.format_optional_int(result.roi_end_x)},'
+            f'{self.format_optional_int(result.roi_end_y)}), '
             f'valid_bands={len(result.selected_bands)}/'
             f'{self.tracker_config.num_scan_bands}, '
             f'dark_fraction={result.dark_fraction:.3f}, '
@@ -1609,6 +1808,8 @@ class RealLineTrackerNode(Node):
             f'reject_reason={result.candidate_rejection_reason}, '
             f'current_bottom_x='
             f'{self.format_optional_float(result.current_bottom_x)}, '
+            f'tracking_anchor_x='
+            f'{self.format_optional_float(result.tracking_anchor_x)}, '
             f'last_bottom_x='
             f'{self.format_optional_float(result.last_bottom_x)}, '
             f'pending_bottom_x='

@@ -49,7 +49,7 @@ class LineFollowerNode(Node):
         self.declare_parameter('mission_stop_topic', '/mission/stop')
         self.declare_parameter('gait_control_lock_topic', '/gait/control_lock')
         self.declare_parameter('control_rate_hz', 10.0)
-        self.declare_parameter('debug_log', False)
+        self.declare_parameter('debug_log', True)
 
         self.declare_parameter('base_speed', 0.30)
         self.declare_parameter('mid_speed', 0.28)
