@@ -78,6 +78,9 @@ class RouteStage:
 #    - 跳跃是比赛必需动作，RUN_WITHOUT_SDK_ACTIONS 默认 False：
 #      如果 C++ 小工具和 ROS2 Sport API 都不可用，节点会明确报错并停住，
 #      不会静默跳过跳跃。
+#    - 你这台 Go2 当前 /api/sport/request 的 unitree_api typesupport
+#      容易和 ROS2 默认 RMW 冲突，所以 ALLOW_ROS_TOPIC_SDK_ACTIONS
+#      默认 False。比赛动作优先使用 go2_sdk_motion_action 这个 C++ 小工具。
 #
 # 5. 推荐调试顺序：
 #    - 先单独确认巡线系统 line_visible=true。
@@ -104,6 +107,7 @@ SDK_ACTION_EXECUTABLE = ''
 SDK_ACTION_TIMEOUT_PADDING_SEC = 6.0
 SDK_ACTION_PRE_STOP_SEC = 0.4
 RUN_WITHOUT_SDK_ACTIONS = False
+ALLOW_ROS_TOPIC_SDK_ACTIONS = False
 SPORT_REQUEST_TOPIC = '/api/sport/request'
 SDK_ACTION_API_IDS = {
     'stand_up': 1004,
@@ -394,6 +398,14 @@ class ObstacleDirectRouteNode(Node):
             'sdk_action_executable',
             SDK_ACTION_EXECUTABLE
         ).value
+        self.run_without_sdk_actions = bool(self.declare_parameter(
+            'run_without_sdk_actions',
+            RUN_WITHOUT_SDK_ACTIONS
+        ).value)
+        self.allow_ros_topic_sdk_actions = bool(self.declare_parameter(
+            'allow_ros_topic_sdk_actions',
+            ALLOW_ROS_TOPIC_SDK_ACTIONS
+        ).value)
         self.sdk_action_timeout_padding_sec = float(self.declare_parameter(
             'sdk_action_timeout_padding_sec',
             SDK_ACTION_TIMEOUT_PADDING_SEC
@@ -629,7 +641,7 @@ class ObstacleDirectRouteNode(Node):
         return (
             stage.sdk_action != 'none'
             and not self._sdk_actions_available
-            and RUN_WITHOUT_SDK_ACTIONS
+            and self.run_without_sdk_actions
         )
 
     def _run_stage(self, index, total, stage):
@@ -741,7 +753,7 @@ class ObstacleDirectRouteNode(Node):
         self._publish_for_duration(cmd, duration_sec)
 
     def _run_sdk_action(self, index, total, stage):
-        if not self._sdk_actions_available and RUN_WITHOUT_SDK_ACTIONS:
+        if not self._sdk_actions_available and self.run_without_sdk_actions:
             self.get_logger().warn(
                 f'route stage {index}/{total}: skip {stage.name} '
                 f'sdk_action={stage.sdk_action}; '
@@ -868,6 +880,18 @@ class ObstacleDirectRouteNode(Node):
             return
         except FileNotFoundError as error:
             errors.append(str(error))
+
+        if not self.allow_ros_topic_sdk_actions:
+            errors.append(
+                'ROS topic SDK action backend is disabled by default. '
+                'Use go2_sdk_motion_action, or pass '
+                'allow_ros_topic_sdk_actions:=true only after confirming '
+                'unitree_api/RMW typesupport works on this robot.'
+            )
+            self._sdk_action_backend = 'none'
+            self._sdk_actions_available = False
+            self._sdk_action_missing_reason = ' | '.join(errors)
+            return
 
         try:
             self._sport_request_msg_cls = self._load_sport_request_msg_class()

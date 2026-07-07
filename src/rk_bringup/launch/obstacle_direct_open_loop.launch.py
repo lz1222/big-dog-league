@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    LogInfo,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -29,6 +34,7 @@ ROUTE_NODE_ENV = {
 
 
 def generate_launch_description():
+    workspace_dir = LaunchConfiguration('workspace_dir')
     start_sdk_server = LaunchConfiguration('start_sdk_server')
     sdk_server = LaunchConfiguration('sdk_server')
     bridge_max_linear_x = LaunchConfiguration('bridge_max_linear_x')
@@ -39,6 +45,10 @@ def generate_launch_description():
     speed_scale = LaunchConfiguration('speed_scale')
     sdk_network_interface = LaunchConfiguration('sdk_network_interface')
     sdk_action_executable = LaunchConfiguration('sdk_action_executable')
+    run_without_sdk_actions = LaunchConfiguration('run_without_sdk_actions')
+    allow_ros_topic_sdk_actions = LaunchConfiguration(
+        'allow_ros_topic_sdk_actions'
+    )
     start_realsense = LaunchConfiguration('start_realsense')
     start_line_nodes = LaunchConfiguration('start_line_nodes')
     image_topic = LaunchConfiguration('image_topic')
@@ -56,6 +66,11 @@ def generate_launch_description():
     ])
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'workspace_dir',
+            default_value='/home/unitree/rk_inspection_ws',
+            description='Robot workspace path.'
+        ),
         DeclareLaunchArgument(
             'start_sdk_server',
             default_value='true',
@@ -112,6 +127,22 @@ def generate_launch_description():
                 'go2_sdk_motion_action'
             ),
             description='Helper executable used for SDK actions.'
+        ),
+        DeclareLaunchArgument(
+            'run_without_sdk_actions',
+            default_value='false',
+            description=(
+                'Skip stand/jump SDK action stages when the SDK action helper '
+                'is unavailable. Use only for movement-only tests.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'allow_ros_topic_sdk_actions',
+            default_value='false',
+            description=(
+                'Allow fallback to /api/sport/request. Keep false unless '
+                'unitree_api typesupport/RMW has been verified.'
+            )
         ),
         DeclareLaunchArgument(
             'start_realsense',
@@ -194,34 +225,46 @@ def generate_launch_description():
                 'max_yaw': bridge_max_angular_z,
             }.items(),
         ),
-        Node(
-            package='rk_tools',
-            executable='obstacle_direct_route_node',
-            name='obstacle_direct_route_node',
+        ExecuteProcess(
+            cmd=[
+                'python3',
+                PathJoinSubstitution([
+                    workspace_dir,
+                    'src',
+                    'rk_tools',
+                    'rk_tools',
+                    'obstacle_direct_route_node.py',
+                ]),
+                '--ros-args',
+                '-r',
+                '__node:=obstacle_direct_route_node',
+                '-p',
+                'cmd_vel_topic:=/navigation/cmd_vel',
+                '-p',
+                ['countdown_sec:=', countdown_sec],
+                '-p',
+                ['distance_scale:=', distance_scale],
+                '-p',
+                ['turn_scale:=', turn_scale],
+                '-p',
+                ['speed_scale:=', speed_scale],
+                '-p',
+                ['sdk_network_interface:=', sdk_network_interface],
+                '-p',
+                ['sdk_action_executable:=', sdk_action_executable],
+                '-p',
+                'mission_start_topic:=/mission/start',
+                '-p',
+                'mission_stop_topic:=/mission/stop',
+                '-p',
+                ['run_without_sdk_actions:=', run_without_sdk_actions],
+                '-p',
+                [
+                    'allow_ros_topic_sdk_actions:=',
+                    allow_ros_topic_sdk_actions,
+                ],
+            ],
             output='screen',
             additional_env=ROUTE_NODE_ENV,
-            parameters=[{
-                'cmd_vel_topic': '/navigation/cmd_vel',
-                'countdown_sec': ParameterValue(
-                    countdown_sec,
-                    value_type=float
-                ),
-                'distance_scale': ParameterValue(
-                    distance_scale,
-                    value_type=float
-                ),
-                'turn_scale': ParameterValue(
-                    turn_scale,
-                    value_type=float
-                ),
-                'speed_scale': ParameterValue(
-                    speed_scale,
-                    value_type=float
-                ),
-                'sdk_network_interface': sdk_network_interface,
-                'sdk_action_executable': sdk_action_executable,
-                'mission_start_topic': '/mission/start',
-                'mission_stop_topic': '/mission/stop',
-            }],
         ),
     ])
