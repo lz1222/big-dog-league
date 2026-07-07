@@ -84,6 +84,7 @@ class LineFollowerNode(Node):
         self.declare_parameter('reacquire_min_confidence', 0.45)
         self.declare_parameter('reacquire_max_lateral_error', 0.75)
         self.declare_parameter('line_msg_timeout', 0.5)
+        self.declare_parameter('continuous_search_enabled', True)
 
         self.cmd_vel_topic = self.string_parameter('cmd_vel_topic')
         self.line_track_topic = self.string_parameter('line_track_topic')
@@ -267,6 +268,9 @@ class LineFollowerNode(Node):
         self.line_msg_timeout = self.nonnegative_float_parameter(
             'line_msg_timeout'
         )
+        self.continuous_search_enabled = self.get_parameter(
+            'continuous_search_enabled'
+        ).get_parameter_value().bool_value
 
         if self.error_slowest_threshold < self.error_slow_threshold:
             self.error_slowest_threshold = self.error_slow_threshold
@@ -336,6 +340,9 @@ class LineFollowerNode(Node):
             if self.state == SHORT_LOST:
                 self.log_line_recovered('line_recovered', msg)
                 self.set_state(LINE_FOLLOW, 'line_recovered', now)
+            elif self.state == STOP and self.mission_started:
+                self.log_line_recovered('line_recovered_from_stop', msg)
+                self.set_state(LINE_FOLLOW, 'line_recovered_from_stop', now)
         elif self.state == LINE_FOLLOW:
             self.enter_line_lost_state(msg, now)
 
@@ -367,7 +374,21 @@ class LineFollowerNode(Node):
             return
 
         if self.state == STOP:
-            self.log_control_debug(Twist(), self.last_stop_reason)
+            if (
+                self.mission_started
+                and self.is_trackable_line(self.last_line_msg)
+                and not self.line_message_timed_out(now)
+            ):
+                self.log_line_recovered(
+                    'line_recovered_from_stop',
+                    self.last_line_msg
+                )
+                self.set_state(LINE_FOLLOW, 'line_recovered_from_stop', now)
+            else:
+                self.log_control_debug(Twist(), self.last_stop_reason)
+                return
+
+        if self.state == STOP:
             return
 
         if self.state in RUNNING_STATES and self.line_message_timed_out(now):
@@ -506,6 +527,10 @@ class LineFollowerNode(Node):
                 f'expected_turn_direction={self.expected_turn_direction}, '
                 f'stable_seen_count={self.stable_seen_count}'
             )
+            if self.continuous_search_enabled:
+                self.stable_seen_count = 0
+                self.set_state(SEARCH_LINE, 'turn_lost_keep_timeout', now)
+                return self.make_search_line_cmd()
             self.set_state(STOP, 'turn_lost_keep_timeout', now)
             return Twist()
 
@@ -519,13 +544,22 @@ class LineFollowerNode(Node):
 
         elapsed = self.elapsed_in_state(now)
         if elapsed >= self.search_timeout:
+            log_message = (
+                'Search line timeout; continuing search: '
+                if self.continuous_search_enabled
+                else 'Search line timeout: '
+            )
             self.get_logger().error(
-                'Search line timeout: '
+                log_message +
                 f'elapsed={elapsed:.3f}s, '
                 f'timeout={self.search_timeout:.3f}s, '
                 f'turn_direction={self.active_turn_direction}, '
                 f'stable_seen_count={self.stable_seen_count}'
             )
+            if self.continuous_search_enabled:
+                self.state_enter_time = now
+                self.stable_seen_count = 0
+                return self.make_search_line_cmd()
             self.set_state(STOP, 'search_timeout', now)
             return Twist()
 
@@ -628,7 +662,6 @@ class LineFollowerNode(Node):
 
         self.state = new_state
         self.state_enter_time = now
-        self.mission_started = new_state in RUNNING_STATES
 
         if new_state in {LINE_FOLLOW, WAIT_START, STOP}:
             self.stable_seen_count = 0

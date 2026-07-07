@@ -88,6 +88,8 @@ export RK_LINE_MID_SPEED=0.28
 export RK_LINE_SLOW_SPEED=0.27
 export RK_SHORT_LOST_LINEAR_SPEED=0.27
 export RK_SEARCH_LINEAR_SPEED=0.27
+export RK_START_ECONOMIC_GAIT=true
+export RK_SDK_INTERFACE=eth0
 ~/rk_inspection_ws/src/rk_bringup/scripts/start_line_system.sh
 ```
 
@@ -102,6 +104,11 @@ launch arguments:
 
 ```bash
 ros2 launch rk_bringup competition_line_nav.launch.py \
+  start_economic_gait:=true \
+  sdk_interface:=eth0 \
+  debug:=false \
+  enable_depth:=false \
+  rgb_camera.profile:=424x240x15 \
   line_min_speed:=0.27 \
   line_base_speed:=0.30 \
   line_mid_speed:=0.28 \
@@ -109,9 +116,10 @@ ros2 launch rk_bringup competition_line_nav.launch.py \
   bridge_max_linear_x:=0.30
 ```
 
-Current line following uses `cmd_vel` only. To switch a Unitree standing or
-gait mode, stop line following first, run the SDK motion action, then restart
-line following:
+The line launch switches the robot to Unitree `economic_gait` by default before
+mission start. To switch posture or gait manually while testing separate nodes,
+stop line following first, run the SDK motion action, then restart line
+following:
 
 ```bash
 ~/rk_inspection_ws/src/rk_bringup/scripts/mission_stop.sh
@@ -149,6 +157,10 @@ After confirming `line_visible=true`, start line following once:
 ```bash
 ~/rk_inspection_ws/src/rk_bringup/scripts/mission_start.sh
 ```
+
+With `continuous_search_enabled: true`, this mission start remains active until
+`mission_stop.sh` is sent. If the line is briefly lost, navigation keeps
+searching and resumes line following after the configured reacquire frames.
 
 Stop line following without killing all windows:
 
@@ -211,8 +223,9 @@ Bridge only receives zero velocity:
 `rqt_image_view` cannot see overlay:
 
 - Run `view_line_debug.sh` in a VNC graphical desktop terminal, not pure SSH.
-- Confirm `competition_line_nav.launch.py` started
-  `/real_line_tracker_node` with `enable_debug_image:=true`.
+- The normal low-bandwidth line launch uses `debug:=false`, so overlay topics
+  are disabled by default. Restart with `debug:=true` only when inspecting
+  perception.
 - Confirm `/perception/debug/line_overlay` appears in `ros2 topic list`.
 
 Robot does not move but topics show velocity:
