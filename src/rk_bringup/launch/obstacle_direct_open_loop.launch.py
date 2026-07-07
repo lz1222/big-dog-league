@@ -17,19 +17,6 @@ from launch_ros.substitutions import FindPackageShare
 
 ROUTE_NODE_ENV = {
     'ROS_DOMAIN_ID': '10',
-    'LD_LIBRARY_PATH': (
-        '/home/unitree/cyclonedds_ws/install/unitree_api/lib:'
-        '/home/unitree/rk_inspection_ws/third_party/unitree_ros2/'
-        'cyclonedds_ws/install/unitree_api/lib:'
-        '/opt/ros/foxy/lib/aarch64-linux-gnu:'
-        '/opt/ros/foxy/lib'
-    ),
-    'PYTHONPATH': (
-        '/home/unitree/cyclonedds_ws/install/unitree_api/lib/'
-        'python3.8/site-packages:'
-        '/home/unitree/rk_inspection_ws/third_party/unitree_ros2/'
-        'cyclonedds_ws/install/unitree_api/lib/python3.8/site-packages'
-    ),
 }
 
 
