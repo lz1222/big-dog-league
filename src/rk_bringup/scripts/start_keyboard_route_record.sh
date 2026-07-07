@@ -4,9 +4,11 @@ set -e
 WORKSPACE_DIR="${RK_INSPECTION_WS:-$HOME/rk_inspection_ws}"
 ROUTE_FILE="${RK_KEYBOARD_ROUTE_FILE:-$HOME/rk_keyboard_routes/latest_route.json}"
 
-FORWARD_SPEED="${RK_KEYBOARD_FORWARD_SPEED:-0.30}"
-BACKWARD_SPEED="${RK_KEYBOARD_BACKWARD_SPEED:-0.20}"
-TURN_SPEED="${RK_KEYBOARD_TURN_SPEED:-0.60}"
+MOTION_SPEED="${RK_KEYBOARD_SPEED:-0.30}"
+FORWARD_SPEED="${RK_KEYBOARD_FORWARD_SPEED:-$MOTION_SPEED}"
+BACKWARD_SPEED="${RK_KEYBOARD_BACKWARD_SPEED:-$MOTION_SPEED}"
+TURN_SPEED="${RK_KEYBOARD_TURN_SPEED:-$MOTION_SPEED}"
+ACTION_SEC="${RK_KEYBOARD_ACTION_SEC:-1.0}"
 LINE_FOLLOW_SEC="${RK_KEYBOARD_LINE_FOLLOW_SEC:-3.0}"
 LINE_UNTIL_LOST_MAX_SEC="${RK_KEYBOARD_LINE_UNTIL_LOST_MAX_SEC:-30.0}"
 SDK_INTERFACE="${RK_SDK_INTERFACE:-eth0}"
@@ -43,12 +45,15 @@ Before this, start the bridge/line stack in another terminal:
 
 Controls:
   w forward, s backward, a turn left, d turn right
+  each motion key runs once for ${ACTION_SEC}s
   x economic_gait, c normal gait, space stop
   l timed line-follow stage (${LINE_FOLLOW_SEC}s)
   u line-follow until lost (max ${LINE_UNTIL_LOST_MAX_SEC}s)
   q finish and save route
 
 route_file=${ROUTE_FILE}
+motion_speed=${MOTION_SPEED}
+action_sec=${ACTION_SEC}
 sdk_interface=${SDK_INTERFACE}
 EOF
 
@@ -57,6 +62,7 @@ exec ros2 run rk_tools keyboard_route_recorder --ros-args \
     -p forward_speed:="${FORWARD_SPEED}" \
     -p backward_speed:="${BACKWARD_SPEED}" \
     -p turn_speed:="${TURN_SPEED}" \
+    -p key_action_duration_sec:="${ACTION_SEC}" \
     -p line_insert_duration_sec:="${LINE_FOLLOW_SEC}" \
     -p line_until_lost_max_sec:="${LINE_UNTIL_LOST_MAX_SEC}" \
     -p sdk_network_interface:="${SDK_INTERFACE}"

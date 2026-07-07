@@ -84,11 +84,15 @@ class KeyboardRouteNode(Node):
         )
         self.backward_speed = self._nonnegative_float_parameter(
             'backward_speed',
-            0.20
+            0.30
         )
         self.turn_speed = self._nonnegative_float_parameter(
             'turn_speed',
-            0.60
+            0.30
+        )
+        self.key_action_duration_sec = self._positive_float_parameter(
+            'key_action_duration_sec',
+            1.0
         )
         self.max_linear_x = self._positive_float_parameter(
             'max_linear_x',
@@ -283,7 +287,7 @@ class KeyboardRouteNode(Node):
                             break
                         self._handle_record_key(key)
 
-                    self.publisher.publish(self._active_cmd)
+                    self.publisher.publish(Twist())
                     rclpy.spin_once(self, timeout_sec=0.0)
 
                     now = time.monotonic()
@@ -301,7 +305,15 @@ class KeyboardRouteNode(Node):
     def _print_record_help(self):
         print('', flush=True)
         print('Keyboard route recording controls:', flush=True)
-        print('  w forward, s backward, a turn left, d turn right', flush=True)
+        print(
+            '  w forward, s backward, a turn left, d turn right',
+            flush=True
+        )
+        print(
+            f'  each motion key runs once for '
+            f'{self.key_action_duration_sec:.2f}s',
+            flush=True
+        )
         print('  x economic_gait, c normal gait, space stop', flush=True)
         print('  l insert timed line-follow stage', flush=True)
         print('  u insert line-follow-until-lost stage', flush=True)
@@ -324,7 +336,7 @@ class KeyboardRouteNode(Node):
 
     def _handle_record_key(self, key):
         if key in self.MOTION_KEYS:
-            self._start_motion_key(key)
+            self._record_motion_once(key)
             return
 
         if key == 'x':
@@ -365,25 +377,18 @@ class KeyboardRouteNode(Node):
             self._record_line_follow_segment(segment)
             return
 
-    def _start_motion_key(self, key):
+    def _record_motion_once(self, key):
         segment, cmd, label = self._motion_segment_for_key(key)
-        if self._active_motion_segment is not None:
-            old = self._active_motion_segment
-            if (
-                old['linear_x'] == segment['linear_x']
-                and old['angular_z'] == segment['angular_z']
-            ):
-                return
-
-        self._finalize_active_motion(f'key {label}')
-        self._active_motion_segment = segment
-        self._active_motion_start = time.monotonic()
-        self._active_cmd = cmd
+        duration_sec = self.key_action_duration_sec
+        segment['duration_sec'] = round(duration_sec, 3)
+        self._route['segments'].append(segment)
         self._last_key_label = label
         self.get_logger().info(
-            f'key={key!r}: {label}, vx={cmd.linear.x:.3f}, '
-            f'wz={cmd.angular.z:.3f}'
+            f'key={key!r}: run once {label}, vx={cmd.linear.x:.3f}, '
+            f'wz={cmd.angular.z:.3f}, duration={duration_sec:.2f}s'
         )
+        self._publish_for_duration(cmd, duration_sec)
+        self._publish_stop(f'after key {label}', self.step_stop_sec)
 
     def _record_sdk_action(self, key, action, label):
         self._finalize_active_motion(f'key {label}')
