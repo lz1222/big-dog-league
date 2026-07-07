@@ -34,13 +34,15 @@ class RouteStage:
     line_follow_duration_sec: float = 0.0
     line_follow_speed_mps: float = 0.30
     line_follow_until_lost: bool = False
+    line_reacquire_scan: bool = False
     enabled: bool = True
 
 
 # ========================= 用户调试修改区 =========================
 #
 # 这个文件现在统一负责：
-#   启停区出发 -> 巡线2秒 -> 前跳 -> 继续巡线直到黑线消失 -> 避障区蛇形路线
+#   启停区出发 -> 巡线一小段 -> 前跳 -> 左右扫视找线 -> 继续巡线直到黑线消失
+#   -> 避障区蛇形路线
 #
 # 直走和转弯仍然通过 /navigation/cmd_vel 走你已经验证能动的 SDK UDP
 # 桥接；FrontJump / RecoveryStand 这种底层动作则由小工具
@@ -64,9 +66,13 @@ class RouteStage:
 #      你的 Go2 低于 0.27m/s 基本不动，所以默认按 0.30m/s 计算。
 #
 # 3.1 启停区巡线与跳跃：
-#    - START_LINE_FOLLOW_BEFORE_JUMP_SEC：起步后先巡线多久再前跳，默认 2 秒。
+#    - START_LINE_FOLLOW_BEFORE_JUMP_SEC：起步后先巡线多久再前跳。
 #    - LINE_LOST_SWITCH_SEC：跳后继续巡线，黑线持续看不到多久后切入避障区。
 #      过早切避障就调大，进避障太晚就调小。
+#    - FrontJump 是 Unitree SDK 内置动作，本接口没有蹲下速度参数；
+#      这里通过跳前停稳和跳后恢复等待来降低冲击。
+#    - 跳完如果向左歪，POST_JUMP_SCAN_FIRST_DIRECTION 保持 'right'，
+#      先向右转一下找线；如果反过来向右歪，就改成 'left'。
 #
 # 4. SDK动作阶段 RouteStage 的字段：
 #    - sdk_action：'balance_stand' / 'economic_gait' / 'front_jump' /
@@ -95,11 +101,16 @@ LINE_FOLLOW_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.30
 LINE_FOLLOW_START_SETTLE_SEC = 0.0
 LINE_FOLLOW_STOP_SETTLE_SEC = 0.0
-START_LINE_FOLLOW_BEFORE_JUMP_SEC = 2.0
+START_LINE_FOLLOW_BEFORE_JUMP_SEC = 1.5
 LINE_VISIBLE_WAIT_TIMEOUT_SEC = 10.0
 LINE_LOST_SWITCH_SEC = 0.60
 LINE_TRACK_STALE_SEC = 0.80
 LINE_FOLLOW_UNTIL_LOST_MAX_SEC = 35.0
+POST_JUMP_LINE_SCAN_ENABLED = True
+POST_JUMP_SCAN_FIRST_DIRECTION = 'right'
+POST_JUMP_SCAN_DEGREES = 20.0
+POST_JUMP_SCAN_SPEED_RADPS = 0.28
+POST_JUMP_SCAN_PAUSE_SEC = 0.10
 DEFAULT_FORWARD_SPEED_MPS = 0.35
 DEFAULT_TURN_SPEED_RADPS = 0.80
 # 避障区转弯时也要给前进速度，避免原地扭腿。
@@ -115,7 +126,11 @@ SDK_ACTION_TIMEOUT_PADDING_SEC = 6.0
 # 普通 SDK 动作前先发一小段 0 速度，避免 UDP Move 还在持续上一次速度。
 SDK_ACTION_PRE_STOP_SEC = 0.25
 # 前跳对状态要求更严格：必须完全停住、站稳后再调用 FrontJump。
-FRONT_JUMP_CMD_STOP_SEC = 1.00
+# Unitree SDK 的 FrontJump 不暴露“慢速蹲下”参数，这里用更长停稳时间保护关节。
+FRONT_JUMP_CMD_STOP_SEC = 2.00
+FRONT_JUMP_PRE_BALANCE_WAIT_SEC = 0.80
+FRONT_JUMP_ACTION_WAIT_SEC = 2.00
+FRONT_JUMP_RECOVERY_WAIT_SEC = 1.00
 EMERGENCY_STOP_SEC = 1.20
 RUN_WITHOUT_SDK_ACTIONS = False
 ALLOW_ROS_TOPIC_SDK_ACTIONS = False
@@ -276,21 +291,32 @@ ROUTE_STAGES = [
         sdk_wait_sec=0.0,
         enabled=ENABLE_START_SEQUENCE,
     ),
-    # 第0-4阶段：起步后先巡线2秒，让狗沿黑线走到跳跃前位置。
+    # 第0-4阶段：起步后先巡线一小段，让狗沿黑线走到跳跃前位置。
     # 要改跳前巡线时间，就改 START_LINE_FOLLOW_BEFORE_JUMP_SEC。
     RouteStage(
         name='line_follow_before_jump',
-        description='第0-4阶段：启停区巡线2秒，到跳跃前位置',
+        description=(
+            f'第0-4阶段：启停区巡线'
+            f'{START_LINE_FOLLOW_BEFORE_JUMP_SEC:.1f}秒，到跳跃前位置'
+        ),
         line_follow_duration_sec=START_LINE_FOLLOW_BEFORE_JUMP_SEC,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
+        enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
+    ),
+    # 第0-4.5阶段：前跳前先站稳，降低从巡线速度直接进入跳跃动作的冲击。
+    RouteStage(
+        name='prepare_front_jump_balance',
+        description='第0-4.5阶段：前跳前站稳，保护关节',
+        sdk_action='balance_stand',
+        sdk_wait_sec=FRONT_JUMP_PRE_BALANCE_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
     # 第0-5阶段：执行一次前跳。
     RouteStage(
         name='front_jump',
-        description='第0-5阶段：执行一次前跳',
+        description='第0-5阶段：执行一次前跳，跳前已停稳',
         sdk_action='front_jump',
-        sdk_wait_sec=1.2,
+        sdk_wait_sec=FRONT_JUMP_ACTION_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
     # 第0-6阶段：跳完后恢复站立，再切回续航步态。
@@ -298,7 +324,7 @@ ROUTE_STAGES = [
         name='recover_after_front_jump',
         description='第0-6阶段：跳完后恢复站立',
         sdk_action='recovery_stand',
-        sdk_wait_sec=0.4,
+        sdk_wait_sec=FRONT_JUMP_RECOVERY_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
     RouteStage(
@@ -307,6 +333,14 @@ ROUTE_STAGES = [
         sdk_action='economic_gait',
         sdk_wait_sec=0.0,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
+    ),
+    # 第0-7.5阶段：跳完后可能向左歪，先向右转一下寻找黑线。
+    # 看到黑线就立刻停止扫视，然后交给巡线节点继续跑。
+    RouteStage(
+        name='post_jump_line_reacquire_scan',
+        description='第0-7.5阶段：跳后先向右转一下寻找黑线',
+        line_reacquire_scan=True,
+        enabled=ENABLE_START_SEQUENCE and POST_JUMP_LINE_SCAN_ENABLED,
     ),
     # 第0-8阶段：跳后继续调用现有巡线。黑线持续消失后，
     # 自动 mission_stop，然后接入下面的避障区写死路线。
@@ -588,6 +622,7 @@ class ObstacleDirectRouteNode(Node):
             has_forward = stage.forward_steps > 0
             has_turn = stage.turn_direction != 'none'
             has_sdk_action = stage.sdk_action != 'none'
+            has_line_scan = stage.line_reacquire_scan
             has_line_follow = (
                 stage.line_follow_until_lost
                 or stage.line_follow_steps > 0
@@ -602,9 +637,18 @@ class ObstacleDirectRouteNode(Node):
                 raise ValueError(
                     f'{stage.name} sdk_action stages cannot also line_follow'
                 )
+            if has_sdk_action and has_line_scan:
+                raise ValueError(
+                    f'{stage.name} sdk_action stages cannot also line_scan'
+                )
             if has_line_follow and (has_forward or has_turn):
                 raise ValueError(
                     f'{stage.name} line_follow stages cannot also move/turn'
+                )
+            if has_line_scan and (has_forward or has_turn or has_line_follow):
+                raise ValueError(
+                    f'{stage.name} line_scan stages cannot also move/turn '
+                    'or line_follow'
                 )
 
             if (
@@ -612,10 +656,11 @@ class ObstacleDirectRouteNode(Node):
                 and not has_turn
                 and not has_sdk_action
                 and not has_line_follow
+                and not has_line_scan
             ):
                 raise ValueError(
                     f'{stage.name} does nothing; set forward_steps, turn, '
-                    'line_follow, or sdk_action'
+                    'line_follow, line_scan, or sdk_action'
                 )
 
             if not has_forward and stage.action_order == 'turn_then_forward':
@@ -701,6 +746,10 @@ class ObstacleDirectRouteNode(Node):
 
         if stage.line_follow_until_lost:
             self._run_line_follow_until_lost(index, total, stage)
+            return
+
+        if stage.line_reacquire_scan:
+            self._run_line_reacquire_scan(index, total, stage)
             return
 
         if (
@@ -880,6 +929,102 @@ class ObstacleDirectRouteNode(Node):
             f'after line follow until lost {stage.name}',
             LINE_FOLLOW_STOP_SETTLE_SEC
         )
+
+    def _run_line_reacquire_scan(self, index, total, stage):
+        self.get_logger().warn(
+            f'route stage {index}/{total}: {stage.name} line_reacquire_scan, '
+            f'first={POST_JUMP_SCAN_FIRST_DIRECTION}, '
+            f'angle={POST_JUMP_SCAN_DEGREES:.1f}deg, '
+            f'wz={POST_JUMP_SCAN_SPEED_RADPS:.2f}rad/s'
+        )
+
+        self._publish_mission_command(
+            self.mission_stop_publisher,
+            True,
+            f'{stage.name} mission_stop before scan',
+            max(POST_JUMP_SCAN_PAUSE_SEC, 0.05)
+        )
+
+        visible, reason = self._line_is_visible_now()
+        if visible:
+            self.get_logger().info(
+                f'{stage.name}: line already visible after jump; skip scan'
+            )
+            return
+        self.get_logger().warn(
+            f'{stage.name}: line not visible after jump, reason={reason}; '
+            'start post-jump scan'
+        )
+
+        first = POST_JUMP_SCAN_FIRST_DIRECTION.strip().lower()
+        if first not in {'left', 'right'}:
+            self.get_logger().warn(
+                f'{stage.name}: invalid POST_JUMP_SCAN_FIRST_DIRECTION='
+                f'{POST_JUMP_SCAN_FIRST_DIRECTION}, using right'
+            )
+            first = 'right'
+
+        opposite = 'left' if first == 'right' else 'right'
+        scan_plan = [
+            (first, POST_JUMP_SCAN_DEGREES),
+            (opposite, POST_JUMP_SCAN_DEGREES * 0.5),
+        ]
+
+        for direction, degrees in scan_plan:
+            self._raise_if_stop_requested()
+            if self._scan_turn_until_line(stage.name, direction, degrees):
+                self._publish_stop(
+                    f'after line reacquire {stage.name}',
+                    POST_JUMP_SCAN_PAUSE_SEC
+                )
+                return
+
+            self._publish_stop(
+                f'between line scan {stage.name}',
+                POST_JUMP_SCAN_PAUSE_SEC
+            )
+
+        self.get_logger().warn(
+            f'{stage.name}: scan finished but line still not visible; '
+            'next line-follow stage will wait/search'
+        )
+
+    def _scan_turn_until_line(self, stage_name, direction, degrees):
+        cmd = Twist()
+        if direction == 'left':
+            cmd.angular.z = abs(POST_JUMP_SCAN_SPEED_RADPS) * self.speed_scale
+        else:
+            cmd.angular.z = -abs(POST_JUMP_SCAN_SPEED_RADPS) * self.speed_scale
+
+        angle_rad = math.radians(max(0.0, float(degrees)))
+        yaw_speed = max(abs(cmd.angular.z), 1e-6)
+        duration_sec = angle_rad / yaw_speed
+        period_sec = 1.0 / self.publish_rate_hz
+        end_time = time.monotonic() + duration_sec
+
+        self.get_logger().info(
+            f'{stage_name}: scan {direction}, angle={degrees:.1f}deg, '
+            f'wz={cmd.angular.z:.3f}rad/s, duration={duration_sec:.2f}s'
+        )
+
+        while rclpy.ok() and time.monotonic() < end_time:
+            self._raise_if_stop_requested()
+            visible, _reason = self._line_is_visible_now()
+            if visible:
+                msg = self._last_line_track_msg
+                self.get_logger().info(
+                    f'{stage_name}: line reacquired during {direction} scan, '
+                    f'confidence={msg.confidence:.3f}, '
+                    f'lateral={msg.lateral_error:.3f}, '
+                    f'heading={msg.heading_error:.3f}'
+                )
+                return True
+
+            self.publisher.publish(cmd)
+            rclpy.spin_once(self, timeout_sec=0.0)
+            time.sleep(period_sec)
+
+        return False
 
     def _wait_for_line_visible(self, stage_name):
         timeout_sec = self.line_visible_wait_timeout_sec
