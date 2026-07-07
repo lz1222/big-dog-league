@@ -1,0 +1,9 @@
+build/
+*.o
+*.so
+arm_zero_control
+get_arm_joint_angle
+joint_angle_control
+joint_enable_control
+multiple_joint_angle_control
+servo_commands.txt
