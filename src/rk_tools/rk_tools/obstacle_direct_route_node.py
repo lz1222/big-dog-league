@@ -11,6 +11,7 @@ from importlib import import_module
 
 import rclpy
 from geometry_msgs.msg import Twist
+from rk_interfaces.msg import LineTrack
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Bool
@@ -93,15 +94,16 @@ class RouteStage:
 FORWARD_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.30
-LINE_FOLLOW_START_SETTLE_SEC = 0.0
-LINE_FOLLOW_STOP_SETTLE_SEC = 0.0
+LINE_FOLLOW_START_SETTLE_SEC = 0.50
+LINE_FOLLOW_STOP_SETTLE_SEC = 0.30
+LINE_VISIBLE_WAIT_TIMEOUT_SEC = 10.0
 DEFAULT_FORWARD_SPEED_MPS = 0.25
 DEFAULT_TURN_SPEED_RADPS = 0.80
 # 当前避障区先切续航步态，所以转弯默认不额外给前进速度。
 # 如果后面想恢复边走边转，把这里改成 0.25/0.30，或单独给 left/right 传 vx_mps。
 DEFAULT_TURN_FORWARD_SPEED_MPS = 0.0
 START_FORWARD_SPEED_MPS = 0.35
-USE_DIRECT_START_FORWARD = True
+USE_DIRECT_START_FORWARD = False
 
 SDK_NETWORK_INTERFACE = 'eth0'
 SDK_ACTION_EXECUTABLE = ''
@@ -132,13 +134,16 @@ SDK_LD_LIBRARY_PATH_PREFIX = (
     '/home/unitree/cyclonedds_ws/install/cyclonedds/lib',
 )
 
-ENABLE_START_SEQUENCE = False
+ENABLE_START_SEQUENCE = True
 START_FROM_PRONE = False
 ENABLE_FRONT_JUMP = False
 ENABLE_OBSTACLE_ROUTE = True
+ALIGN_LINE_BEFORE_OBSTACLE = True
+OBSTACLE_ALIGN_LINE_STEPS = 4
 
 MISSION_START_TOPIC = '/mission/start'
 MISSION_STOP_TOPIC = '/mission/stop'
+LINE_TRACK_TOPIC = '/perception/line_track'
 
 
 def forward(steps, speed_mps=DEFAULT_FORWARD_SPEED_MPS):
@@ -269,10 +274,10 @@ ROUTE_STAGES = [
         enabled=ENABLE_START_SEQUENCE,
     ),
     # 第0-4阶段：跳前向前走。当前默认写死前进，不再依赖巡线。
-    # 要改距离就改 forward_steps；要改速度就改 START_FORWARD_SPEED_MPS。
+    # 当前 USE_DIRECT_START_FORWARD=False，所以这里调用现有巡线节点。
     RouteStage(
         name='line_follow_before_jump',
-        description='第0-4阶段：写死向前走10步，到跳跃前位置',
+        description='第0-4阶段：启停区巡线向前，到中继位置',
         forward_steps=10 if USE_DIRECT_START_FORWARD else 0,
         forward_speed_mps=START_FORWARD_SPEED_MPS,
         line_follow_steps=0 if USE_DIRECT_START_FORWARD else 10,
@@ -302,16 +307,24 @@ ROUTE_STAGES = [
         sdk_wait_sec=0.0,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
-    # 第0-8阶段：跳后进入避障区。当前默认写死前进，不再依赖巡线。
-    # 要改距离就改 forward_steps；要改速度就改 START_FORWARD_SPEED_MPS。
+    # 第0-8阶段：继续调用巡线进入避障区入口，保证进入位置和朝向更一致。
     RouteStage(
         name='line_follow_to_obstacle_entry',
-        description='第0-8阶段：跳完后写死向前走12步，进入避障区入口',
+        description='第0-8阶段：巡线向前进入避障区入口',
         forward_steps=12 if USE_DIRECT_START_FORWARD else 0,
         forward_speed_mps=START_FORWARD_SPEED_MPS,
         line_follow_steps=0 if USE_DIRECT_START_FORWARD else 12,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         enabled=ENABLE_START_SEQUENCE,
+    ),
+
+    # 避障区写死路线前：再短距离巡线一次，用黑线把车身对齐。
+    RouteStage(
+        name='obstacle_line_align',
+        description='避障区入口前：调用巡线对齐黑线',
+        line_follow_steps=OBSTACLE_ALIGN_LINE_STEPS,
+        line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
+        enabled=ENABLE_OBSTACLE_ROUTE and ALIGN_LINE_BEFORE_OBSTACLE,
     ),
 
     # 避障区开始前：切换续航步态，让转弯和低速行走更柔和。
@@ -359,6 +372,14 @@ class ObstacleDirectRouteNode(Node):
             'mission_stop_topic',
             MISSION_STOP_TOPIC
         ).value
+        self.line_track_topic = self.declare_parameter(
+            'line_track_topic',
+            LINE_TRACK_TOPIC
+        ).value
+        self.line_visible_wait_timeout_sec = float(self.declare_parameter(
+            'line_visible_wait_timeout_sec',
+            LINE_VISIBLE_WAIT_TIMEOUT_SEC
+        ).value)
         self.publish_rate_hz = float(self.declare_parameter(
             'publish_rate_hz',
             20.0
@@ -427,9 +448,17 @@ class ObstacleDirectRouteNode(Node):
         self._sport_request_publisher = None
         self.stop_requested = False
         self._active_sdk_process = None
+        self._last_line_track_msg = None
+        self._last_line_track_time = None
 
         self._validate_parameters()
         self.publisher = self.create_publisher(Twist, self.cmd_vel_topic, 10)
+        self.line_track_subscription = self.create_subscription(
+            LineTrack,
+            self.line_track_topic,
+            self._on_line_track,
+            10
+        )
         self.mission_start_publisher = self.create_publisher(
             Bool,
             self.mission_start_topic,
@@ -448,6 +477,8 @@ class ObstacleDirectRouteNode(Node):
             raise ValueError('mission_start_topic must not be empty')
         if not self.mission_stop_topic:
             raise ValueError('mission_stop_topic must not be empty')
+        if not self.line_track_topic:
+            raise ValueError('line_track_topic must not be empty')
 
         positive = {
             'publish_rate_hz': self.publish_rate_hz,
@@ -468,6 +499,9 @@ class ObstacleDirectRouteNode(Node):
                 self.sdk_action_timeout_padding_sec
             ),
             'sdk_action_pre_stop_sec': self.sdk_action_pre_stop_sec,
+            'line_visible_wait_timeout_sec': (
+                self.line_visible_wait_timeout_sec
+            ),
         }
         for name, value in nonnegative.items():
             if not math.isfinite(value) or value < 0.0:
@@ -698,6 +732,10 @@ class ObstacleDirectRouteNode(Node):
         if stage.turn_direction != 'none':
             self._run_turn(index, total, stage)
 
+    def _on_line_track(self, msg):
+        self._last_line_track_msg = msg
+        self._last_line_track_time = time.monotonic()
+
     def _run_line_follow(self, index, total, stage):
         duration_sec = self._line_follow_duration_sec(stage)
         distance_m = self._line_follow_distance_m(stage)
@@ -711,6 +749,7 @@ class ObstacleDirectRouteNode(Node):
             f'duration={duration_sec:.2f}s'
         )
 
+        self._wait_for_line_visible(stage.name)
         self._publish_stop(
             f'before line follow {stage.name}',
             LINE_FOLLOW_START_SETTLE_SEC
@@ -732,6 +771,63 @@ class ObstacleDirectRouteNode(Node):
             f'after line follow {stage.name}',
             LINE_FOLLOW_STOP_SETTLE_SEC
         )
+
+    def _wait_for_line_visible(self, stage_name):
+        timeout_sec = self.line_visible_wait_timeout_sec
+        if timeout_sec <= 0.0:
+            return
+
+        start_time = time.monotonic()
+        last_report_time = 0.0
+        self.get_logger().info(
+            f'{stage_name}: waiting for line_visible on '
+            f'{self.line_track_topic}, timeout={timeout_sec:.1f}s'
+        )
+
+        while rclpy.ok():
+            self._raise_if_stop_requested()
+            now = time.monotonic()
+            if self._last_line_track_msg is not None:
+                age = now - float(self._last_line_track_time or now)
+                if bool(self._last_line_track_msg.line_visible) and age <= 0.5:
+                    self.get_logger().info(
+                        f'{stage_name}: line visible, '
+                        f'confidence={self._last_line_track_msg.confidence:.3f}, '
+                        f'lateral={self._last_line_track_msg.lateral_error:.3f}, '
+                        f'heading={self._last_line_track_msg.heading_error:.3f}'
+                    )
+                    return
+
+            elapsed = now - start_time
+            if elapsed >= timeout_sec:
+                if self._last_line_track_msg is None:
+                    self.get_logger().warn(
+                        f'{stage_name}: no line_track message received '
+                        f'within {timeout_sec:.1f}s; starting anyway'
+                    )
+                else:
+                    self.get_logger().warn(
+                        f'{stage_name}: line_track received but '
+                        f'line_visible=false for {timeout_sec:.1f}s; '
+                        'starting anyway'
+                    )
+                return
+
+            if now - last_report_time >= 1.0:
+                if self._last_line_track_msg is None:
+                    self.get_logger().info(
+                        f'{stage_name}: still waiting for first line_track'
+                    )
+                else:
+                    self.get_logger().info(
+                        f'{stage_name}: still waiting for visible line, '
+                        f'last_visible={self._last_line_track_msg.line_visible}, '
+                        f'confidence={self._last_line_track_msg.confidence:.3f}'
+                    )
+                last_report_time = now
+
+            rclpy.spin_once(self, timeout_sec=0.0)
+            time.sleep(0.05)
 
     def _run_forward(self, index, total, stage):
         cmd = Twist()
