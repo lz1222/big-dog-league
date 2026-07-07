@@ -40,7 +40,7 @@ class RouteStage:
 # ========================= 用户调试修改区 =========================
 #
 # 这个文件现在统一负责：
-#   启停区出发 -> 巡线2秒 -> 前跳 -> 继续巡线直到黑线消失 -> 避障区蛇形路线
+#   启停区出发 -> 巡线1秒 -> 前跳 -> 继续巡线直到黑线消失 -> 避障区蛇形路线
 #
 # 直走和转弯仍然通过 /navigation/cmd_vel 走你已经验证能动的 SDK UDP
 # 桥接；FrontJump / RecoveryStand 这种底层动作则由小工具
@@ -64,9 +64,11 @@ class RouteStage:
 #      你的 Go2 低于 0.27m/s 基本不动，所以默认按 0.30m/s 计算。
 #
 # 3.1 启停区巡线与跳跃：
-#    - START_LINE_FOLLOW_BEFORE_JUMP_SEC：起步后先巡线多久再前跳，默认 2 秒。
+#    - START_LINE_FOLLOW_BEFORE_JUMP_SEC：起步后先巡线多久再前跳，默认 1 秒。
 #    - LINE_LOST_SWITCH_SEC：跳后继续巡线，黑线持续看不到多久后切入避障区。
 #      过早切避障就调大，进避障太晚就调小。
+#    - FrontJump 是 Unitree SDK 内置动作，本接口没有蹲下速度参数；
+#      这里通过跳前停稳和跳后恢复等待来降低冲击。
 #
 # 4. SDK动作阶段 RouteStage 的字段：
 #    - sdk_action：'balance_stand' / 'economic_gait' / 'front_jump' /
@@ -95,7 +97,7 @@ LINE_FOLLOW_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.30
 LINE_FOLLOW_START_SETTLE_SEC = 0.0
 LINE_FOLLOW_STOP_SETTLE_SEC = 0.0
-START_LINE_FOLLOW_BEFORE_JUMP_SEC = 2.0
+START_LINE_FOLLOW_BEFORE_JUMP_SEC = 1.0
 LINE_VISIBLE_WAIT_TIMEOUT_SEC = 10.0
 LINE_LOST_SWITCH_SEC = 0.60
 LINE_TRACK_STALE_SEC = 0.80
@@ -115,7 +117,11 @@ SDK_ACTION_TIMEOUT_PADDING_SEC = 6.0
 # 普通 SDK 动作前先发一小段 0 速度，避免 UDP Move 还在持续上一次速度。
 SDK_ACTION_PRE_STOP_SEC = 0.25
 # 前跳对状态要求更严格：必须完全停住、站稳后再调用 FrontJump。
-FRONT_JUMP_CMD_STOP_SEC = 1.00
+# Unitree SDK 的 FrontJump 不暴露“慢速蹲下”参数，这里用更长停稳时间保护关节。
+FRONT_JUMP_CMD_STOP_SEC = 2.00
+FRONT_JUMP_PRE_BALANCE_WAIT_SEC = 0.80
+FRONT_JUMP_ACTION_WAIT_SEC = 2.00
+FRONT_JUMP_RECOVERY_WAIT_SEC = 1.00
 EMERGENCY_STOP_SEC = 1.20
 RUN_WITHOUT_SDK_ACTIONS = False
 ALLOW_ROS_TOPIC_SDK_ACTIONS = False
@@ -276,21 +282,29 @@ ROUTE_STAGES = [
         sdk_wait_sec=0.0,
         enabled=ENABLE_START_SEQUENCE,
     ),
-    # 第0-4阶段：起步后先巡线2秒，让狗沿黑线走到跳跃前位置。
+    # 第0-4阶段：起步后先巡线1秒，让狗沿黑线走到跳跃前位置。
     # 要改跳前巡线时间，就改 START_LINE_FOLLOW_BEFORE_JUMP_SEC。
     RouteStage(
         name='line_follow_before_jump',
-        description='第0-4阶段：启停区巡线2秒，到跳跃前位置',
+        description='第0-4阶段：启停区巡线1秒，到跳跃前位置',
         line_follow_duration_sec=START_LINE_FOLLOW_BEFORE_JUMP_SEC,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
+        enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
+    ),
+    # 第0-4.5阶段：前跳前先站稳，降低从巡线速度直接进入跳跃动作的冲击。
+    RouteStage(
+        name='prepare_front_jump_balance',
+        description='第0-4.5阶段：前跳前站稳，保护关节',
+        sdk_action='balance_stand',
+        sdk_wait_sec=FRONT_JUMP_PRE_BALANCE_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
     # 第0-5阶段：执行一次前跳。
     RouteStage(
         name='front_jump',
-        description='第0-5阶段：执行一次前跳',
+        description='第0-5阶段：执行一次前跳，跳前已停稳',
         sdk_action='front_jump',
-        sdk_wait_sec=1.2,
+        sdk_wait_sec=FRONT_JUMP_ACTION_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
     # 第0-6阶段：跳完后恢复站立，再切回续航步态。
@@ -298,7 +312,7 @@ ROUTE_STAGES = [
         name='recover_after_front_jump',
         description='第0-6阶段：跳完后恢复站立',
         sdk_action='recovery_stand',
-        sdk_wait_sec=0.4,
+        sdk_wait_sec=FRONT_JUMP_RECOVERY_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
     RouteStage(
