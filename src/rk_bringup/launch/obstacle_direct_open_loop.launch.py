@@ -36,6 +36,8 @@ def generate_launch_description():
     allow_ros_topic_sdk_actions = LaunchConfiguration(
         'allow_ros_topic_sdk_actions'
     )
+    line_lost_switch_sec = LaunchConfiguration('line_lost_switch_sec')
+    line_track_stale_sec = LaunchConfiguration('line_track_stale_sec')
     start_realsense = LaunchConfiguration('start_realsense')
     start_line_nodes = LaunchConfiguration('start_line_nodes')
     image_topic = LaunchConfiguration('image_topic')
@@ -129,6 +131,22 @@ def generate_launch_description():
             description=(
                 'Allow fallback to /api/sport/request. Keep false unless '
                 'unitree_api typesupport/RMW has been verified.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'line_lost_switch_sec',
+            default_value='0.6',
+            description=(
+                'Switch from line following to the hardcoded obstacle route '
+                'after line_visible has stayed false for this many seconds.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'line_track_stale_sec',
+            default_value='0.8',
+            description=(
+                'Treat /perception/line_track as lost if no fresh message '
+                'arrives within this many seconds.'
             )
         ),
         DeclareLaunchArgument(
@@ -247,6 +265,10 @@ def generate_launch_description():
                 'line_track_topic:=/perception/line_track',
                 '-p',
                 'line_visible_wait_timeout_sec:=10.0',
+                '-p',
+                ['line_lost_switch_sec:=', line_lost_switch_sec],
+                '-p',
+                ['line_track_stale_sec:=', line_track_stale_sec],
                 '-p',
                 ['run_without_sdk_actions:=', run_without_sdk_actions],
                 '-p',

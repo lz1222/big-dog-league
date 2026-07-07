@@ -33,13 +33,14 @@ class RouteStage:
     line_follow_steps: int = 0
     line_follow_duration_sec: float = 0.0
     line_follow_speed_mps: float = 0.30
+    line_follow_until_lost: bool = False
     enabled: bool = True
 
 
 # ========================= 用户调试修改区 =========================
 #
 # 这个文件现在统一负责：
-#   启停区出发 -> 走两步 -> 跳一下 -> 再走几步进入避障区 -> 避障区蛇形路线
+#   启停区出发 -> 巡线2秒 -> 前跳 -> 继续巡线直到黑线消失 -> 避障区蛇形路线
 #
 # 直走和转弯仍然通过 /navigation/cmd_vel 走你已经验证能动的 SDK UDP
 # 桥接；FrontJump / RecoveryStand 这种底层动作则由小工具
@@ -53,7 +54,7 @@ class RouteStage:
 #
 # 2. 避障区现在只改 OBSTACLE_ROUTE：
 #    forward(步数) = 直走几步。
-#    left(角度) / right(角度) = 续航步态左/右转多少度。
+#    left(角度) / right(角度) = 边走边左/右转多少度。
 #    你想怎么跑，就按顺序写一行一行动作。
 #
 # 3. 巡线阶段 RouteStage 的字段：
@@ -62,12 +63,10 @@ class RouteStage:
 #    - line_follow_speed_mps：自动计算时间时使用的巡线估算速度。
 #      你的 Go2 低于 0.27m/s 基本不动，所以默认按 0.30m/s 计算。
 #
-# 3.1 启停区前进：
-#    如果巡线阶段只原地踏步，就先把启停区改成写死前进。当前默认：
-#    - USE_DIRECT_START_FORWARD = True
-#    - line_follow_before_jump / line_follow_to_obstacle_entry 用
-#      forward_steps，不依赖视觉巡线。
-#    以后黑线识别稳定后，再改成 False，恢复巡线前进。
+# 3.1 启停区巡线与跳跃：
+#    - START_LINE_FOLLOW_BEFORE_JUMP_SEC：起步后先巡线多久再前跳，默认 2 秒。
+#    - LINE_LOST_SWITCH_SEC：跳后继续巡线，黑线持续看不到多久后切入避障区。
+#      过早切避障就调大，进避障太晚就调小。
 #
 # 4. SDK动作阶段 RouteStage 的字段：
 #    - sdk_action：'balance_stand' / 'economic_gait' / 'front_jump' /
@@ -94,14 +93,19 @@ class RouteStage:
 FORWARD_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.30
-LINE_FOLLOW_START_SETTLE_SEC = 0.50
-LINE_FOLLOW_STOP_SETTLE_SEC = 0.30
+LINE_FOLLOW_START_SETTLE_SEC = 0.0
+LINE_FOLLOW_STOP_SETTLE_SEC = 0.0
+START_LINE_FOLLOW_BEFORE_JUMP_SEC = 2.0
 LINE_VISIBLE_WAIT_TIMEOUT_SEC = 10.0
-DEFAULT_FORWARD_SPEED_MPS = 0.25
+LINE_LOST_SWITCH_SEC = 0.60
+LINE_TRACK_STALE_SEC = 0.80
+LINE_FOLLOW_UNTIL_LOST_MAX_SEC = 35.0
+DEFAULT_FORWARD_SPEED_MPS = 0.35
 DEFAULT_TURN_SPEED_RADPS = 0.80
-# 当前避障区先切续航步态，所以转弯默认不额外给前进速度。
-# 如果后面想恢复边走边转，把这里改成 0.25/0.30，或单独给 left/right 传 vx_mps。
-DEFAULT_TURN_FORWARD_SPEED_MPS = 0.0
+# 避障区转弯时也要给前进速度，避免原地扭腿。
+# 你的 Go2 实测 0.27m/s 以下基本不往前走，所以这里默认用 0.30。
+# 如果转弯半径太大容易撞墙，先降到 0.27；如果还是像原地转，升到 0.35。
+DEFAULT_TURN_FORWARD_SPEED_MPS = 0.24
 START_FORWARD_SPEED_MPS = 0.35
 USE_DIRECT_START_FORWARD = False
 
@@ -136,10 +140,8 @@ SDK_LD_LIBRARY_PATH_PREFIX = (
 
 ENABLE_START_SEQUENCE = True
 START_FROM_PRONE = False
-ENABLE_FRONT_JUMP = False
+ENABLE_FRONT_JUMP = True
 ENABLE_OBSTACLE_ROUTE = True
-ALIGN_LINE_BEFORE_OBSTACLE = True
-OBSTACLE_ALIGN_LINE_STEPS = 4
 
 MISSION_START_TOPIC = '/mission/start'
 MISSION_STOP_TOPIC = '/mission/stop'
@@ -157,7 +159,7 @@ def forward(steps, speed_mps=DEFAULT_FORWARD_SPEED_MPS):
 
 def left(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
          wz_radps=DEFAULT_TURN_SPEED_RADPS):
-    """避障区：左转多少度。默认续航步态原地转。"""
+    """避障区：边走边左转多少度。"""
     return {
         'type': 'turn',
         'direction': 'left',
@@ -169,7 +171,7 @@ def left(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
 
 def right(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
           wz_radps=DEFAULT_TURN_SPEED_RADPS):
-    """避障区：右转多少度。默认续航步态原地转。"""
+    """避障区：边走边右转多少度。"""
     return {
         'type': 'turn',
         'direction': 'right',
@@ -201,7 +203,7 @@ def build_obstacle_route_stages(commands):
             stages.append(RouteStage(
                 name=f'obstacle_{index:02d}_{direction}',
                 description=(
-                    f'避障动作{index}：'
+                    f'避障动作{index}：边走边'
                     f'{"左" if direction == "left" else "右"}转 '
                     f'{degrees:.1f} 度'
                 ),
@@ -223,25 +225,26 @@ def build_obstacle_route_stages(commands):
 # 写法非常直接：直走、左转、直走、右转……
 # 例子：
 #   forward(13)      # 直走13步
-#   left(140)        # 续航步态左转140度，不额外前进
-#   right(120, vx_mps=0.25)  # 如果想边走边转，可以单独加 vx_mps
+#   left(140)        # 边走边左转140度
+#   right(120, vx_mps=0.35)  # 右转120度，转弯时前进速度0.35
 #
 # 调参建议：
 #   - 直走距离不够：改 forward(...) 里的步数。
 #   - 转弯角度不够：改 left/right(...) 里的角度。
-#   - 默认是原地转；如果需要弧线转弯，就给 left/right 加 vx_mps=0.25。
+#   - 转弯像原地转：把 vx_mps 加到 0.35。
+#   - 转弯半径太大：把 vx_mps 降到 0.27。
 OBSTACLE_ROUTE = [
-    forward(13),      # 入口向上直走
-    left(140),        # 左转进入顶部横向通道
-    forward(5),       # 顶部横向通道前进
-    left(140),        # 左转进入中间向下通道
-    forward(3),       # 中间通道向下
-    right(140),       # 右转进入底部横向通道
-    forward(3),       # 底部通道前进
+    forward(18),      # 入口向上直走
+    left(130),        # 左转进入顶部横向通道
+    forward(3),
+    left(130),        # 左转进入中间向下通道
+    forward(9),       # 中间通道向下
+    right(120),       # 右转进入底部横向通道
+    forward(9),       # 底部通道前进
     right(160),       # 右转进入左侧向上通道
-    forward(3),       # 左侧通道向上
-    left(140),        # 左转对准出口
-    forward(3),       # 出口直走
+    forward(9),       # 左侧通道向上
+    left(160),        # 左转对准出口
+    forward(9),       # 出口直走
 ]
 
 
@@ -273,16 +276,14 @@ ROUTE_STAGES = [
         sdk_wait_sec=0.0,
         enabled=ENABLE_START_SEQUENCE,
     ),
-    # 第0-4阶段：跳前向前走。当前默认写死前进，不再依赖巡线。
-    # 当前 USE_DIRECT_START_FORWARD=False，所以这里调用现有巡线节点。
+    # 第0-4阶段：起步后先巡线2秒，让狗沿黑线走到跳跃前位置。
+    # 要改跳前巡线时间，就改 START_LINE_FOLLOW_BEFORE_JUMP_SEC。
     RouteStage(
         name='line_follow_before_jump',
-        description='第0-4阶段：启停区巡线向前，到中继位置',
-        forward_steps=10 if USE_DIRECT_START_FORWARD else 0,
-        forward_speed_mps=START_FORWARD_SPEED_MPS,
-        line_follow_steps=0 if USE_DIRECT_START_FORWARD else 10,
+        description='第0-4阶段：启停区巡线2秒，到跳跃前位置',
+        line_follow_duration_sec=START_LINE_FOLLOW_BEFORE_JUMP_SEC,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
-        enabled=ENABLE_START_SEQUENCE,
+        enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
     # 第0-5阶段：执行一次前跳。
     RouteStage(
@@ -307,33 +308,15 @@ ROUTE_STAGES = [
         sdk_wait_sec=0.0,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
-    # 第0-8阶段：继续调用巡线进入避障区入口，保证进入位置和朝向更一致。
+    # 第0-8阶段：跳后继续调用现有巡线。黑线持续消失后，
+    # 自动 mission_stop，然后接入下面的避障区写死路线。
     RouteStage(
-        name='line_follow_to_obstacle_entry',
-        description='第0-8阶段：巡线向前进入避障区入口',
-        forward_steps=12 if USE_DIRECT_START_FORWARD else 0,
-        forward_speed_mps=START_FORWARD_SPEED_MPS,
-        line_follow_steps=0 if USE_DIRECT_START_FORWARD else 12,
+        name='line_follow_until_obstacle_entry',
+        description='第0-8阶段：跳后巡线，黑线消失后切入避障区',
+        line_follow_until_lost=True,
+        line_follow_duration_sec=LINE_FOLLOW_UNTIL_LOST_MAX_SEC,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         enabled=ENABLE_START_SEQUENCE,
-    ),
-
-    # 避障区写死路线前：再短距离巡线一次，用黑线把车身对齐。
-    RouteStage(
-        name='obstacle_line_align',
-        description='避障区入口前：调用巡线对齐黑线',
-        line_follow_steps=OBSTACLE_ALIGN_LINE_STEPS,
-        line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
-        enabled=ENABLE_OBSTACLE_ROUTE and ALIGN_LINE_BEFORE_OBSTACLE,
-    ),
-
-    # 避障区开始前：切换续航步态，让转弯和低速行走更柔和。
-    RouteStage(
-        name='obstacle_economic_gait',
-        description='避障区开始前：切换续航步态',
-        sdk_action='economic_gait',
-        sdk_wait_sec=0.30,
-        enabled=ENABLE_OBSTACLE_ROUTE,
     ),
 
     *build_obstacle_route_stages(OBSTACLE_ROUTE),
@@ -379,6 +362,14 @@ class ObstacleDirectRouteNode(Node):
         self.line_visible_wait_timeout_sec = float(self.declare_parameter(
             'line_visible_wait_timeout_sec',
             LINE_VISIBLE_WAIT_TIMEOUT_SEC
+        ).value)
+        self.line_lost_switch_sec = float(self.declare_parameter(
+            'line_lost_switch_sec',
+            LINE_LOST_SWITCH_SEC
+        ).value)
+        self.line_track_stale_sec = float(self.declare_parameter(
+            'line_track_stale_sec',
+            LINE_TRACK_STALE_SEC
         ).value)
         self.publish_rate_hz = float(self.declare_parameter(
             'publish_rate_hz',
@@ -502,6 +493,8 @@ class ObstacleDirectRouteNode(Node):
             'line_visible_wait_timeout_sec': (
                 self.line_visible_wait_timeout_sec
             ),
+            'line_lost_switch_sec': self.line_lost_switch_sec,
+            'line_track_stale_sec': self.line_track_stale_sec,
         }
         for name, value in nonnegative.items():
             if not math.isfinite(value) or value < 0.0:
@@ -596,7 +589,8 @@ class ObstacleDirectRouteNode(Node):
             has_turn = stage.turn_direction != 'none'
             has_sdk_action = stage.sdk_action != 'none'
             has_line_follow = (
-                stage.line_follow_steps > 0
+                stage.line_follow_until_lost
+                or stage.line_follow_steps > 0
                 or stage.line_follow_duration_sec > 0.0
             )
 
@@ -705,6 +699,10 @@ class ObstacleDirectRouteNode(Node):
             self._run_sdk_action(index, total, stage)
             return
 
+        if stage.line_follow_until_lost:
+            self._run_line_follow_until_lost(index, total, stage)
+            return
+
         if (
             stage.line_follow_steps > 0
             or stage.line_follow_duration_sec > 0.0
@@ -735,6 +733,20 @@ class ObstacleDirectRouteNode(Node):
     def _on_line_track(self, msg):
         self._last_line_track_msg = msg
         self._last_line_track_time = time.monotonic()
+
+    def _line_is_visible_now(self):
+        now = time.monotonic()
+        if self._last_line_track_msg is None:
+            return False, 'no_line_track'
+
+        age = now - float(self._last_line_track_time or now)
+        if age > self.line_track_stale_sec:
+            return False, f'line_track_stale_{age:.2f}s'
+
+        if not bool(self._last_line_track_msg.line_visible):
+            return False, 'line_visible_false'
+
+        return True, 'line_visible'
 
     def _run_line_follow(self, index, total, stage):
         duration_sec = self._line_follow_duration_sec(stage)
@@ -772,6 +784,103 @@ class ObstacleDirectRouteNode(Node):
             LINE_FOLLOW_STOP_SETTLE_SEC
         )
 
+    def _run_line_follow_until_lost(self, index, total, stage):
+        max_duration_sec = stage.line_follow_duration_sec
+
+        self.get_logger().warn(
+            f'route stage {index}/{total}: {stage.name} line_follow_until_lost, '
+            f'max_duration={max_duration_sec:.2f}s, '
+            f'lost_switch={self.line_lost_switch_sec:.2f}s, '
+            f'stale_timeout={self.line_track_stale_sec:.2f}s'
+        )
+
+        self._wait_for_line_visible(stage.name)
+        self._publish_stop(
+            f'before line follow until lost {stage.name}',
+            LINE_FOLLOW_START_SETTLE_SEC
+        )
+        self._publish_mission_command(
+            self.mission_start_publisher,
+            True,
+            f'{stage.name} mission_start',
+            LINE_FOLLOW_START_SETTLE_SEC
+        )
+
+        period_sec = 1.0 / self.publish_rate_hz
+        start_time = time.monotonic()
+        lost_since = None
+        last_report_time = 0.0
+        stop_reason = 'line_lost'
+
+        while rclpy.ok():
+            self._raise_if_stop_requested()
+            now = time.monotonic()
+
+            if max_duration_sec > 0.0 and now - start_time >= max_duration_sec:
+                stop_reason = 'max_duration_reached'
+                self.get_logger().warn(
+                    f'{stage.name}: max line-follow duration reached '
+                    f'({max_duration_sec:.2f}s); switching to obstacle route'
+                )
+                break
+
+            visible, reason = self._line_is_visible_now()
+            if visible:
+                if lost_since is not None:
+                    self.get_logger().info(
+                        f'{stage.name}: line recovered before switch, '
+                        f'lost_for={now - lost_since:.2f}s'
+                    )
+                lost_since = None
+            else:
+                if lost_since is None:
+                    lost_since = now
+                    self.get_logger().warn(
+                        f'{stage.name}: line lost candidate, reason={reason}'
+                    )
+
+                lost_for = now - lost_since
+                if lost_for >= self.line_lost_switch_sec:
+                    stop_reason = reason
+                    self.get_logger().warn(
+                        f'{stage.name}: line lost for {lost_for:.2f}s '
+                        f'(reason={reason}); switching to hardcoded obstacle '
+                        'route'
+                    )
+                    break
+
+            if now - last_report_time >= 1.0:
+                msg = self._last_line_track_msg
+                if msg is None:
+                    self.get_logger().info(
+                        f'{stage.name}: running line follow, no line_track yet'
+                    )
+                else:
+                    age = now - float(self._last_line_track_time or now)
+                    self.get_logger().info(
+                        f'{stage.name}: running line follow, '
+                        f'visible={bool(msg.line_visible)}, '
+                        f'confidence={msg.confidence:.3f}, '
+                        f'lateral={msg.lateral_error:.3f}, '
+                        f'heading={msg.heading_error:.3f}, '
+                        f'age={age:.2f}s'
+                    )
+                last_report_time = now
+
+            rclpy.spin_once(self, timeout_sec=0.0)
+            time.sleep(period_sec)
+
+        self._publish_mission_command(
+            self.mission_stop_publisher,
+            True,
+            f'{stage.name} mission_stop ({stop_reason})',
+            LINE_FOLLOW_STOP_SETTLE_SEC
+        )
+        self._publish_stop(
+            f'after line follow until lost {stage.name}',
+            LINE_FOLLOW_STOP_SETTLE_SEC
+        )
+
     def _wait_for_line_visible(self, stage_name):
         timeout_sec = self.line_visible_wait_timeout_sec
         if timeout_sec <= 0.0:
@@ -787,16 +896,16 @@ class ObstacleDirectRouteNode(Node):
         while rclpy.ok():
             self._raise_if_stop_requested()
             now = time.monotonic()
-            if self._last_line_track_msg is not None:
-                age = now - float(self._last_line_track_time or now)
-                if bool(self._last_line_track_msg.line_visible) and age <= 0.5:
-                    self.get_logger().info(
-                        f'{stage_name}: line visible, '
-                        f'confidence={self._last_line_track_msg.confidence:.3f}, '
-                        f'lateral={self._last_line_track_msg.lateral_error:.3f}, '
-                        f'heading={self._last_line_track_msg.heading_error:.3f}'
-                    )
-                    return
+            visible, _reason = self._line_is_visible_now()
+            if visible:
+                msg = self._last_line_track_msg
+                self.get_logger().info(
+                    f'{stage_name}: line visible, '
+                    f'confidence={msg.confidence:.3f}, '
+                    f'lateral={msg.lateral_error:.3f}, '
+                    f'heading={msg.heading_error:.3f}'
+                )
+                return
 
             elapsed = now - start_time
             if elapsed >= timeout_sec:
@@ -885,9 +994,13 @@ class ObstacleDirectRouteNode(Node):
             + self.sdk_action_timeout_padding_sec
         )
 
+        pre_stop_sec = self.sdk_action_pre_stop_sec
+        if stage.sdk_action == 'front_jump':
+            pre_stop_sec = max(pre_stop_sec, FRONT_JUMP_CMD_STOP_SEC)
+
         self._publish_stop(
             f'before sdk action {stage.name}',
-            self.sdk_action_pre_stop_sec
+            pre_stop_sec
         )
         self.get_logger().warn(
             f'route stage {index}/{total}: {stage.name} sdk_action, '
