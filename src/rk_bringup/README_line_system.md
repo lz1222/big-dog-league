@@ -190,6 +190,64 @@ Check the ROS topic chain:
 For installed scripts, replace `~/rk_inspection_ws/src/rk_bringup/scripts/`
 with `~/rk_inspection_ws/install/rk_bringup/share/rk_bringup/scripts/`.
 
+## Keyboard Route Recording
+
+For manual route teaching, start the normal line system first so the SDK UDP
+bridge, camera, line tracker, and line follower are available:
+
+```bash
+~/rk_inspection_ws/src/rk_bringup/scripts/start_line_system.sh
+```
+
+Then open a foreground terminal and record the route:
+
+```bash
+~/rk_inspection_ws/src/rk_bringup/scripts/start_keyboard_route_record.sh
+```
+
+Keyboard controls:
+
+- `w`: forward.
+- `s`: backward.
+- `a`: turn left.
+- `d`: turn right.
+- `x`: switch to `economic_gait`.
+- `c`: switch to normal gait, mapped to `balance_stand` by default.
+- Space: stop and record a pause.
+- `l`: insert a timed line-follow stage.
+- `u`: insert a line-follow-until-lost stage.
+- `q`: finish and save the route.
+
+The route is saved to `~/rk_keyboard_routes/latest_route.json` by default. To
+use a named route:
+
+```bash
+export RK_KEYBOARD_ROUTE_FILE=~/rk_keyboard_routes/main_route.json
+```
+
+Replay the saved route:
+
+```bash
+~/rk_inspection_ws/src/rk_bringup/scripts/replay_keyboard_route.sh
+```
+
+Useful tuning variables:
+
+```bash
+export RK_KEYBOARD_FORWARD_SPEED=0.30
+export RK_KEYBOARD_BACKWARD_SPEED=0.20
+export RK_KEYBOARD_TURN_SPEED=0.60
+export RK_KEYBOARD_LINE_FOLLOW_SEC=3.0
+export RK_KEYBOARD_REPLAY_SPEED_SCALE=0.8
+export RK_KEYBOARD_REPLAY_DURATION_SCALE=1.0
+```
+
+During keyboard replay, direct route segments publish `/navigation/cmd_vel`.
+Line-follow stages first send `/mission/start`, wait for the recorded condition
+or duration, then send `/mission/stop` before returning to the recorded route.
+This is a manual test path; the normal line-follow-only chain remains the one
+documented above.
+
 ## Background Processes
 
 `start_line_system.sh` starts these processes in the background:

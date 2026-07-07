@@ -8,7 +8,10 @@ setup(
     version='0.0.1',
     packages=[package_name],
     data_files=[
-        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
+        (
+            'share/ament_index/resource_index/packages',
+            ['resource/' + package_name]
+        ),
         ('share/' + package_name, ['package.xml']),
     ],
     install_requires=['setuptools'],
@@ -30,6 +33,10 @@ setup(
             'rk_tools.obstacle_direct_route_node:main',
             'depth_wall_distance_node = '
             'rk_tools.depth_wall_distance_node:main',
+            'keyboard_route_node = rk_tools.keyboard_route_node:main',
+            'keyboard_route_recorder = '
+            'rk_tools.keyboard_route_node:record_main',
+            'keyboard_route_replay = rk_tools.keyboard_route_node:replay_main',
         ],
     },
 )
