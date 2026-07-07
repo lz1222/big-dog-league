@@ -19,13 +19,7 @@ SDK_SERVER_ENV = {
         '/home/unitree/cyclonedds_ws/install/cyclonedds/lib'
     ),
 }
-FORWARDER_ENV = {
-    'ROS_DOMAIN_ID': '10',
-    'LD_LIBRARY_PATH': (
-        '/opt/ros/foxy/lib/aarch64-linux-gnu:'
-        '/opt/ros/foxy/lib'
-    ),
-}
+FORWARDER_ENV = {}
 
 
 def generate_launch_description():
@@ -172,11 +166,8 @@ def generate_launch_description():
                 line_nav_config,
                 {
                     'image_topic': image_topic,
-                    'enable_debug_image': ParameterValue(
-                        debug,
-                        value_type=bool
-                    ),
-                    'debug_log': ParameterValue(debug, value_type=bool),
+                    'enable_debug_image': True,
+                    'debug_log': True,
                 },
             ],
         ),
