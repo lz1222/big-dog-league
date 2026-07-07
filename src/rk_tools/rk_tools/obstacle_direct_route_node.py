@@ -118,7 +118,11 @@ SDK_ACTION_API_IDS = {
     'economic_gait': 1063,
 }
 SDK_LD_LIBRARY_PATH_PREFIX = (
-    '/home/unitree/rk_inspection_ws/third_party/unitree_sdk2/install/lib',
+    '/home/unitree/rk_inspection_ws/third_party/unitree_sdk2_official/'
+    'thirdparty/lib/aarch64',
+    '/home/unitree/rk_inspection_ws/install/rk_go2_sdk_bridge/lib',
+    '/home/unitree/rk_inspection_ws/third_party/unitree_sdk2_official/'
+    'thirdparty/lib/x86_64',
     '/usr/local/lib',
     '/home/unitree/cyclonedds_ws/install/cyclonedds/lib',
 )
