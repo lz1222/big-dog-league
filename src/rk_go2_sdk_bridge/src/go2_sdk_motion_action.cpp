@@ -34,6 +34,9 @@ int32_t RunAction(unitree::robot::go2::SportClient& sport_client,
   if (action == "balance_stand") {
     return sport_client.BalanceStand();
   }
+  if (action == "stand_up") {
+    return sport_client.StandUp();
+  }
   if (action == "economic_gait") {
     return sport_client.EconomicGait();
   }
@@ -57,8 +60,8 @@ void PrintUsage(const char* program)
       << "  " << program
       << " <network_interface> <action> [wait_sec]\n\n"
       << "Actions:\n"
-      << "  balance_stand | economic_gait | front_jump | recovery_stand | "
-         "stop_move\n\n"
+      << "  stand_up | balance_stand | economic_gait | front_jump | "
+         "recovery_stand | stop_move\n\n"
       << "Example:\n"
       << "  " << program << " eth0 front_jump 2.5\n";
 }

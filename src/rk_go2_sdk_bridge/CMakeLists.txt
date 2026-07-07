@@ -8,12 +8,24 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 
-set(RK_UNITREE_SDK2_PREFIX
+set(RK_UNITREE_SDK2_CANDIDATES
+  "$ENV{UNITREE_SDK2_PREFIX}"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/unitree_sdk2/install"
+  "/home/unitree/rk_inspection_ws/third_party/unitree_sdk2/install"
+  "/home/unitree/unitree_sdk2/install"
+  "/home/unitree/unitree_go2_sdk_test/unitree_sdk2/install"
+  "/usr/local"
 )
-if(EXISTS "${RK_UNITREE_SDK2_PREFIX}/lib/cmake/unitree_sdk2/unitree_sdk2Config.cmake")
-  list(PREPEND CMAKE_PREFIX_PATH "${RK_UNITREE_SDK2_PREFIX}")
-endif()
+
+set(RK_UNITREE_SDK2_PREFIX "")
+foreach(candidate ${RK_UNITREE_SDK2_CANDIDATES})
+  if(candidate AND
+      EXISTS "${candidate}/lib/cmake/unitree_sdk2/unitree_sdk2Config.cmake")
+    set(RK_UNITREE_SDK2_PREFIX "${candidate}")
+    list(PREPEND CMAKE_PREFIX_PATH "${candidate}")
+    break()
+  endif()
+endforeach()
 
 find_package(unitree_sdk2 QUIET)
 
