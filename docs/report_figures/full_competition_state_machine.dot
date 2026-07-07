@@ -1,0 +1,52 @@
+digraph G {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    pad="0.25",
+    fontname="Noto Sans CJK SC",
+    label="完整比赛流程状态机图",
+    labelloc=t,
+    fontsize=26
+  ];
+  node [
+    shape=plain,
+    fontname="Noto Sans CJK SC"
+  ];
+
+  state_table [
+    label=<
+      <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="10" COLOR="#2F3A4A">
+        <TR>
+          <TD BGCOLOR="#EAF2FF"><FONT POINT-SIZE="18"><B>阶段组</B></FONT></TD>
+          <TD BGCOLOR="#EAF2FF"><FONT POINT-SIZE="18"><B>状态流转</B></FONT></TD>
+          <TD BGCOLOR="#EAF2FF"><FONT POINT-SIZE="18"><B>关键动作与输出</B></FONT></TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#FFF8E8"><FONT POINT-SIZE="16"><B>1. 启动与起点</B></FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">PRECHECK → WAIT_START → START_JUMP → FOLLOW_TO_AVOID_ENTRY → AVOID_ZONE</FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">完成赛前检查、等待裁判开始、跳过起点障碍，巡线进入并通过避障区。</FONT></TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#ECFFF5"><FONT POINT-SIZE="16"><B>2. 台阶与抓取平台</B></FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">FOLLOW_TO_STAIRS → STAIRS_UP_DOWN → FOLLOW_TO_PICK_PLATFORM → DETECT_PICK_SIGN → PICK_START_ITEM</FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">巡线到台阶、上下三级台阶，识别一号/二号放置标志并抓取起始物资。</FONT></TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#FFF1F1"><FONT POINT-SIZE="16"><B>3. 中转与检测平台</B></FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">FOLLOW_TO_TRANSFER_PLATFORM → DROP_START_ITEM → PICK_FIELD_ITEM → FOLLOW_TO_CHECK_POINT → DETECT_WARNING_SIGN → DO_WARNING_ACTION</FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">卸载起始物资、抓取场地物资，识别警示标志并执行伸懒腰/打招呼/闪灯动作。</FONT></TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#F2ECFF"><FONT POINT-SIZE="16"><B>4. 放置与终点</B></FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">FOLLOW_TO_PLACE_PLATFORM → PLACE_FIELD_ITEM → FOLLOW_TO_FINISH_JUMP → FINISH_JUMP → RETURN_TO_START_ZONE → FINAL_STOP → DONE</FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">根据放置标志前往指定平台放置物资，跳过终点障碍，返回启停区并稳定停靠。</FONT></TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#F7F7F7"><FONT POINT-SIZE="16"><B>条件映射</B></FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">DETECT_PICK_SIGN：1号→place_platform_1，2号→place_platform_2<BR/>DETECT_WARNING_SIGN：electric→stretch，oxidizer→wave，radiation→blink_front_light_3</FONT></TD>
+          <TD ALIGN="LEFT"><FONT POINT-SIZE="15">状态机根据抽签结果自动选择目标平台和警示动作，保证完整比赛流程连续通过。</FONT></TD>
+        </TR>
+      </TABLE>
+    >
+  ];
+}
