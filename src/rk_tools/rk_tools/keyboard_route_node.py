@@ -88,6 +88,10 @@ class KeyboardRouteNode(Node):
         )
         self.turn_speed = self._nonnegative_float_parameter(
             'turn_speed',
+            0.80
+        )
+        self.turn_linear_speed = self._nonnegative_float_parameter(
+            'turn_linear_speed',
             0.30
         )
         self.key_action_duration_sec = self._positive_float_parameter(
@@ -306,7 +310,7 @@ class KeyboardRouteNode(Node):
         print('', flush=True)
         print('Keyboard route recording controls:', flush=True)
         print(
-            '  w forward, s backward, a turn left, d turn right',
+            '  w forward, s backward, a forward-left, d forward-right',
             flush=True
         )
         print(
@@ -406,7 +410,10 @@ class KeyboardRouteNode(Node):
         self.get_logger().warn(
             f'recorded sdk_action label={label}, action={action}'
         )
-        self._run_sdk_action_segment(segment)
+        self._run_sdk_action_segment(segment, fatal=False)
+        self.get_logger().info(
+            f'sdk_action key {key!r} finished; recorder stays active'
+        )
 
     def _record_line_follow_segment(self, segment):
         self._finalize_active_motion(f'key {segment["mode"]}')
@@ -429,10 +436,12 @@ class KeyboardRouteNode(Node):
             label = 'backward'
             cmd.linear.x = -self.backward_speed
         elif key == 'a':
-            label = 'turn_left'
+            label = 'forward_left'
+            cmd.linear.x = self.turn_linear_speed
             cmd.angular.z = self.turn_speed
         elif key == 'd':
-            label = 'turn_right'
+            label = 'forward_right'
+            cmd.linear.x = self.turn_linear_speed
             cmd.angular.z = -self.turn_speed
         else:
             label = 'stop'
@@ -476,8 +485,8 @@ class KeyboardRouteNode(Node):
             'controls': {
                 'w': 'forward',
                 's': 'backward',
-                'a': 'turn_left',
-                'd': 'turn_right',
+                'a': 'forward_left',
+                'd': 'forward_right',
                 'x': 'economic_gait',
                 'c': 'normal_gait',
                 'l': 'line_follow_duration',
@@ -577,7 +586,10 @@ class KeyboardRouteNode(Node):
         )
         self._publish_for_duration(cmd, duration_sec)
 
-    def _run_sdk_action_segment(self, segment):
+    def _run_sdk_action_segment(self, segment, fatal=None):
+        if fatal is None:
+            fatal = self.require_sdk_actions
+
         if not self.execute_sdk_actions:
             self.get_logger().warn(
                 f'skip sdk_action because execute_sdk_actions=false: '
@@ -611,21 +623,25 @@ class KeyboardRouteNode(Node):
                     break
                 if time.monotonic() >= deadline:
                     self._terminate_active_sdk_process()
-                    raise RuntimeError(
-                        f'sdk_action {action} timeout after '
-                        f'{timeout_sec:.2f}s'
+                    self._handle_sdk_action_error(
+                        (
+                            f'sdk_action {action} timeout after '
+                            f'{timeout_sec:.2f}s'
+                        ),
+                        fatal
                     )
+                    return
                 rclpy.spin_once(self, timeout_sec=0.0)
                 time.sleep(0.05)
         except FileNotFoundError as error:
             message = f'sdk action helper not found: {error}'
-            if self.require_sdk_actions:
+            if fatal:
                 raise RuntimeError(message) from error
             self.get_logger().error(message)
             return
         except OSError as error:
             message = f'failed to start sdk action helper: {error}'
-            if self.require_sdk_actions:
+            if fatal:
                 raise RuntimeError(message) from error
             self.get_logger().error(message)
             return
@@ -636,9 +652,12 @@ class KeyboardRouteNode(Node):
             message = (
                 f'sdk_action {action} failed with exit code {return_code}'
             )
-            if self.require_sdk_actions:
-                raise RuntimeError(message)
-            self.get_logger().error(message)
+            self._handle_sdk_action_error(message, fatal)
+
+    def _handle_sdk_action_error(self, message, fatal):
+        if fatal:
+            raise RuntimeError(message)
+        self.get_logger().error(message)
 
     def _run_line_follow_segment(self, segment):
         until_lost = bool(segment.get('until_lost', False))
