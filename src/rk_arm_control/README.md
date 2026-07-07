@@ -13,6 +13,12 @@ driver should be connected inside `DryRunArmAdapter` in
 `rk_arm_control/arm_task_node.py` at the TODO comments for joint and gripper
 commands.
 
+The camera-XY D1 pick flow requested for the fixed grasp platform is also kept
+in this package as `d1_pick_node`. A separate `rk_d1_arm_control` package was
+not added because this repository already has `rk_arm_control`, `/arm/status`,
+and `/arm/control_lock`. Do not run `arm_task_node` and `d1_pick_node` at the
+same time because both listen on `/arm/command_json`.
+
 ## Build
 
 ```bash
@@ -39,6 +45,109 @@ Optional custom pose file:
 ```bash
 ros2 launch rk_arm_control arm_task.launch.py config_file:=/path/to/arm_poses.yaml
 ```
+
+## D1 Camera-XY Pick Node
+
+This node uses the latest camera XY target, applies a simple 2D affine
+`camera_to_arm` transform, then uses fixed Z heights from
+`config/d1_arm_params.yaml`.
+
+Subscribed topics:
+
+- `/arm/command_json` (`std_msgs/msg/String`)
+- `/perception/object_xy_json` (`std_msgs/msg/String`)
+- `/perception/object_xy` (`geometry_msgs/msg/PointStamped`)
+
+Published topics:
+
+- `/arm/status` (`std_msgs/msg/String`, JSON)
+- `/arm/control_lock` (`std_msgs/msg/Bool`)
+
+Supported commands:
+
+- `{"task":"PICK_BY_CAMERA"}`
+- `{"task":"PICK_START"}`
+- `{"task":"PLACE_TRANSFER"}`
+- `{"task":"HOME"}`
+- `{"task":"OPEN_GRIPPER"}`
+- `{"task":"CLOSE_GRIPPER"}`
+- `{"task":"ABORT"}`
+
+Start dry-run:
+
+```bash
+ros2 launch rk_arm_control d1_pick.launch.py dry_run:=true
+```
+
+Start real D1 SDK mode:
+
+```bash
+ros2 launch rk_arm_control d1_pick.launch.py dry_run:=false
+```
+
+Current real SDK status: **not fully wired**. The imported D1 SDK under
+`third_party/unitree_d1_sdk` exposes C++ DDS examples that publish JSON strings
+to `rt/arm_Command`, including:
+
+- `third_party/unitree_d1_sdk/src/joint_angle_control.cpp`
+- `third_party/unitree_d1_sdk/src/multiple_joint_angle_control.cpp`
+- `third_party/unitree_d1_sdk/src/joint_enable_control.cpp`
+- `third_party/unitree_d1_sdk/src/arm_zero_control.cpp`
+
+No confirmed Python Cartesian XYZ API or safe gripper API was found. Therefore
+all real hardware hooks are isolated in `UnitreeD1SdkAdapter` inside
+`rk_arm_control/d1_pick_node.py`; with `dry_run:=false`, commands fail
+gracefully with clear TODO logs instead of crashing. To finish real hardware
+wiring, provide either a callable D1 Python/C++ binding for Cartesian pose and
+gripper commands, or fill `pose_table.calibrated_points_json` with measured
+fixed-platform XYZ-to-joint samples and wire the joint publisher in
+`UnitreeD1SdkAdapter._send_joint_pose()`.
+
+Simulate camera XY:
+
+```bash
+ros2 topic pub --once /perception/object_xy_json std_msgs/msg/String "{data: '{\"x\":0.12,\"y\":-0.03,\"confidence\":0.90,\"frame_id\":\"camera_link\",\"stamp\":1780000000.0}'}"
+```
+
+Execute pick:
+
+```bash
+ros2 topic pub --once /arm/command_json std_msgs/msg/String "{data: '{\"task\":\"PICK_BY_CAMERA\"}'}"
+```
+
+Place to transfer platform:
+
+```bash
+ros2 topic pub --once /arm/command_json std_msgs/msg/String "{data: '{\"task\":\"PLACE_TRANSFER\"}'}"
+```
+
+Home, gripper, and abort:
+
+```bash
+ros2 topic pub --once /arm/command_json std_msgs/msg/String "{data: '{\"task\":\"HOME\"}'}"
+ros2 topic pub --once /arm/command_json std_msgs/msg/String "{data: '{\"task\":\"OPEN_GRIPPER\"}'}"
+ros2 topic pub --once /arm/command_json std_msgs/msg/String "{data: '{\"task\":\"CLOSE_GRIPPER\"}'}"
+ros2 topic pub --once /arm/command_json std_msgs/msg/String "{data: '{\"task\":\"ABORT\"}'}"
+```
+
+Watch state:
+
+```bash
+ros2 topic echo /arm/status
+ros2 topic echo /arm/control_lock
+```
+
+`d1_pick_node` statuses include `IDLE`, `RUNNING`, `DONE`, `FAILED`,
+`ABORTED`, `BUSY`, `TIMEOUT`, `NO_TARGET`, and `OUT_OF_WORKSPACE`.
+
+State-machine integration:
+
+- After reaching the grasp platform and stopping, publish
+  `{"task":"PICK_BY_CAMERA"}`.
+- Wait for `/arm/status` state `DONE`, then continue line following.
+- If state is `NO_TARGET`, `OUT_OF_WORKSPACE`, `FAILED`, or `TIMEOUT`, retry
+  once or enter manual handling.
+- After reaching the transfer platform, publish `{"task":"PLACE_TRANSFER"}`.
 
 ## Topic Test Commands
 
@@ -114,4 +223,3 @@ task names are also accepted:
 `PLACE_TARGET`:
 
 `HOME -> MOVE_PRE_PLACE_TARGET -> MOVE_PLACE_TARGET -> OPEN_GRIPPER -> WAIT -> MOVE_LIFT_TARGET -> HOME`
-

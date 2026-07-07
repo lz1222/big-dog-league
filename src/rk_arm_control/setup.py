@@ -28,6 +28,7 @@ setup(
     entry_points={
         'console_scripts': [
             'arm_task_node = rk_arm_control.arm_task_node:main',
+            'd1_pick_node = rk_arm_control.d1_pick_node:main',
         ],
     },
 )
