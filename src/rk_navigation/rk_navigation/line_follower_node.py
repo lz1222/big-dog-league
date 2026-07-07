@@ -51,6 +51,7 @@ class LineFollowerNode(Node):
         self.declare_parameter('control_rate_hz', 10.0)
         self.declare_parameter('debug_log', True)
 
+        self.declare_parameter('min_driving_speed', 0.27)
         self.declare_parameter('base_speed', 0.30)
         self.declare_parameter('mid_speed', 0.28)
         self.declare_parameter('slow_speed', 0.27)
@@ -114,6 +115,7 @@ class LineFollowerNode(Node):
         self.mission_started = False
         self.last_published_cmd_is_zero = True
         self.last_stop_reason = 'startup'
+        self.speed_floor_warning_keys = set()
 
         self.refresh_parameters()
 
@@ -172,9 +174,12 @@ class LineFollowerNode(Node):
             'debug_log'
         ).get_parameter_value().bool_value
 
-        self.base_speed = self.nonnegative_float_parameter('base_speed')
-        self.mid_speed = self.nonnegative_float_parameter('mid_speed')
-        self.slow_speed = self.nonnegative_float_parameter('slow_speed')
+        self.min_driving_speed = self.nonnegative_float_parameter(
+            'min_driving_speed'
+        )
+        self.base_speed = self.driving_speed_parameter('base_speed')
+        self.mid_speed = self.driving_speed_parameter('mid_speed')
+        self.slow_speed = self.driving_speed_parameter('slow_speed')
         self.error_slow_threshold = self.nonnegative_float_parameter(
             'error_slow_threshold'
         )
@@ -195,7 +200,7 @@ class LineFollowerNode(Node):
         self.short_lost_timeout = self.nonnegative_float_parameter(
             'short_lost_timeout'
         )
-        self.short_lost_linear_speed = self.nonnegative_float_parameter(
+        self.short_lost_linear_speed = self.driving_speed_parameter(
             'short_lost_linear_speed'
         )
         self.search_angular_speed = self.nonnegative_float_parameter(
@@ -220,7 +225,7 @@ class LineFollowerNode(Node):
         self.turn_lost_keep_time = self.nonnegative_float_parameter(
             'turn_lost_keep_time'
         )
-        self.lost_turn_linear_speed = self.nonnegative_float_parameter(
+        self.lost_turn_linear_speed = self.optional_driving_speed_parameter(
             'lost_turn_linear_speed'
         )
         self.lost_turn_angular_speed = self.nonnegative_float_parameter(
@@ -230,7 +235,7 @@ class LineFollowerNode(Node):
             'turn_lost_min_angular_z'
         )
 
-        self.search_linear_speed = self.nonnegative_float_parameter(
+        self.search_linear_speed = self.driving_speed_parameter(
             'search_linear_speed'
         )
         self.search_line_angular_speed = self.nonnegative_float_parameter(
@@ -834,6 +839,7 @@ class LineFollowerNode(Node):
             msg.lateral_error,
             msg.heading_error,
             msg.confidence,
+            self.min_driving_speed,
             self.base_speed,
             self.mid_speed,
             self.slow_speed,
@@ -926,6 +932,38 @@ class LineFollowerNode(Node):
         if value < 0.0:
             raise ValueError(f'{name} must be nonnegative')
         return value
+
+    def driving_speed_parameter(self, name):
+        return self.apply_min_driving_speed(
+            name,
+            self.nonnegative_float_parameter(name),
+            allow_zero=False
+        )
+
+    def optional_driving_speed_parameter(self, name):
+        return self.apply_min_driving_speed(
+            name,
+            self.nonnegative_float_parameter(name),
+            allow_zero=True
+        )
+
+    def apply_min_driving_speed(self, name, value, allow_zero):
+        if allow_zero and value == 0.0:
+            return 0.0
+
+        if value >= self.min_driving_speed:
+            return value
+
+        warning_key = (name, value, self.min_driving_speed)
+        if warning_key not in self.speed_floor_warning_keys:
+            self.speed_floor_warning_keys.add(warning_key)
+            self.get_logger().warn(
+                'Line speed below Go2 walking threshold; clamping: '
+                f'{name}={value:.3f}, '
+                f'min_driving_speed={self.min_driving_speed:.3f}'
+            )
+
+        return self.min_driving_speed
 
     def positive_float_parameter(self, name):
         value = self.finite_float_parameter(name)

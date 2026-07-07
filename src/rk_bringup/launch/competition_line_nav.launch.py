@@ -30,6 +30,12 @@ def generate_launch_description():
     sdk_server = LaunchConfiguration('sdk_server')
     start_realsense = LaunchConfiguration('start_realsense')
     image_topic = LaunchConfiguration('image_topic')
+    line_min_speed = LaunchConfiguration('line_min_speed')
+    line_base_speed = LaunchConfiguration('line_base_speed')
+    line_mid_speed = LaunchConfiguration('line_mid_speed')
+    line_slow_speed = LaunchConfiguration('line_slow_speed')
+    short_lost_linear_speed = LaunchConfiguration('short_lost_linear_speed')
+    search_linear_speed = LaunchConfiguration('search_linear_speed')
     bridge_max_linear_x = LaunchConfiguration('bridge_max_linear_x')
     bridge_max_angular_z = LaunchConfiguration('bridge_max_angular_z')
     zero_cmd_debounce_time = LaunchConfiguration('zero_cmd_debounce_time')
@@ -106,9 +112,42 @@ def generate_launch_description():
             description='RGB image topic consumed by real_line_tracker_node.'
         ),
         DeclareLaunchArgument(
+            'line_min_speed',
+            default_value='0.27',
+            description='Minimum nonzero forward speed used by line follower.'
+        ),
+        DeclareLaunchArgument(
+            'line_base_speed',
+            default_value='0.30',
+            description='Line follower straight-line speed in m/s.'
+        ),
+        DeclareLaunchArgument(
+            'line_mid_speed',
+            default_value='0.28',
+            description='Line follower medium error speed in m/s.'
+        ),
+        DeclareLaunchArgument(
+            'line_slow_speed',
+            default_value='0.27',
+            description='Line follower large error speed in m/s.'
+        ),
+        DeclareLaunchArgument(
+            'short_lost_linear_speed',
+            default_value='0.27',
+            description='Forward speed while briefly losing the line in m/s.'
+        ),
+        DeclareLaunchArgument(
+            'search_linear_speed',
+            default_value='0.27',
+            description='Forward speed while searching for the line in m/s.'
+        ),
+        DeclareLaunchArgument(
             'bridge_max_linear_x',
-            default_value='0.20',
-            description='cmd_vel bridge linear.x safety limit.'
+            default_value='0.30',
+            description=(
+                'cmd_vel bridge linear.x safety limit. Keep this at least '
+                'as high as the line follower base_speed.'
+            )
         ),
         DeclareLaunchArgument(
             'bridge_max_angular_z',
@@ -180,6 +219,30 @@ def generate_launch_description():
                 line_nav_config,
                 {
                     'debug_log': True,
+                    'min_driving_speed': ParameterValue(
+                        line_min_speed,
+                        value_type=float
+                    ),
+                    'base_speed': ParameterValue(
+                        line_base_speed,
+                        value_type=float
+                    ),
+                    'mid_speed': ParameterValue(
+                        line_mid_speed,
+                        value_type=float
+                    ),
+                    'slow_speed': ParameterValue(
+                        line_slow_speed,
+                        value_type=float
+                    ),
+                    'short_lost_linear_speed': ParameterValue(
+                        short_lost_linear_speed,
+                        value_type=float
+                    ),
+                    'search_linear_speed': ParameterValue(
+                        search_linear_speed,
+                        value_type=float
+                    ),
                 },
             ],
         ),
