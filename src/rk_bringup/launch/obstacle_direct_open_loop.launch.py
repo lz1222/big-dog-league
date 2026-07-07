@@ -96,7 +96,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'countdown_sec',
-            default_value='3.0',
+            default_value='0.0',
             description='Zero-cmd countdown before the route starts.'
         ),
         DeclareLaunchArgument(

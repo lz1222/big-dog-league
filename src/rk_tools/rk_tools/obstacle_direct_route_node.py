@@ -84,7 +84,7 @@ class RouteStage:
 #
 # 5. 推荐调试顺序：
 #    - 先单独确认巡线系统 line_visible=true。
-#    - 再测：站起 -> 巡线3步 -> 停。
+#    - 再测：站稳 -> 巡线3步 -> 停。
 #    - 再打开跳跃，确认 FrontJump。
 #    - 最后接巡线4步和避障区。
 #
@@ -128,6 +128,7 @@ SDK_LD_LIBRARY_PATH_PREFIX = (
 )
 
 ENABLE_START_SEQUENCE = True
+START_FROM_PRONE = False
 ENABLE_FRONT_JUMP = True
 ENABLE_OBSTACLE_ROUTE = True
 
@@ -136,15 +137,16 @@ MISSION_STOP_TOPIC = '/mission/stop'
 
 
 # 每一行就是一个阶段。你可以在同一个表里同时调：
-#   趴下起步、巡线三步、前跳、巡线四步、避障区。
+#   可选趴下起步、巡线三步、前跳、巡线四步、避障区。
 ROUTE_STAGES = [
-    # 第0-1阶段：比赛开始时机械狗从趴下/低姿态恢复站立。
+    # 第0-1阶段：如果比赛要求趴下起步，就把 START_FROM_PRONE 改成 True。
+    # 你现在说开始不用蹲下，所以默认跳过这一段。
     RouteStage(
         name='start_recovery_stand',
-        description='第0-1阶段：比赛开始，从趴下状态恢复站立',
+        description='第0-1阶段：可选从趴下状态恢复站立',
         sdk_action='recovery_stand',
         sdk_wait_sec=2.0,
-        enabled=ENABLE_START_SEQUENCE,
+        enabled=ENABLE_START_SEQUENCE and START_FROM_PRONE,
     ),
     # 第0-2阶段：站稳，准备接受 Move 速度控制。
     RouteStage(
@@ -364,7 +366,7 @@ class ObstacleDirectRouteNode(Node):
         ).value)
         self.countdown_sec = float(self.declare_parameter(
             'countdown_sec',
-            3.0
+            0.0
         ).value)
         self.pre_stop_sec = float(self.declare_parameter(
             'pre_stop_sec',
