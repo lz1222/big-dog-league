@@ -36,3 +36,37 @@ How to Build from Scratch?
 5. Call the shared libraries in C++ or Python to implement grasping. Example usage can be found in `src/test_grasp.py`.
 
 - Refer to the Unitree D1 Robotic Arm Development Guide: https://support.unitree.com/home/zh/developer/D1Arm_services
+
+## Servo Heating Diagnosis
+
+This workspace adds a passive diagnostic program:
+
+```bash
+cmake -S third_party/unitree_d1_sdk -B /tmp/unitree_d1_sdk_build
+cmake --build /tmp/unitree_d1_sdk_build --target d1_servo_heat_diagnosis -j2
+```
+
+Run it on the robot while the D1 arm is powered, but do not send new motion
+commands during the test:
+
+```bash
+source scripts/source_unitree_ros2.sh eth0
+LD_LIBRARY_PATH=$PWD/third_party/unitree_sdk2/install/lib:${LD_LIBRARY_PATH:-} \
+  /tmp/unitree_d1_sdk_build/d1_servo_heat_diagnosis eth0 30 1.0 2.0
+```
+
+Arguments:
+
+- `eth0`: Unitree/D1 network interface.
+- `30`: sampling duration in seconds.
+- `1.0`: speed warning threshold in deg/s.
+- `2.0`: angle range warning threshold in degrees.
+
+The tool only subscribes to `current_servo_angle`, `arm_Feedback`, and
+`rt/arm_Feedback`. It does not send `rt/arm_Command`.
+
+If a servo is marked `CHECK`, it is still moving, drifting, or jittering while
+powered, which can cause heat through repeated position correction. If all
+servos are stable but a joint is still hot, suspect holding torque, a hard
+limit, overextended pose, gripper clamping, calibration offset, or mechanical
+friction.
