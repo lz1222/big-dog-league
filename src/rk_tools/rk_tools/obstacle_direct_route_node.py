@@ -70,6 +70,13 @@ class RouteStage:
 #    - line_follow_speed_mps：自动计算时间时使用的巡线估算速度。
 #      你的 Go2 低于 0.27m/s 基本不动，所以默认按 0.30m/s 计算。
 #
+# 3.1 启停区前进：
+#    如果巡线阶段只原地踏步，就先把启停区改成写死前进。当前默认：
+#    - USE_DIRECT_START_FORWARD = True
+#    - line_follow_before_jump / line_follow_to_obstacle_entry 用
+#      forward_steps，不依赖视觉巡线。
+#    以后黑线识别稳定后，再改成 False，恢复巡线前进。
+#
 # 4. SDK动作阶段 RouteStage 的字段：
 #    - sdk_action：'balance_stand' / 'economic_gait' / 'front_jump' /
 #                  'recovery_stand' / 'stop_move'
@@ -96,16 +103,18 @@ class RouteStage:
 FORWARD_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.30
-LINE_FOLLOW_START_SETTLE_SEC = 0.30
-LINE_FOLLOW_STOP_SETTLE_SEC = 0.50
+LINE_FOLLOW_START_SETTLE_SEC = 0.0
+LINE_FOLLOW_STOP_SETTLE_SEC = 0.0
 DEFAULT_FORWARD_SPEED_MPS = 0.35
 DEFAULT_TURN_SPEED_RADPS = 0.80
 DEFAULT_TURN_FORWARD_SPEED_MPS = 0.16
+START_FORWARD_SPEED_MPS = 0.35
+USE_DIRECT_START_FORWARD = True
 
 SDK_NETWORK_INTERFACE = 'eth0'
 SDK_ACTION_EXECUTABLE = ''
 SDK_ACTION_TIMEOUT_PADDING_SEC = 6.0
-SDK_ACTION_PRE_STOP_SEC = 0.4
+SDK_ACTION_PRE_STOP_SEC = 0.0
 RUN_WITHOUT_SDK_ACTIONS = False
 ALLOW_ROS_TOPIC_SDK_ACTIONS = False
 SPORT_REQUEST_TOPIC = '/api/sport/request'
@@ -153,7 +162,7 @@ ROUTE_STAGES = [
         name='start_balance_stand',
         description='第0-2阶段：站稳准备巡线',
         sdk_action='balance_stand',
-        sdk_wait_sec=0.8,
+        sdk_wait_sec=0.0,
         enabled=ENABLE_START_SEQUENCE,
     ),
     # 第0-3阶段：切换续航步态，后面巡线和转弯更柔和。
@@ -161,15 +170,17 @@ ROUTE_STAGES = [
         name='start_economic_gait',
         description='第0-3阶段：切换续航步态',
         sdk_action='economic_gait',
-        sdk_wait_sec=0.3,
+        sdk_wait_sec=0.0,
         enabled=ENABLE_START_SEQUENCE,
     ),
-    # 第0-4阶段：调用已经跑通过的巡线系统，一边巡线一边向前走。
-    # 如果这里看起来只是原地踏步，就优先加 line_follow_steps。
+    # 第0-4阶段：跳前向前走。当前默认写死前进，不再依赖巡线。
+    # 要改距离就改 forward_steps；要改速度就改 START_FORWARD_SPEED_MPS。
     RouteStage(
         name='line_follow_before_jump',
-        description='第0-4阶段：巡线向前走10步，到跳跃前位置',
-        line_follow_steps=10,
+        description='第0-4阶段：写死向前走10步，到跳跃前位置',
+        forward_steps=10 if USE_DIRECT_START_FORWARD else 0,
+        forward_speed_mps=START_FORWARD_SPEED_MPS,
+        line_follow_steps=0 if USE_DIRECT_START_FORWARD else 10,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         enabled=ENABLE_START_SEQUENCE,
     ),
@@ -178,7 +189,7 @@ ROUTE_STAGES = [
         name='front_jump',
         description='第0-5阶段：执行一次前跳',
         sdk_action='front_jump',
-        sdk_wait_sec=2.5,
+        sdk_wait_sec=1.2,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
     # 第0-6阶段：跳完后恢复站立，再切回续航步态。
@@ -186,22 +197,24 @@ ROUTE_STAGES = [
         name='recover_after_front_jump',
         description='第0-6阶段：跳完后恢复站立',
         sdk_action='recovery_stand',
-        sdk_wait_sec=1.0,
+        sdk_wait_sec=0.4,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
     RouteStage(
         name='economic_after_front_jump',
         description='第0-7阶段：跳完后重新切换续航步态',
         sdk_action='economic_gait',
-        sdk_wait_sec=0.3,
+        sdk_wait_sec=0.0,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
-    # 第0-8阶段：继续调用巡线系统，一边巡线一边向前走，进入避障区入口。
-    # 如果跳完后进入避障区距离不够，就优先加 line_follow_steps。
+    # 第0-8阶段：跳后进入避障区。当前默认写死前进，不再依赖巡线。
+    # 要改距离就改 forward_steps；要改速度就改 START_FORWARD_SPEED_MPS。
     RouteStage(
         name='line_follow_to_obstacle_entry',
-        description='第0-8阶段：跳完后巡线向前走12步，进入避障区入口',
-        line_follow_steps=12,
+        description='第0-8阶段：跳完后写死向前走12步，进入避障区入口',
+        forward_steps=12 if USE_DIRECT_START_FORWARD else 0,
+        forward_speed_mps=START_FORWARD_SPEED_MPS,
+        line_follow_steps=0 if USE_DIRECT_START_FORWARD else 12,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         enabled=ENABLE_START_SEQUENCE,
     ),
@@ -372,11 +385,11 @@ class ObstacleDirectRouteNode(Node):
         ).value)
         self.pre_stop_sec = float(self.declare_parameter(
             'pre_stop_sec',
-            0.8
+            0.0
         ).value)
         self.step_stop_sec = float(self.declare_parameter(
             'step_stop_sec',
-            0.25
+            0.0
         ).value)
         self.final_stop_sec = float(self.declare_parameter(
             'final_stop_sec',

@@ -133,12 +133,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'start_realsense',
-            default_value='true',
+            default_value='false',
             description='Start D435i camera for line tracking.'
         ),
         DeclareLaunchArgument(
             'start_line_nodes',
-            default_value='true',
+            default_value='false',
             description='Start real_line_tracker_node and line_follower_node.'
         ),
         DeclareLaunchArgument(
