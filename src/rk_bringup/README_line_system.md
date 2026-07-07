@@ -209,8 +209,8 @@ Keyboard controls:
 
 - `w`: forward.
 - `s`: backward.
-- `a`: forward while turning left.
-- `d`: forward while turning right.
+- `a`: turn left in place.
+- `d`: turn right in place.
 - Each motion key press runs one fixed-duration action.
 - `x`: switch to `economic_gait`.
 - `c`: switch to normal gait, mapped to `balance_stand` by default.
@@ -238,17 +238,19 @@ Useful tuning variables:
 export RK_KEYBOARD_SPEED=0.30
 export RK_KEYBOARD_TURN_SPEED=0.80
 export RK_KEYBOARD_ACTION_SEC=1.0
+export RK_KEYBOARD_REAPPLY_GAIT=true
 export RK_KEYBOARD_LINE_FOLLOW_SEC=3.0
 export RK_KEYBOARD_REPLAY_SPEED_SCALE=0.8
 export RK_KEYBOARD_REPLAY_DURATION_SCALE=1.0
 ```
 
-`RK_KEYBOARD_SPEED` sets the default value for forward, backward, and turning
-commands' linear speed. `RK_KEYBOARD_TURN_SPEED` sets the angular speed for
-`a` and `d`. During `a` and `d`, the node publishes linear.x and angular.z at
-the same time. If one direction needs separate tuning, override
-`RK_KEYBOARD_FORWARD_SPEED`, `RK_KEYBOARD_BACKWARD_SPEED`, or
-`RK_KEYBOARD_TURN_LINEAR_SPEED`. The source defaults live in
+`RK_KEYBOARD_SPEED` sets the default linear speed for `w` and `s`.
+`RK_KEYBOARD_TURN_SPEED` sets the in-place angular speed for `a` and `d`.
+`RK_KEYBOARD_REAPPLY_GAIT=true` re-sends `economic_gait` before each later
+motion after `x`, which helps when the robot drops out of endurance gait after
+stop/Move commands. If one direction needs separate tuning, override
+`RK_KEYBOARD_FORWARD_SPEED` or `RK_KEYBOARD_BACKWARD_SPEED`.
+The source defaults live in
 `src/rk_tools/rk_tools/keyboard_route_node.py`; the easiest robot-side runtime
 edits are the environment variables in
 `src/rk_bringup/scripts/start_keyboard_route_record.sh`.

@@ -90,10 +90,6 @@ class KeyboardRouteNode(Node):
             'turn_speed',
             0.80
         )
-        self.turn_linear_speed = self._nonnegative_float_parameter(
-            'turn_linear_speed',
-            0.30
-        )
         self.key_action_duration_sec = self._positive_float_parameter(
             'key_action_duration_sec',
             1.0
@@ -164,6 +160,10 @@ class KeyboardRouteNode(Node):
             'require_sdk_actions',
             False
         )
+        self.reapply_gait_before_motion = self._bool_parameter(
+            'reapply_gait_before_motion',
+            True
+        )
         self.sdk_network_interface = self._string_parameter(
             'sdk_network_interface',
             'eth0'
@@ -216,6 +216,7 @@ class KeyboardRouteNode(Node):
         self._active_motion_start = None
         self._active_cmd = Twist()
         self._last_key_label = 'stop'
+        self._current_gait_action = None
 
     def _string_parameter(self, name, default):
         return str(self.declare_parameter(name, default).value).strip()
@@ -287,6 +288,8 @@ class KeyboardRouteNode(Node):
                 while rclpy.ok():
                     key = self._read_key()
                     if key:
+                        if len(key) == 1:
+                            key = key.lower()
                         if key in ('\x03', '\x04', 'q'):
                             break
                         self._handle_record_key(key)
@@ -310,7 +313,7 @@ class KeyboardRouteNode(Node):
         print('', flush=True)
         print('Keyboard route recording controls:', flush=True)
         print(
-            '  w forward, s backward, a forward-left, d forward-right',
+            '  w forward, s backward, a turn left, d turn right',
             flush=True
         )
         print(
@@ -387,6 +390,7 @@ class KeyboardRouteNode(Node):
         segment['duration_sec'] = round(duration_sec, 3)
         self._route['segments'].append(segment)
         self._last_key_label = label
+        self._reapply_current_gait_before_motion(label)
         self.get_logger().info(
             f'key={key!r}: run once {label}, vx={cmd.linear.x:.3f}, '
             f'wz={cmd.angular.z:.3f}, duration={duration_sec:.2f}s'
@@ -411,6 +415,7 @@ class KeyboardRouteNode(Node):
             f'recorded sdk_action label={label}, action={action}'
         )
         self._run_sdk_action_segment(segment, fatal=False)
+        self._track_gait_action(action, label)
         self.get_logger().info(
             f'sdk_action key {key!r} finished; recorder stays active'
         )
@@ -436,12 +441,10 @@ class KeyboardRouteNode(Node):
             label = 'backward'
             cmd.linear.x = -self.backward_speed
         elif key == 'a':
-            label = 'forward_left'
-            cmd.linear.x = self.turn_linear_speed
+            label = 'turn_left'
             cmd.angular.z = self.turn_speed
         elif key == 'd':
-            label = 'forward_right'
-            cmd.linear.x = self.turn_linear_speed
+            label = 'turn_right'
             cmd.angular.z = -self.turn_speed
         else:
             label = 'stop'
@@ -485,8 +488,8 @@ class KeyboardRouteNode(Node):
             'controls': {
                 'w': 'forward',
                 's': 'backward',
-                'a': 'forward_left',
-                'd': 'forward_right',
+                'a': 'turn_left',
+                'd': 'turn_right',
                 'x': 'economic_gait',
                 'c': 'normal_gait',
                 'l': 'line_follow_duration',
@@ -557,6 +560,10 @@ class KeyboardRouteNode(Node):
             return
         if segment_type == 'sdk_action':
             self._run_sdk_action_segment(segment)
+            self._track_gait_action(
+                str(segment.get('action', '')),
+                str(segment.get('label', ''))
+            )
             return
         if segment_type == 'line_follow':
             self._run_line_follow_segment(segment)
@@ -584,7 +591,44 @@ class KeyboardRouteNode(Node):
             f'cmd_vel vx={cmd.linear.x:.3f}, wz={cmd.angular.z:.3f}, '
             f'duration={duration_sec:.2f}s'
         )
+        self._reapply_current_gait_before_motion(
+            str(segment.get('label', 'cmd_vel'))
+        )
         self._publish_for_duration(cmd, duration_sec)
+
+    def _track_gait_action(self, action, label):
+        if label == 'normal_gait':
+            self._current_gait_action = None
+            self.get_logger().info(
+                'current gait action cleared by normal_gait'
+            )
+            return
+
+        if label != 'economic_gait':
+            return
+
+        self._current_gait_action = action
+        self.get_logger().info(
+            f'current gait action set to {action} by {label}'
+        )
+
+    def _reapply_current_gait_before_motion(self, label):
+        if (
+            not self.reapply_gait_before_motion
+            or not self._current_gait_action
+        ):
+            return
+
+        segment = {
+            'type': 'sdk_action',
+            'label': 'reapply_gait',
+            'action': self._current_gait_action,
+            'wait_sec': 0.0,
+        }
+        self.get_logger().info(
+            f'reapply gait before {label}: {self._current_gait_action}'
+        )
+        self._run_sdk_action_segment(segment, fatal=False)
 
     def _run_sdk_action_segment(self, segment, fatal=None):
         if fatal is None:
