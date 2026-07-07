@@ -12,10 +12,8 @@ RealSense D435i
 -> /perception/line_track
 -> line_follower_node
 -> /navigation/cmd_vel
--> cmd_vel_udp_forwarder.py
--> UDP 127.0.0.1:15001
--> go2_sdk_udp_server
--> Unitree SportClient.Move()
+-> cmd_vel_udp_forwarder.py or cmd_vel_bridge_node
+-> Go2 Sport Move()
 -> robot motion
 ```
 
@@ -115,9 +113,7 @@ with `~/rk_inspection_ws/install/rk_bringup/share/rk_bringup/scripts/`.
 
 `start_line_system.sh` creates the `rk_line` tmux session with these windows:
 
-- `bridge`: Go2 SDK UDP server and `/navigation/cmd_vel` UDP forwarder.
-- `camera`: RealSense camera launch.
-- `vision_nav`: line tracker and line follower debug launch.
+- `line_nav`: `competition_line_nav.launch.py`.
 - `line_track`: `/perception/line_track` echo.
 - `cmd_vel`: `/navigation/cmd_vel` echo.
 - `system_check`: live topic list watch.
@@ -140,13 +136,15 @@ with `~/rk_inspection_ws/install/rk_bringup/share/rk_bringup/scripts/`.
 Bridge only receives zero velocity:
 
 - Confirm `/navigation/cmd_vel` is nonzero in the `cmd_vel` tmux window.
-- Confirm `cmd_vel_udp_forwarder.py` is running in the `bridge` window.
+- Run `check_line_system.sh` and confirm `/navigation/cmd_vel` has exactly one
+  publisher, `line_follower_node`.
 - Confirm normal ROS nodes use `ROS_DOMAIN_ID=10`.
 
 `rqt_image_view` cannot see overlay:
 
 - Run `view_line_debug.sh` in a VNC graphical desktop terminal, not pure SSH.
-- Confirm `vision_nav` was started with `enable_debug_image:=true`.
+- Confirm `competition_line_nav.launch.py` started
+  `/real_line_tracker_node` with `enable_debug_image:=true`.
 - Confirm `/perception/debug/line_overlay` appears in `ros2 topic list`.
 
 Robot does not move but topics show velocity:

@@ -28,7 +28,7 @@ class CmdVelBridgeNode(Node):
         self.declare_parameter('cmd_timeout_sec', 0.50)
         self.declare_parameter('stop_publish_count', 3)
         self.declare_parameter('stop_publish_period_sec', 0.05)
-        self.declare_parameter('zero_cmd_debounce_time', 0.20)
+        self.declare_parameter('zero_cmd_debounce_time', 0.60)
         self.declare_parameter('stop_publish_min_interval', 0.50)
 
         self.backend = self._backend_parameter()

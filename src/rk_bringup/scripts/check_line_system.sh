@@ -55,8 +55,9 @@ cat <<'EOF'
   Subscriber: line_follower_node
 
 /navigation/cmd_vel:
-  Publisher: line_follower_node
-  Subscriber: cmd_vel_udp_forwarder
+  Publisher count: 1
+  Publisher node: line_follower_node
+  Subscriber: cmd_vel_bridge_node or cmd_vel_udp_forwarder
 
 /mission/start:
   Subscriber: line_follower_node

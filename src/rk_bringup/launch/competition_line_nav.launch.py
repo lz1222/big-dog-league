@@ -38,6 +38,7 @@ def generate_launch_description():
     image_topic = LaunchConfiguration('image_topic')
     bridge_max_linear_x = LaunchConfiguration('bridge_max_linear_x')
     bridge_max_angular_z = LaunchConfiguration('bridge_max_angular_z')
+    zero_cmd_debounce_time = LaunchConfiguration('zero_cmd_debounce_time')
     sdk_udp_host = LaunchConfiguration('sdk_udp_host')
     sdk_udp_port = LaunchConfiguration('sdk_udp_port')
 
@@ -68,7 +69,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'debug',
-            default_value='false',
+            default_value='true',
             description='Enable perception debug images and debug logs.'
         ),
         DeclareLaunchArgument(
@@ -119,6 +120,14 @@ def generate_launch_description():
             'bridge_max_angular_z',
             default_value='0.80',
             description='cmd_vel bridge angular.z safety limit.'
+        ),
+        DeclareLaunchArgument(
+            'zero_cmd_debounce_time',
+            default_value='0.60',
+            description=(
+                'Seconds that unitree_driver waits before converting a zero '
+                'cmd_vel into StopMove.'
+            )
         ),
         DeclareLaunchArgument(
             'sdk_udp_host',
@@ -227,6 +236,10 @@ def generate_launch_description():
                     ),
                     'max_angular_z': ParameterValue(
                         bridge_max_angular_z,
+                        value_type=float
+                    ),
+                    'zero_cmd_debounce_time': ParameterValue(
+                        zero_cmd_debounce_time,
                         value_type=float
                     ),
                 },

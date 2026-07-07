@@ -181,6 +181,10 @@ ros2 run rk_tools mission_client_node
 
 ### 视觉触发接入规划
 
+当前相机分工：D435i 朝向地面，仅作为黑色导引线输入；标志、
+物资标签等识别后续使用 Go2 内置相机，待实机确认 ROS topic 或视频源后
+再接入真实识别节点。本轮不实现 `real_sign_detector_node`。
+
 | 触发源 | 来源 | 状态机用途 |
 | --- | --- | --- |
 | 抓取平台 1/2 识别标志 | `/perception/sign_detections` | 选择 `place_platform_1` 或 `place_platform_2`。 |
@@ -208,7 +212,7 @@ ros2 run rk_tools mission_client_node
 
 | 节点 | 包 | 用途 | 参数来源 |
 | --- | --- | --- | --- |
-| RealSense camera | `realsense2_camera` | RGB 图像输入 | 相机参数或 launch argument |
+| RealSense D435i | `realsense2_camera` | 地面黑线图像输入 | 相机参数或 launch argument |
 | `real_line_tracker_node` | `rk_perception` | 真实黑线检测 | `line_nav_params.yaml` |
 | `line_follower_node` | `rk_navigation` | 巡线控制 | `line_nav_params.yaml` |
 | `gait_control_node` | `rk_locomotion` | 固定动作和 action server | `gait_params.yaml` |
