@@ -51,10 +51,13 @@ class LineFollowerNode(Node):
         self.declare_parameter('control_rate_hz', 10.0)
         self.declare_parameter('debug_log', True)
 
+        # 巡线速度参数：Go2 低于 0.27m/s 时可能不稳定，优先改 YAML。
         self.declare_parameter('min_driving_speed', 0.27)
         self.declare_parameter('base_speed', 0.30)
         self.declare_parameter('mid_speed', 0.28)
         self.declare_parameter('slow_speed', 0.27)
+
+        # 巡线转向参数：摆动大就降低 kp/max_angular_z，转弯慢就适当提高。
         self.declare_parameter('error_slow_threshold', 0.20)
         self.declare_parameter('error_slowest_threshold', 0.50)
         self.declare_parameter('kp_lateral', 1.2)
@@ -62,10 +65,12 @@ class LineFollowerNode(Node):
         self.declare_parameter('max_angular_z', 0.8)
         self.declare_parameter('line_follow_min_confidence', 0.0)
 
+        # 短暂丢线恢复：用于画面偶发断线或黑线短时间被遮挡。
         self.declare_parameter('short_lost_timeout', 0.6)
         self.declare_parameter('short_lost_linear_speed', 0.27)
         self.declare_parameter('search_angular_speed', 0.25)
 
+        # 转弯/大角度丢线恢复：lost_turn_linear_speed 建议保持 0.27。
         self.declare_parameter('turn_90_duration', 1.6)
         self.declare_parameter('turn_90_angular_speed', 0.45)
         self.declare_parameter('turn_direction_mode', 'last_error')
@@ -76,6 +81,7 @@ class LineFollowerNode(Node):
         self.declare_parameter('lost_turn_angular_speed', 0.20)
         self.declare_parameter('turn_lost_min_angular_z', 0.12)
 
+        # 持续找线参数：continuous_search_enabled=true 时不会只巡一次就停。
         self.declare_parameter('search_linear_speed', 0.27)
         self.declare_parameter('search_line_angular_speed', 0.20)
         self.declare_parameter('search_timeout', 5.0)
@@ -286,6 +292,7 @@ class LineFollowerNode(Node):
         )
         self.stable_seen_count = 0
         self.last_loss_reason = 'mission_start'
+        self.last_stop_reason = 'none'
         self.mission_started = True
         self.set_state(LINE_FOLLOW, 'mission_start', now)
 
@@ -300,7 +307,7 @@ class LineFollowerNode(Node):
         )
         self.last_loss_reason = 'mission_stop'
         self.mission_started = False
-        self.set_state(STOP, 'mission_stop', now)
+        self.set_state(WAIT_START, 'mission_stop', now)
         self.publish_zero('mission_stop')
 
     def on_gait_control_lock(self, msg):

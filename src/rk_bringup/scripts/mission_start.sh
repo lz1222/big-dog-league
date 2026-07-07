@@ -27,4 +27,7 @@ resolve_env_script() {
 ENV_SCRIPT="$(resolve_env_script)"
 source "$ENV_SCRIPT"
 
-ros2 topic pub --once /mission/start std_msgs/msg/Bool "{data: true}"
+for _ in 1 2 3; do
+    ros2 topic pub --once /mission/start std_msgs/msg/Bool "{data: true}"
+    sleep 0.2
+done

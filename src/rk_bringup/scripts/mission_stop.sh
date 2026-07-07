@@ -28,8 +28,15 @@ ENV_SCRIPT="$(resolve_env_script)"
 source "$ENV_SCRIPT"
 set +e
 
-timeout 3s ros2 topic pub --once /mission/stop std_msgs/msg/Bool "{data: true}"
-STOP_STATUS=$?
+STOP_STATUS=0
+for _ in 1 2 3; do
+    timeout 3s ros2 topic pub --once /mission/stop std_msgs/msg/Bool "{data: true}"
+    CURRENT_STATUS=$?
+    if [ "$CURRENT_STATUS" -ne 0 ]; then
+        STOP_STATUS="$CURRENT_STATUS"
+    fi
+    sleep 0.2
+done
 
 if [ "$STOP_STATUS" -ne 0 ]; then
     echo "WARN: failed to publish /mission/stop." >&2

@@ -37,9 +37,9 @@ line_follower_node:
     search_linear_speed: 0.27
     search_line_angular_speed: 0.15
     search_timeout: 8.0
-    line_reacquire_count: 2
-    reacquire_confirm_frames: 2
-    reacquire_min_confidence: 0.50
+    line_reacquire_count: 3
+    reacquire_confirm_frames: 3
+    reacquire_min_confidence: 0.65
     reacquire_max_lateral_error: 0.75
     line_msg_timeout: 1.0
     continuous_search_enabled: true

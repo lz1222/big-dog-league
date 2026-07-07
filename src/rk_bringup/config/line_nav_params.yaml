@@ -1,82 +1,150 @@
 real_line_tracker_node:
   ros__parameters:
+    # 图像输入/输出话题。正常只需要改 image_topic，除非你的相机话题名变了。
     image_topic: /camera/color/image_raw
     line_track_topic: /perception/line_track
+
+    # 调试开关。比赛/真实巡线建议 false，能减轻相机和 CPU 压力。
+    # 需要看 /perception/debug/line_overlay 时再临时改成 true。
     enable_debug_image: false
     debug_log: true
+
+    # ROI 检测区域。相机只看地面时通常保持全画面 ROI。
+    # 如果画面上方经常出现无关黑物体，可以适当增大 roi_top_fraction。
+    # 如果机器狗脚或机身遮挡底部，可以适当增大 roi_bottom_margin_fraction。
     use_full_frame_roi: true
     roi_top_fraction: 0.05
     roi_bottom_margin_fraction: 0.03
     roi_left_margin_fraction: 0.03
     roi_right_margin_fraction: 0.03
-    threshold_value: 80
+
+    # 黑线二值化阈值。值越大，越容易把灰色/阴影也当成黑线。
+    # 误识别黑色物体时可以适当降低；黑线识别不到时可以适当提高。
+    threshold_value: 70
+
+    # 输出误差限制。一般不需要改。
     max_lateral_error: 1.0
     line_width_cm: 10.0
+
+    # 扫描带数量和最少有效带数量。
+    # min_path_bands 越大，越不容易误识别零散黑块，但线短/画面卡顿时更容易丢线。
     num_scan_bands: 11
-    min_path_bands: 4
-    min_valid_bands: 4
+    min_path_bands: 6
+    min_valid_bands: 6
+
+    # 要求最靠近机器狗的底部扫描带必须看到线。
+    # 这是防止隔壁黑色物体抢线的关键开关，正常巡地面黑线建议保持 true。
     require_bottom_band: true
+
+    # 基础线宽范围，按图像宽度比例计算。
+    # 如果黑线太粗被判 too_wide，提高 max_line_width_fraction。
+    # 如果黑线太细被判 too_narrow，降低 min_line_width_fraction。
     min_line_width_fraction: 0.015
     max_line_width_fraction: 0.20
+
+    # 透视线宽范围。靠近机器狗的线在画面底部更宽，远处更窄。
+    # 如果底部黑线因为畸变/靠近相机显得很粗，提高 max_line_width_bottom_fraction。
+    # 如果远处线太细识别不到，降低 min_line_width_top_fraction。
     perspective_width_enabled: true
     min_line_width_top_fraction: 0.006
     min_line_width_bottom_fraction: 0.018
-    max_line_width_top_fraction: 0.12
-    max_line_width_bottom_fraction: 0.35
-    max_dark_fraction: 0.28
-    visible_min_confidence: 0.50
+    max_line_width_top_fraction: 0.08
+    max_line_width_bottom_fraction: 0.24
+
+    # 画面中黑色像素占比过大时判为异常，避免整块黑物体/阴影被当线。
+    # 环境很暗且经常 too_dark 时可以略微提高；误识别黑物体时降低。
+    max_dark_fraction: 0.22
+
+    # 可见置信度阈值。越高越保守，越低越容易跟错线。
+    visible_min_confidence: 0.65
+
+    # 路径锁定。开启后优先跟随上一帧附近的线，避免突然跳到隔壁黑物体。
     track_lock_enabled: true
-    max_track_jump_fraction: 0.18
-    max_reacquire_jump_fraction: 0.12
-    bottom_band_preference_weight: 5.0
-    previous_center_weight: 6.0
-    bottom_start_max_center_error_fraction: 0.35
-    max_band_center_jump_fraction: 0.20
-    max_band_gap: 2
+
+    # 允许当前线位置相对上一帧跳变的最大比例。
+    # 旁边黑物体抢线时降低；急弯/大偏移时识别过保守再提高。
+    max_track_jump_fraction: 0.10
+    max_reacquire_jump_fraction: 0.08
+
+    # 选线权重。数值越大，越偏向底部线和上一帧位置。
+    # 隔壁黑物体干扰时提高；真实弯道切换不够灵活时降低。
+    bottom_band_preference_weight: 8.0
+    previous_center_weight: 10.0
+
+    # 底部起点必须离图像中心/上一帧锁定线足够近。
+    # 这是防止远处或侧边黑物体被当作起点的关键参数。
+    # 误识别时降到 0.18；正常急弯丢线时升到 0.30。
+    bottom_start_max_center_error_fraction: 0.22
+
+    # 相邻扫描带之间允许的中心跳变。越小越要求线连续。
+    # 黑物体干扰时降低；弯道识别断续时提高。
+    max_band_center_jump_fraction: 0.10
+    max_band_gap: 1
+
     frame_id: d435i_color_optical_frame
 
 line_follower_node:
   ros__parameters:
+    # ROS 话题名。除非你改了系统接口，否则不要改。
     line_track_topic: /perception/line_track
     cmd_vel_topic: /navigation/cmd_vel
     mission_start_topic: /mission/start
     mission_stop_topic: /mission/stop
     gait_control_lock_topic: /gait/control_lock
+
+    # 控制频率和日志。debug_log=true 会每秒打印一次导航状态，调试时建议保留。
     control_rate_hz: 10.0
     debug_log: true
 
-    # Go2 实测低于约 0.27m/s 时腿基本不走；巡线速度先用 0.30。
+    # Go2 实测低于约 0.27m/s 时腿基本不走。
+    # base/mid/slow 分别对应偏差小/中/大时的前进速度。
     min_driving_speed: 0.27
     base_speed: 0.30
     mid_speed: 0.28
     slow_speed: 0.27
+
+    # 偏差阈值。偏差越大，速度越慢。
+    # 走得太冲可以降低 base_speed 或减小阈值；走得太慢可以提高 base_speed。
     error_slow_threshold: 0.20
     error_slowest_threshold: 0.50
+
+    # 转向增益。kp_lateral 管左右偏差，kp_heading 管线方向。
+    # 左右摆动大就降低；转弯跟不上就提高，但 max_angular_z 会限制最大转速。
     kp_lateral: 1.2
     kp_heading: 0.8
     max_angular_z: 0.8
     line_follow_min_confidence: 0.0
 
+    # 短暂丢线阶段。保持低速向前并小角速度找线。
     short_lost_timeout: 1.2
     short_lost_linear_speed: 0.27
     search_angular_speed: 0.20
 
+    # 丢线后按最后方向转向找线。不要把角速度调太大，机器狗会摆。
     turn_90_duration: 1.6
     turn_90_angular_speed: 0.35
     turn_direction_mode: last_error
     default_turn_direction: 1
     turn_direction_deadband: 0.02
+
+    # 转弯过程中丢线后的保持动作。
+    # lost_turn_linear_speed 保持 0.27，避免只原地转导致巡线中断。
     turn_lost_keep_time: 2.0
     lost_turn_linear_speed: 0.27
     lost_turn_angular_speed: 0.15
     turn_lost_min_angular_z: 0.12
 
+    # 长时间找线阶段。continuous_search_enabled=true 时，超时后继续找线，不会只巡一次就停。
     search_linear_speed: 0.27
     search_line_angular_speed: 0.15
     search_timeout: 8.0
-    line_reacquire_count: 2
-    reacquire_confirm_frames: 2
-    reacquire_min_confidence: 0.50
+
+    # 重新识别确认帧数。值越小恢复越快，值越大越不容易被瞬时误识别骗回巡线。
+    line_reacquire_count: 3
+    reacquire_confirm_frames: 3
+    reacquire_min_confidence: 0.65
     reacquire_max_lateral_error: 0.75
+
+    # 线检测消息超时。相机/识别卡顿时可以提高到 1.5，但无图像时盲走风险也会增加。
     line_msg_timeout: 1.0
     continuous_search_enabled: true

@@ -38,18 +38,28 @@ PENDING_SWITCH_STABLE_FRAMES = 3
 
 @dataclass(frozen=True)
 class LineTrackerConfig:
+    # 可调参数主要在 src/rk_bringup/config/line_nav_params.yaml 中改。
+    # 这里是程序内部默认值和参数名定义；只有新增参数时才建议改这里。
+    #
+    # ROI 参数：控制使用画面的哪一部分做巡线检测。
     use_full_frame_roi: bool = True
     roi_top_fraction: float = 0.05
     roi_bottom_margin_fraction: float = 0.03
     roi_left_margin_fraction: float = 0.03
     roi_right_margin_fraction: float = 0.03
+
+    # 黑线提取参数：threshold_value 越大，越容易把灰色阴影也识别为黑线。
     threshold_value: int = 80
     max_lateral_error: float = 1.0
     line_width_cm: float = 10.0
+
+    # 扫描带参数：要求越多扫描带连续命中，越不容易被零散黑物体干扰。
     num_scan_bands: int = 11
     min_path_bands: int = 3
     min_valid_bands: Optional[int] = None
     require_bottom_band: bool = False
+
+    # 线宽参数：透视开启后，画面底部允许更宽，画面顶部允许更窄。
     min_line_width_fraction: float = 0.015
     max_line_width_fraction: float = 0.20
     perspective_width_enabled: bool = False
@@ -59,6 +69,8 @@ class LineTrackerConfig:
     max_line_width_bottom_fraction: float = 0.30
     max_dark_fraction: float = 0.35
     visible_min_confidence: float = 0.45
+
+    # 选线/锁线参数：用于防止巡线突然跳到旁边黑色物体。
     bottom_band_preference_weight: float = 2.0
     previous_center_weight: float = 2.0
     bottom_start_max_center_error_fraction: float = 1.0
