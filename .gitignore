@@ -1,0 +1,8 @@
+build/
+out/
+.cache/
+STOP
+*.user
+*.suo
+*.log
+
