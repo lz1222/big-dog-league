@@ -6,7 +6,7 @@ real_line_tracker_node:
 
     # 调试开关。比赛/真实巡线建议 false，能减轻相机和 CPU 压力。
     # 需要看 /perception/debug/line_overlay 时再临时改成 true。
-    enable_debug_image: false
+    enable_debug_image: ture
     debug_log: true
 
     # ROI 检测区域。相机只看地面时通常保持全画面 ROI。
@@ -97,46 +97,46 @@ line_follower_node:
     debug_log: true
 
     # 低速转弯调试参数。base/mid/slow 分别对应偏差小/中/大时的前进速度。
-    # 如果 Go2 在 0.22m/s 附近迈步不稳定，把 min/mid/slow 逐步提高到 0.25。
-    min_driving_speed: 0.22
+    # 丢线找线速度允许为 0；正常巡线速度不要低于 slow_speed。
+    min_driving_speed: 0.20
     base_speed: 0.25
-    mid_speed: 0.23
-    slow_speed: 0.22
+    mid_speed: 0.22
+    slow_speed: 0.20
 
     # 偏差阈值。偏差越大，速度越慢。
     # 走得太冲可以降低 base_speed 或减小阈值；走得太慢可以提高 base_speed。
-    error_slow_threshold: 0.10
-    error_slowest_threshold: 0.25
+    error_slow_threshold: 0.08
+    error_slowest_threshold: 0.20
 
     # 转向增益。kp_lateral 管左右偏差，kp_heading 管线方向。
     # 左右摆动大就降低；转弯跟不上就提高，但 max_angular_z 会限制最大转速。
-    kp_lateral: 1.8
-    kp_heading: 1.4
-    max_angular_z: 1.1
+    kp_lateral: 2.2
+    kp_heading: 1.8
+    max_angular_z: 1.3
     line_follow_min_confidence: 0.0
 
-    # 短暂丢线阶段。保持低速向前并小角速度找线。
-    short_lost_timeout: 1.2
-    short_lost_linear_speed: 0.22
-    search_angular_speed: 0.30
+    # 短暂丢线阶段。先停下，按最后转向方向原地找线。
+    short_lost_timeout: 0.6
+    short_lost_linear_speed: 0.0
+    search_angular_speed: 0.35
 
     # 丢线后按最后方向转向找线。不要把角速度调太大，机器狗会摆。
-    turn_90_duration: 1.6
+    turn_90_duration: 0.8
     turn_90_angular_speed: 0.50
     turn_direction_mode: last_error
     default_turn_direction: 1
     turn_direction_deadband: 0.02
 
-    # 转弯过程中丢线后的保持动作。
-    # lost_turn_linear_speed 保持低速前进，避免只原地转导致巡线中断。
+    # 转弯过程中丢线后的保持动作。线速度为 0，避免继续向前冲出线外。
     turn_lost_keep_time: 2.0
-    lost_turn_linear_speed: 0.22
-    lost_turn_angular_speed: 0.30
+    lost_turn_linear_speed: 0.0
+    lost_turn_angular_speed: 0.35
     turn_lost_min_angular_z: 0.08
 
-    # 长时间找线阶段。continuous_search_enabled=true 时，超时后继续找线，不会只巡一次就停。
-    search_linear_speed: 0.22
-    search_line_angular_speed: 0.25
+    # 长时间找线阶段。原地左右交替扫线，找到稳定线后恢复巡线。
+    search_linear_speed: 0.0
+    search_line_angular_speed: 0.30
+    search_sweep_period: 1.0
     search_timeout: 8.0
 
     # 重新识别确认帧数。值越小恢复越快，值越大越不容易被瞬时误识别骗回巡线。

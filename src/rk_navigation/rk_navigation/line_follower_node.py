@@ -51,39 +51,40 @@ class LineFollowerNode(Node):
         self.declare_parameter('control_rate_hz', 10.0)
         self.declare_parameter('debug_log', True)
 
-        # 巡线速度参数：Go2 低于 0.27m/s 时可能不稳定，优先改 YAML。
-        self.declare_parameter('min_driving_speed', 0.27)
-        self.declare_parameter('base_speed', 0.30)
-        self.declare_parameter('mid_speed', 0.28)
-        self.declare_parameter('slow_speed', 0.27)
+        # 巡线速度参数优先改 YAML；丢线找线速度允许为 0。
+        self.declare_parameter('min_driving_speed', 0.20)
+        self.declare_parameter('base_speed', 0.25)
+        self.declare_parameter('mid_speed', 0.22)
+        self.declare_parameter('slow_speed', 0.20)
 
         # 巡线转向参数：摆动大就降低 kp/max_angular_z，转弯慢就适当提高。
-        self.declare_parameter('error_slow_threshold', 0.20)
-        self.declare_parameter('error_slowest_threshold', 0.50)
-        self.declare_parameter('kp_lateral', 1.2)
-        self.declare_parameter('kp_heading', 0.8)
-        self.declare_parameter('max_angular_z', 0.8)
+        self.declare_parameter('error_slow_threshold', 0.08)
+        self.declare_parameter('error_slowest_threshold', 0.20)
+        self.declare_parameter('kp_lateral', 2.2)
+        self.declare_parameter('kp_heading', 1.8)
+        self.declare_parameter('max_angular_z', 1.3)
         self.declare_parameter('line_follow_min_confidence', 0.0)
 
         # 短暂丢线恢复：用于画面偶发断线或黑线短时间被遮挡。
         self.declare_parameter('short_lost_timeout', 0.6)
-        self.declare_parameter('short_lost_linear_speed', 0.27)
-        self.declare_parameter('search_angular_speed', 0.25)
+        self.declare_parameter('short_lost_linear_speed', 0.0)
+        self.declare_parameter('search_angular_speed', 0.35)
 
-        # 转弯/大角度丢线恢复：lost_turn_linear_speed 建议保持 0.27。
-        self.declare_parameter('turn_90_duration', 1.6)
-        self.declare_parameter('turn_90_angular_speed', 0.45)
+        # 转弯/大角度丢线恢复：默认原地转向找线。
+        self.declare_parameter('turn_90_duration', 0.8)
+        self.declare_parameter('turn_90_angular_speed', 0.50)
         self.declare_parameter('turn_direction_mode', 'last_error')
         self.declare_parameter('default_turn_direction', 1)
         self.declare_parameter('turn_direction_deadband', 0.02)
         self.declare_parameter('turn_lost_keep_time', 0.8)
         self.declare_parameter('lost_turn_linear_speed', 0.0)
-        self.declare_parameter('lost_turn_angular_speed', 0.20)
-        self.declare_parameter('turn_lost_min_angular_z', 0.12)
+        self.declare_parameter('lost_turn_angular_speed', 0.35)
+        self.declare_parameter('turn_lost_min_angular_z', 0.08)
 
         # 持续找线参数：continuous_search_enabled=true 时不会只巡一次就停。
-        self.declare_parameter('search_linear_speed', 0.27)
-        self.declare_parameter('search_line_angular_speed', 0.20)
+        self.declare_parameter('search_linear_speed', 0.0)
+        self.declare_parameter('search_line_angular_speed', 0.30)
+        self.declare_parameter('search_sweep_period', 1.0)
         self.declare_parameter('search_timeout', 5.0)
         self.declare_parameter('line_reacquire_count', 5)
         self.declare_parameter('reacquire_confirm_frames', 4)
@@ -207,7 +208,7 @@ class LineFollowerNode(Node):
         self.short_lost_timeout = self.nonnegative_float_parameter(
             'short_lost_timeout'
         )
-        self.short_lost_linear_speed = self.driving_speed_parameter(
+        self.short_lost_linear_speed = self.optional_driving_speed_parameter(
             'short_lost_linear_speed'
         )
         self.search_angular_speed = self.nonnegative_float_parameter(
@@ -242,11 +243,14 @@ class LineFollowerNode(Node):
             'turn_lost_min_angular_z'
         )
 
-        self.search_linear_speed = self.driving_speed_parameter(
+        self.search_linear_speed = self.optional_driving_speed_parameter(
             'search_linear_speed'
         )
         self.search_line_angular_speed = self.nonnegative_float_parameter(
             'search_line_angular_speed'
+        )
+        self.search_sweep_period = self.nonnegative_float_parameter(
+            'search_sweep_period'
         )
         self.search_timeout = self.nonnegative_float_parameter(
             'search_timeout'
@@ -618,9 +622,20 @@ class LineFollowerNode(Node):
         cmd = Twist()
         cmd.linear.x = self.search_linear_speed
         cmd.angular.z = (
-            self.active_turn_direction * self.search_line_angular_speed
+            self.search_sweep_direction() * self.search_line_angular_speed
         )
         return cmd
+
+    def search_sweep_direction(self):
+        if self.search_sweep_period <= 0.0:
+            return self.active_turn_direction or self.default_turn_direction
+
+        elapsed = self.elapsed_in_state(self.get_clock().now())
+        phase = int(elapsed / self.search_sweep_period)
+        direction = self.active_turn_direction or self.default_turn_direction
+        if phase % 2 == 1:
+            direction *= -1
+        return direction
 
     def publish_cmd(self, cmd, stop_reason='none'):
         if self.is_zero_cmd(cmd):
@@ -729,6 +744,7 @@ class LineFollowerNode(Node):
                 f'reason={reason}, '
                 f'turn_direction={self.active_turn_direction}, '
                 f'timeout={self.search_timeout:.3f}s, '
+                f'sweep_period={self.search_sweep_period:.3f}s, '
                 f'reacquire_count={self.line_reacquire_count}, '
                 f'stable_seen_count={self.stable_seen_count}'
             )
@@ -893,6 +909,7 @@ class LineFollowerNode(Node):
             self.turn_lost_min_angular_z,
             self.turn_90_duration,
             self.turn_90_angular_speed,
+            self.search_sweep_period,
             self.search_timeout,
             self.line_msg_timeout,
         ]
