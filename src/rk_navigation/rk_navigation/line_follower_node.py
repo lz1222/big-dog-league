@@ -63,6 +63,8 @@ class LineFollowerNode(Node):
         self.declare_parameter('kp_lateral', 2.2)
         self.declare_parameter('kp_heading', 1.8)
         self.declare_parameter('max_angular_z', 1.3)
+        self.declare_parameter('angular_deadband', 0.0)
+        self.declare_parameter('angular_smoothing_alpha', 1.0)
         self.declare_parameter('line_follow_min_confidence', 0.0)
 
         # 短暂丢线恢复：用于画面偶发断线或黑线短时间被遮挡。
@@ -199,6 +201,14 @@ class LineFollowerNode(Node):
         self.max_angular_z = self.nonnegative_float_parameter(
             'max_angular_z'
         )
+        self.angular_deadband = self.nonnegative_float_parameter(
+            'angular_deadband'
+        )
+        self.angular_smoothing_alpha = self.clamp(
+            self.nonnegative_float_parameter('angular_smoothing_alpha'),
+            0.0,
+            1.0
+        )
         self.line_follow_min_confidence = self.clamp(
             self.nonnegative_float_parameter('line_follow_min_confidence'),
             0.0,
@@ -295,6 +305,7 @@ class LineFollowerNode(Node):
             f'state={self.state}, target_state={LINE_FOLLOW}'
         )
         self.stable_seen_count = 0
+        self.last_angular_z = 0.0
         self.last_loss_reason = 'mission_start'
         self.last_stop_reason = 'none'
         self.mission_started = True
@@ -310,6 +321,7 @@ class LineFollowerNode(Node):
             f'state={self.state}, target_state={STOP}'
         )
         self.last_loss_reason = 'mission_stop'
+        self.last_angular_z = 0.0
         self.mission_started = False
         self.set_state(WAIT_START, 'mission_stop', now)
         self.publish_zero('mission_stop')
@@ -446,15 +458,25 @@ class LineFollowerNode(Node):
             return self.enter_line_lost_state(msg, now)
 
         cmd = Twist()
-        angular = -(
+        raw_angular = -(
             self.kp_lateral * float(msg.lateral_error) +
             self.kp_heading * float(msg.heading_error)
         )
-        cmd.angular.z = self.clamp(
-            angular,
+        target_angular = self.clamp(
+            raw_angular,
             -self.max_angular_z,
             self.max_angular_z
         )
+        if abs(target_angular) < self.angular_deadband:
+            target_angular = 0.0
+
+        alpha = self.angular_smoothing_alpha
+        cmd.angular.z = (
+            alpha * target_angular
+            + (1.0 - alpha) * float(self.last_angular_z)
+        )
+        if abs(cmd.angular.z) < self.angular_deadband:
+            cmd.angular.z = 0.0
 
         error_abs = abs(float(msg.lateral_error))
         if error_abs < self.error_slow_threshold:
@@ -650,6 +672,7 @@ class LineFollowerNode(Node):
     def publish_zero(self, reason='stop'):
         cmd = Twist()
         self.last_stop_reason = reason
+        self.last_angular_z = 0.0
         if self.last_published_cmd_is_zero:
             self.log_control_debug(cmd, reason)
             return
@@ -687,6 +710,8 @@ class LineFollowerNode(Node):
 
         if new_state in {LINE_FOLLOW, WAIT_START, STOP}:
             self.stable_seen_count = 0
+        if new_state in {WAIT_START, STOP}:
+            self.last_angular_z = 0.0
         if new_state == WAIT_START:
             self.get_logger().info(
                 'Enter state WAIT_START: '
@@ -902,6 +927,8 @@ class LineFollowerNode(Node):
             self.kp_lateral,
             self.kp_heading,
             self.max_angular_z,
+            self.angular_deadband,
+            self.angular_smoothing_alpha,
             self.short_lost_timeout,
             self.turn_lost_keep_time,
             self.lost_turn_linear_speed,

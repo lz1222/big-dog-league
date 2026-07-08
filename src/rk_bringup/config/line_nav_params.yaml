@@ -103,8 +103,8 @@ line_follower_node:
     # 低速居中巡线参数。base/mid/slow 分别对应偏差小/中/大时的前进速度。
     # 这台 Go2 低于 0.27m/s 容易原地踏步，所以正常巡线最低保持 0.27。
     min_driving_speed: 0.27
-    base_speed: 0.30
-    mid_speed: 0.28
+    base_speed: 0.28
+    mid_speed: 0.27
     slow_speed: 0.27
 
     # 偏差阈值。偏差越大，速度越慢。
@@ -113,11 +113,14 @@ line_follower_node:
     error_slowest_threshold: 0.20
 
     # 转向增益。kp_lateral 管左右偏差，kp_heading 管线方向。
-    # 当前比赛直线段优先保持身体在线中间，所以侧向误差权重大一点。
-    # 如果左右摆动明显，先把 kp_lateral 降到 2.4；如果回中太慢，升到 3.0。
-    kp_lateral: 2.7
-    kp_heading: 1.5
-    max_angular_z: 1.0
+    # 当前先优先走直线：转向增益不要太猛，否则会右一步左一步。
+    # 如果还是左右摆：继续降低 kp_lateral 或 max_angular_z。
+    # 如果回中太慢：小幅提高 kp_lateral，每次加 0.2。
+    kp_lateral: 1.4
+    kp_heading: 0.7
+    max_angular_z: 0.45
+    angular_deadband: 0.04
+    angular_smoothing_alpha: 0.35
     line_follow_min_confidence: 0.0
 
     # 短暂丢线阶段。先停下，按最后转向方向原地找线。

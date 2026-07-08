@@ -53,8 +53,8 @@ class RouteStage:
 # 这个文件现在统一负责：
 #   启停区出发 -> 调用已跑通的 SDK 巡线，直到检测到长白线
 #   -> 向前直走2步 -> 前跳 -> 继续启动巡线自动找线
-#   -> 巡线5秒
-#   -> 避障区蛇形路线
+#   -> 巡线3秒
+#   -> 切换续航步态 -> 避障区蛇形路线
 #
 # 直走和转弯仍然通过 /navigation/cmd_vel 走你已经验证能动的 SDK UDP
 # 桥接；FrontJump / RecoveryStand 这种底层动作则由小工具
@@ -83,7 +83,7 @@ class RouteStage:
 #    - START_FORWARD_AFTER_WHITE_STEPS：
 #      检测到长白线后，先向前直走几步再跳。你这次要求为 2 步。
 #    - POST_JUMP_LINE_FOLLOW_SEC：
-#      跳完后继续巡线多久再切入避障区。你这次要求为 5 秒。
+#      跳完后继续巡线多久再切入避障区。你这次要求为 3 秒。
 #    - WHITE_LINE_*：
 #      长白线识别参数。默认会同时用图像里的横向白色条带，以及
 #      “黑线突然持续不可用”作为兜底触发，因为长白线通常会让黑线
@@ -95,7 +95,7 @@ class RouteStage:
 #      这里通过跳前停稳和跳后恢复等待来降低冲击。
 #
 # 4. SDK动作阶段 RouteStage 的字段：
-#    - sdk_action：'balance_stand' / 'front_jump' /
+#    - sdk_action：'balance_stand' / 'economic_gait' / 'front_jump' /
 #                  'recovery_stand' / 'stop_move'
 #    - sdk_wait_sec：动作发出后等待多久。
 #    - enabled：False 表示临时跳过这个阶段。
@@ -123,25 +123,26 @@ LINE_FOLLOW_START_SETTLE_SEC = 0.35
 LINE_FOLLOW_STOP_SETTLE_SEC = 0.25
 START_LINE_FOLLOW_UNTIL_WHITE_MAX_SEC = 16.0
 START_FORWARD_AFTER_WHITE_STEPS = 3
-POST_JUMP_LINE_FOLLOW_SEC = 5.0
+POST_JUMP_LINE_FOLLOW_SEC = 3.0
 LINE_VISIBLE_WAIT_TIMEOUT_SEC = 10.0
 LINE_LOST_SWITCH_SEC = 0.60
 LINE_TRACK_STALE_SEC = 0.80
-ROUTE_LINE_MIN_CONFIDENCE = 0.45
+ROUTE_LINE_MIN_CONFIDENCE = 0.35
 ROUTE_LINE_MAX_ABS_LATERAL_ERROR = 0.95
 WHITE_LINE_DETECTION_ENABLED = True
 WHITE_LINE_IMAGE_TOPIC = '/camera/color/image_raw'
-WHITE_LINE_ROI_TOP_FRACTION = 0.42
-WHITE_LINE_ROI_BOTTOM_FRACTION = 0.94
-WHITE_LINE_ROI_SIDE_MARGIN_FRACTION = 0.05
-WHITE_LINE_MIN_WIDTH_FRACTION = 0.35
+WHITE_LINE_ROI_TOP_FRACTION = 0.25
+WHITE_LINE_ROI_BOTTOM_FRACTION = 0.98
+WHITE_LINE_ROI_SIDE_MARGIN_FRACTION = 0.02
+WHITE_LINE_MIN_WIDTH_FRACTION = 0.22
 WHITE_LINE_MIN_HEIGHT_FRACTION = 0.010
-WHITE_LINE_MAX_HEIGHT_FRACTION = 0.32
-WHITE_LINE_MIN_ASPECT_RATIO = 3.0
-WHITE_LINE_MIN_VALUE = 185
-WHITE_LINE_MAX_SATURATION = 95
-WHITE_LINE_STABLE_SEC = 0.18
-WHITE_LINE_STALE_SEC = 0.70
+WHITE_LINE_MAX_HEIGHT_FRACTION = 0.45
+WHITE_LINE_MIN_ASPECT_RATIO = 2.0
+WHITE_LINE_MIN_VALUE = 160
+WHITE_LINE_MAX_SATURATION = 130
+WHITE_LINE_STABLE_SEC = 0.08
+WHITE_LINE_STALE_SEC = 1.00
+ECONOMIC_GAIT_WAIT_SEC = 0.30
 DEFAULT_FORWARD_SPEED_MPS = 0.35
 DEFAULT_TURN_SPEED_RADPS = 0.80
 # 避障区转弯时也要给前进速度，避免原地扭腿。
@@ -171,6 +172,7 @@ SDK_ACTION_API_IDS = {
     'balance_stand': 1002,
     'stop_move': 1003,
     'recovery_stand': 1006,
+    'economic_gait': 1063,
     'front_jump': 1031,
 }
 SDK_LD_LIBRARY_PATH_PREFIX = (
@@ -279,7 +281,7 @@ def build_obstacle_route_stages(commands):
 #   - 转弯像原地转：把 vx_mps 加到 0.35。
 #   - 转弯半径太大：把 vx_mps 降到 0.27。
 OBSTACLE_ROUTE = [
-    forward(19),      # 入口向上直走
+    forward(8),      # 入口向上直走
     left(130),        # 左转进入顶部横向通道
     forward(3),
     left(130),        # 左转进入中间向下通道
@@ -353,7 +355,7 @@ ROUTE_STAGES = [
         sdk_wait_sec=FRONT_JUMP_RECOVERY_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
-    # 第0-7阶段：跳后继续调用现有 SDK 巡线5秒。
+    # 第0-7阶段：跳后继续调用现有 SDK 巡线3秒。
     # 这里允许一开始没看见线：巡线节点会自己进入找线状态，找到线后继续跟线。
     RouteStage(
         name='line_follow_after_jump',
@@ -362,6 +364,15 @@ ROUTE_STAGES = [
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         line_follow_require_visible=False,
         enabled=ENABLE_START_SEQUENCE,
+    ),
+
+    # 避障区开始前切换续航步态，后面的写死路线全程沿用这个步态。
+    RouteStage(
+        name='obstacle_economic_gait',
+        description='避障区开始前：切换续航步态',
+        sdk_action='economic_gait',
+        sdk_wait_sec=ECONOMIC_GAIT_WAIT_SEC,
+        enabled=ENABLE_OBSTACLE_ROUTE,
     ),
 
     *build_obstacle_route_stages(OBSTACLE_ROUTE),
@@ -379,6 +390,7 @@ class ObstacleDirectRouteNode(Node):
         'none',
         'stand_up',
         'balance_stand',
+        'economic_gait',
         'front_jump',
         'recovery_stand',
         'stop_move',

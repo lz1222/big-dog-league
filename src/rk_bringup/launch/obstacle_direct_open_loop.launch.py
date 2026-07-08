@@ -166,17 +166,17 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'white_line_min_width_fraction',
-            default_value='0.35',
+            default_value='0.22',
             description='Minimum ROI width fraction for the long white line.'
         ),
         DeclareLaunchArgument(
             'white_line_min_value',
-            default_value='185',
+            default_value='160',
             description='HSV V lower threshold for white-line detection.'
         ),
         DeclareLaunchArgument(
             'white_line_max_saturation',
-            default_value='95',
+            default_value='130',
             description='HSV S upper threshold for white-line detection.'
         ),
         DeclareLaunchArgument(
