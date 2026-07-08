@@ -120,8 +120,6 @@ BRIDGE_MAX_LINEAR_X="${RK_GO2_BRIDGE_MAX_LINEAR_X:-0.60}"
 BRIDGE_MAX_ANGULAR_Z="${RK_GO2_BRIDGE_MAX_ANGULAR_Z:-1.00}"
 LINE_LOST_SWITCH_SEC="${RK_LINE_LOST_SWITCH_SEC:-0.6}"
 LINE_TRACK_STALE_SEC="${RK_LINE_TRACK_STALE_SEC:-0.8}"
-LINE_REACQUIRE_TIMEOUT_SEC="${RK_LINE_REACQUIRE_TIMEOUT_SEC:-5.0}"
-STATUS_LOG_PERIOD_SEC="${RK_ROUTE_STATUS_LOG_PERIOD_SEC:-0.5}"
 
 echo "Starting start-zone line-follow + obstacle direct route test"
 echo "workspace=${WORKSPACE_DIR}"
@@ -131,8 +129,6 @@ echo "bridge_max_linear_x=${BRIDGE_MAX_LINEAR_X}"
 echo "bridge_max_angular_z=${BRIDGE_MAX_ANGULAR_Z}"
 echo "line_lost_switch_sec=${LINE_LOST_SWITCH_SEC}"
 echo "line_track_stale_sec=${LINE_TRACK_STALE_SEC}"
-echo "line_reacquire_timeout_sec=${LINE_REACQUIRE_TIMEOUT_SEC}"
-echo "status_log_period_sec=${STATUS_LOG_PERIOD_SEC}"
 echo "Ctrl+C will trigger route-node emergency stop."
 
 exec ros2 launch rk_bringup obstacle_direct_open_loop.launch.py \
@@ -144,7 +140,5 @@ exec ros2 launch rk_bringup obstacle_direct_open_loop.launch.py \
     debug:="${LINE_DEBUG}" \
     line_lost_switch_sec:="${LINE_LOST_SWITCH_SEC}" \
     line_track_stale_sec:="${LINE_TRACK_STALE_SEC}" \
-    line_reacquire_timeout_sec:="${LINE_REACQUIRE_TIMEOUT_SEC}" \
-    status_log_period_sec:="${STATUS_LOG_PERIOD_SEC}" \
     run_without_sdk_actions:=false \
     allow_ros_topic_sdk_actions:=false

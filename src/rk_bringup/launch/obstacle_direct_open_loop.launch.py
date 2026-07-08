@@ -38,10 +38,6 @@ def generate_launch_description():
     )
     line_lost_switch_sec = LaunchConfiguration('line_lost_switch_sec')
     line_track_stale_sec = LaunchConfiguration('line_track_stale_sec')
-    line_reacquire_timeout_sec = LaunchConfiguration(
-        'line_reacquire_timeout_sec'
-    )
-    status_log_period_sec = LaunchConfiguration('status_log_period_sec')
     start_realsense = LaunchConfiguration('start_realsense')
     start_line_nodes = LaunchConfiguration('start_line_nodes')
     image_topic = LaunchConfiguration('image_topic')
@@ -152,19 +148,6 @@ def generate_launch_description():
                 'Treat /perception/line_track as lost if no fresh message '
                 'arrives within this many seconds.'
             )
-        ),
-        DeclareLaunchArgument(
-            'line_reacquire_timeout_sec',
-            default_value='5.0',
-            description=(
-                'After FrontJump, allow this many seconds for the line '
-                'follower to find the black line again before aborting.'
-            )
-        ),
-        DeclareLaunchArgument(
-            'status_log_period_sec',
-            default_value='0.5',
-            description='Route node status print period in seconds.'
         ),
         DeclareLaunchArgument(
             'start_realsense',
@@ -286,10 +269,6 @@ def generate_launch_description():
                 ['line_lost_switch_sec:=', line_lost_switch_sec],
                 '-p',
                 ['line_track_stale_sec:=', line_track_stale_sec],
-                '-p',
-                ['line_reacquire_timeout_sec:=', line_reacquire_timeout_sec],
-                '-p',
-                ['status_log_period_sec:=', status_log_period_sec],
                 '-p',
                 ['run_without_sdk_actions:=', run_without_sdk_actions],
                 '-p',

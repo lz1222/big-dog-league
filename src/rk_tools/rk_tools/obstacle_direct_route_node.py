@@ -69,8 +69,6 @@ class RouteStage:
 #    - START_LINE_FOLLOW_BEFORE_JUMP_SEC：起步后先巡线多久再前跳，默认 2 秒。
 #    - LINE_LOST_SWITCH_SEC：跳后继续巡线，黑线持续看不到多久后切入避障区。
 #      过早切避障就调大，进避障太晚就调小。
-#    - LINE_REACQUIRE_TIMEOUT_SEC：前跳后给巡线节点找回黑线的最长时间。
-#      跳歪后还没找回线就继续避障很危险，所以超时会停住并报错。
 #    - LINE_FOLLOW_UNTIL_LOST_MAX_SEC：跳后巡线兜底最长时间，防止识别误判
 #      导致没黑线也一直向前走。
 #    - FrontJump 是 Unitree SDK 内置动作，本接口没有蹲下速度参数；
@@ -105,13 +103,11 @@ LINE_FOLLOW_START_SETTLE_SEC = 0.35
 LINE_FOLLOW_STOP_SETTLE_SEC = 0.25
 START_LINE_FOLLOW_BEFORE_JUMP_SEC = 2.0
 LINE_VISIBLE_WAIT_TIMEOUT_SEC = 10.0
-LINE_REACQUIRE_TIMEOUT_SEC = 5.0
 LINE_LOST_SWITCH_SEC = 0.60
 LINE_TRACK_STALE_SEC = 0.80
 LINE_FOLLOW_UNTIL_LOST_MAX_SEC = 8.0
 ROUTE_LINE_MIN_CONFIDENCE = 0.55
 ROUTE_LINE_MAX_ABS_LATERAL_ERROR = 0.95
-STATUS_LOG_PERIOD_SEC = 0.50
 ECONOMIC_GAIT_WAIT_SEC = 0.30
 DEFAULT_FORWARD_SPEED_MPS = 0.35
 DEFAULT_TURN_SPEED_RADPS = 0.80
@@ -408,14 +404,6 @@ class ObstacleDirectRouteNode(Node):
             'line_track_stale_sec',
             LINE_TRACK_STALE_SEC
         ).value)
-        self.line_reacquire_timeout_sec = float(self.declare_parameter(
-            'line_reacquire_timeout_sec',
-            LINE_REACQUIRE_TIMEOUT_SEC
-        ).value)
-        self.status_log_period_sec = float(self.declare_parameter(
-            'status_log_period_sec',
-            STATUS_LOG_PERIOD_SEC
-        ).value)
         self.publish_rate_hz = float(self.declare_parameter(
             'publish_rate_hz',
             20.0
@@ -486,16 +474,6 @@ class ObstacleDirectRouteNode(Node):
         self._active_sdk_process = None
         self._last_line_track_msg = None
         self._last_line_track_time = None
-        self._last_usable_line_time = None
-        self._last_usable_line_stage = 'none'
-        self._last_usable_line_summary = 'none'
-        self._route_start_time = None
-        self._current_stage_name = 'init'
-        self._current_stage_description = ''
-        self._current_stage_index = 0
-        self._current_stage_total = 0
-        self._current_stage_start_time = None
-        self._last_status_log_time = 0.0
 
         self._validate_parameters()
         self.publisher = self.create_publisher(Twist, self.cmd_vel_topic, 10)
@@ -550,8 +528,6 @@ class ObstacleDirectRouteNode(Node):
             ),
             'line_lost_switch_sec': self.line_lost_switch_sec,
             'line_track_stale_sec': self.line_track_stale_sec,
-            'line_reacquire_timeout_sec': self.line_reacquire_timeout_sec,
-            'status_log_period_sec': self.status_log_period_sec,
         }
         for name, value in nonnegative.items():
             if not math.isfinite(value) or value < 0.0:
@@ -713,9 +689,6 @@ class ObstacleDirectRouteNode(Node):
             f'cmd_vel={self.cmd_vel_topic}, stages={len(active_stages)}, '
             f'countdown={self.countdown_sec:.1f}s'
         )
-        self._route_start_time = time.monotonic()
-        self._last_status_log_time = 0.0
-        self._log_route_status('route_start', force=True)
 
         self._publish_stop('countdown stop', self.countdown_sec)
         self._publish_stop('pre-route stop', self.pre_stop_sec)
@@ -750,7 +723,6 @@ class ObstacleDirectRouteNode(Node):
 
     def _run_stage(self, index, total, stage):
         self._raise_if_stop_requested()
-        self._set_current_stage(index, total, stage)
         self.get_logger().info(
             f'route stage {index}/{total}: {stage.description}, '
             f'order={stage.action_order}'
@@ -758,12 +730,10 @@ class ObstacleDirectRouteNode(Node):
 
         if stage.sdk_action != 'none':
             self._run_sdk_action(index, total, stage)
-            self._log_route_status(f'stage_done {stage.name}', force=True)
             return
 
         if stage.line_follow_until_lost:
             self._run_line_follow_until_lost(index, total, stage)
-            self._log_route_status(f'stage_done {stage.name}', force=True)
             return
 
         if (
@@ -771,7 +741,6 @@ class ObstacleDirectRouteNode(Node):
             or stage.line_follow_duration_sec > 0.0
         ):
             self._run_line_follow(index, total, stage)
-            self._log_route_status(f'stage_done {stage.name}', force=True)
             return
 
         if stage.action_order == 'turn_then_forward':
@@ -781,7 +750,6 @@ class ObstacleDirectRouteNode(Node):
                 self.step_stop_sec
             )
             self._run_forward(index, total, stage)
-            self._log_route_status(f'stage_done {stage.name}', force=True)
             return
 
         if stage.forward_steps > 0:
@@ -795,121 +763,9 @@ class ObstacleDirectRouteNode(Node):
         if stage.turn_direction != 'none':
             self._run_turn(index, total, stage)
 
-        self._log_route_status(f'stage_done {stage.name}', force=True)
-
     def _on_line_track(self, msg):
         self._last_line_track_msg = msg
         self._last_line_track_time = time.monotonic()
-        if self._line_msg_usable_without_age(msg):
-            self._last_usable_line_time = self._last_line_track_time
-            self._last_usable_line_stage = self._current_stage_name
-            self._last_usable_line_summary = self._format_line_track_msg(msg)
-
-    def _set_current_stage(self, index, total, stage):
-        self._current_stage_index = index
-        self._current_stage_total = total
-        self._current_stage_name = stage.name
-        self._current_stage_description = stage.description
-        self._current_stage_start_time = time.monotonic()
-        self._log_route_status(f'stage_start {stage.name}', force=True)
-
-    def _line_msg_usable_without_age(self, msg):
-        if msg is None:
-            return False
-        try:
-            return (
-                bool(msg.line_visible)
-                and float(msg.confidence) >= ROUTE_LINE_MIN_CONFIDENCE
-                and abs(float(msg.lateral_error))
-                <= ROUTE_LINE_MAX_ABS_LATERAL_ERROR
-            )
-        except (TypeError, ValueError):
-            return False
-
-    def _format_line_track_msg(self, msg):
-        if msg is None:
-            return 'line_track=None'
-        return (
-            f'line_visible={bool(msg.line_visible)}, '
-            f'confidence={float(msg.confidence):.3f}, '
-            f'lateral={float(msg.lateral_error):.3f}, '
-            f'heading={float(msg.heading_error):.3f}'
-        )
-
-    def _format_current_line_status(self):
-        visible, reason = self._line_is_visible_now()
-        msg = self._last_line_track_msg
-        if msg is None:
-            return f'line_usable={visible}, reason={reason}, line_track=None'
-
-        now = time.monotonic()
-        age = now - float(self._last_line_track_time or now)
-        return (
-            f'line_usable={visible}, reason={reason}, '
-            f'{self._format_line_track_msg(msg)}, age={age:.2f}s'
-        )
-
-    def _format_last_usable_line_status(self):
-        if self._last_usable_line_time is None:
-            return 'last_usable_line=none'
-
-        age = time.monotonic() - self._last_usable_line_time
-        return (
-            f'last_usable_line_age={age:.2f}s, '
-            f'last_usable_line_stage={self._last_usable_line_stage}, '
-            f'last_usable_line=({self._last_usable_line_summary})'
-        )
-
-    def _log_route_status(self, label, force=False):
-        now = time.monotonic()
-        period = max(0.0, self.status_log_period_sec)
-        if (
-            not force
-            and period > 0.0
-            and now - self._last_status_log_time < period
-        ):
-            return
-
-        self._last_status_log_time = now
-        route_elapsed = 0.0
-        if self._route_start_time is not None:
-            route_elapsed = now - self._route_start_time
-
-        stage_elapsed = 0.0
-        if self._current_stage_start_time is not None:
-            stage_elapsed = now - self._current_stage_start_time
-
-        self.get_logger().info(
-            '当前状态: '
-            f'{label}, '
-            f'route_elapsed={route_elapsed:.2f}s, '
-            f'stage={self._current_stage_index}/'
-            f'{self._current_stage_total} {self._current_stage_name}, '
-            f'stage_elapsed={stage_elapsed:.2f}s, '
-            f'{self._format_current_line_status()}, '
-            f'{self._format_last_usable_line_status()}'
-        )
-
-    def _log_black_line_lost(self, stage_name, reason, lost_for, decision):
-        now = time.monotonic()
-        route_elapsed = 0.0
-        if self._route_start_time is not None:
-            route_elapsed = now - self._route_start_time
-        stage_elapsed = 0.0
-        if self._current_stage_start_time is not None:
-            stage_elapsed = now - self._current_stage_start_time
-
-        self.get_logger().error(
-            '黑线识别不到的位置: '
-            f'stage={stage_name}, '
-            f'route_elapsed={route_elapsed:.2f}s, '
-            f'stage_elapsed={stage_elapsed:.2f}s, '
-            f'lost_for={lost_for:.2f}s, '
-            f'reason={reason}, '
-            f'decision={decision}, '
-            f'{self._format_current_line_status()}, '
-            f'{self._format_last_usable_line_status()}'
-        )
 
     def _line_is_visible_now(self):
         now = time.monotonic()
@@ -924,15 +780,10 @@ class ObstacleDirectRouteNode(Node):
             return False, 'line_visible_false'
 
         confidence = float(self._last_line_track_msg.confidence)
-        if not math.isfinite(confidence):
-            return False, 'confidence_not_finite'
         if confidence < ROUTE_LINE_MIN_CONFIDENCE:
             return False, f'confidence_low_{confidence:.2f}'
 
-        lateral_error_raw = float(self._last_line_track_msg.lateral_error)
-        if not math.isfinite(lateral_error_raw):
-            return False, 'lateral_error_not_finite'
-        lateral_error = abs(lateral_error_raw)
+        lateral_error = abs(float(self._last_line_track_msg.lateral_error))
         if lateral_error > ROUTE_LINE_MAX_ABS_LATERAL_ERROR:
             return False, f'lateral_error_large_{lateral_error:.2f}'
 
@@ -966,7 +817,7 @@ class ObstacleDirectRouteNode(Node):
             f'{stage.name} mission_start',
             LINE_FOLLOW_START_SETTLE_SEC
         )
-        self._wait_during_fixed_line_follow(stage.name, duration_sec)
+        self._wait_for_duration(duration_sec)
         self._publish_mission_command(
             self.mission_stop_publisher,
             True,
@@ -978,59 +829,6 @@ class ObstacleDirectRouteNode(Node):
             LINE_FOLLOW_STOP_SETTLE_SEC
         )
 
-    def _wait_during_fixed_line_follow(self, stage_name, duration_sec):
-        period_sec = 1.0 / self.publish_rate_hz
-        end_time = time.monotonic() + duration_sec
-        lost_since = None
-        abort_lost_sec = max(self.line_lost_switch_sec, 1.00)
-
-        while rclpy.ok() and time.monotonic() < end_time:
-            self._raise_if_stop_requested()
-            now = time.monotonic()
-            visible, reason = self._line_is_visible_now()
-            if visible:
-                if lost_since is not None:
-                    self.get_logger().info(
-                        f'{stage_name}: 黑线恢复，之前短暂不可用 '
-                        f'{now - lost_since:.2f}s'
-                    )
-                lost_since = None
-            else:
-                if lost_since is None:
-                    lost_since = now
-                    self.get_logger().warn(
-                        f'{stage_name}: 固定巡线阶段黑线不可用候选，'
-                        f'reason={reason}, '
-                        f'{self._format_current_line_status()}'
-                    )
-
-                lost_for = now - lost_since
-                if lost_for >= abort_lost_sec:
-                    self._log_black_line_lost(
-                        stage_name,
-                        reason,
-                        lost_for,
-                        '固定巡线阶段丢线，停止后不执行前跳'
-                    )
-                    self._publish_mission_command(
-                        self.mission_stop_publisher,
-                        True,
-                        f'{stage_name} mission_stop fixed line lost',
-                        LINE_FOLLOW_STOP_SETTLE_SEC
-                    )
-                    self._publish_stop(
-                        f'after fixed line lost {stage_name}',
-                        LINE_FOLLOW_STOP_SETTLE_SEC
-                    )
-                    raise RuntimeError(
-                        f'{stage_name}: black line lost for '
-                        f'{lost_for:.2f}s before jump; stop route'
-                    )
-
-            self._log_route_status(f'{stage_name} fixed_line_follow')
-            rclpy.spin_once(self, timeout_sec=0.0)
-            time.sleep(period_sec)
-
     def _run_line_follow_until_lost(self, index, total, stage):
         max_duration_sec = stage.line_follow_duration_sec
 
@@ -1041,8 +839,20 @@ class ObstacleDirectRouteNode(Node):
             f'stale_timeout={self.line_track_stale_sec:.2f}s'
         )
 
+        if not self._wait_for_line_visible(stage.name):
+            self.get_logger().warn(
+                f'{stage.name}: line not visible before line_follow_until_lost; '
+                'skip blind line following and switch to hardcoded route'
+            )
+            self._publish_mission_command(
+                self.mission_stop_publisher,
+                True,
+                f'{stage.name} mission_stop no visible line',
+                LINE_FOLLOW_STOP_SETTLE_SEC
+            )
+            return
         self._publish_stop(
-            f'before line follow/search until lost {stage.name}',
+            f'before line follow until lost {stage.name}',
             LINE_FOLLOW_START_SETTLE_SEC
         )
         self._publish_mission_command(
@@ -1054,7 +864,6 @@ class ObstacleDirectRouteNode(Node):
 
         period_sec = 1.0 / self.publish_rate_hz
         start_time = time.monotonic()
-        acquired_time = None
         lost_since = None
         last_report_time = 0.0
         stop_reason = 'line_lost'
@@ -1062,95 +871,37 @@ class ObstacleDirectRouteNode(Node):
         while rclpy.ok():
             self._raise_if_stop_requested()
             now = time.monotonic()
-            route_follow_elapsed = now - start_time
-            acquired_line = acquired_time is not None
-
-            visible, reason = self._line_is_visible_now()
-
-            if not acquired_line:
-                if visible:
-                    acquired_time = now
-                    lost_since = None
-                    self.get_logger().warn(
-                        f'{stage.name}: 跳后已经重新识别到黑线，'
-                        f'开始正常巡线到避障区入口，'
-                        f'find_line_elapsed={route_follow_elapsed:.2f}s, '
-                        f'{self._format_current_line_status()}'
-                    )
-                else:
-                    if route_follow_elapsed >= self.line_reacquire_timeout_sec:
-                        stop_reason = reason
-                        self._log_black_line_lost(
-                            stage.name,
-                            reason,
-                            route_follow_elapsed,
-                            '跳后找线超时，位置不确定，不继续进入避障区'
-                        )
-                        self._publish_mission_command(
-                            self.mission_stop_publisher,
-                            True,
-                            f'{stage.name} mission_stop reacquire timeout',
-                            LINE_FOLLOW_STOP_SETTLE_SEC
-                        )
-                        self._publish_stop(
-                            f'after line reacquire timeout {stage.name}',
-                            LINE_FOLLOW_STOP_SETTLE_SEC
-                        )
-                        raise RuntimeError(
-                            f'{stage.name}: could not reacquire black line '
-                            f'within {self.line_reacquire_timeout_sec:.2f}s '
-                            'after jump'
-                        )
-
-                    if now - last_report_time >= 1.0:
-                        self.get_logger().warn(
-                            f'{stage.name}: 跳后正在直接找线，'
-                            f'elapsed={route_follow_elapsed:.2f}s, '
-                            f'timeout={self.line_reacquire_timeout_sec:.2f}s, '
-                            f'reason={reason}, '
-                            f'{self._format_current_line_status()}'
-                        )
-                        last_report_time = now
-
-                    self._log_route_status(f'{stage.name} searching_line')
-                    rclpy.spin_once(self, timeout_sec=0.0)
-                    time.sleep(period_sec)
-                    continue
 
             if max_duration_sec > 0.0 and now - start_time >= max_duration_sec:
                 stop_reason = 'max_duration_reached'
                 self.get_logger().warn(
                     f'{stage.name}: max line-follow duration reached '
-                    f'({max_duration_sec:.2f}s); 兜底切入避障区写死路线，'
-                    f'{self._format_current_line_status()}'
+                    f'({max_duration_sec:.2f}s); switching to obstacle route'
                 )
                 break
 
+            visible, reason = self._line_is_visible_now()
             if visible:
                 if lost_since is not None:
                     self.get_logger().info(
-                        f'{stage.name}: 黑线在切换前恢复，'
-                        f'lost_for={now - lost_since:.2f}s, '
-                        f'{self._format_current_line_status()}'
+                        f'{stage.name}: line recovered before switch, '
+                        f'lost_for={now - lost_since:.2f}s'
                     )
                 lost_since = None
             else:
                 if lost_since is None:
                     lost_since = now
                     self.get_logger().warn(
-                        f'{stage.name}: 避障入口丢线候选，'
-                        f'reason={reason}, '
-                        f'{self._format_current_line_status()}'
+                        f'{stage.name}: line lost candidate, reason={reason}'
                     )
 
                 lost_for = now - lost_since
                 if lost_for >= self.line_lost_switch_sec:
                     stop_reason = reason
-                    self._log_black_line_lost(
-                        stage.name,
-                        reason,
-                        lost_for,
-                        '黑线持续不可用，确认到达避障区入口，切入写死路线'
+                    self.get_logger().warn(
+                        f'{stage.name}: line lost for {lost_for:.2f}s '
+                        f'(reason={reason}); switching to hardcoded obstacle '
+                        'route'
                     )
                     break
 
@@ -1163,7 +914,7 @@ class ObstacleDirectRouteNode(Node):
                 else:
                     age = now - float(self._last_line_track_time or now)
                     self.get_logger().info(
-                        f'{stage.name}: 正在巡线接近避障区，'
+                        f'{stage.name}: running line follow, '
                         f'visible={bool(msg.line_visible)}, '
                         f'confidence={msg.confidence:.3f}, '
                         f'lateral={msg.lateral_error:.3f}, '
@@ -1172,7 +923,6 @@ class ObstacleDirectRouteNode(Node):
                     )
                 last_report_time = now
 
-            self._log_route_status(f'{stage.name} following_until_lost')
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
 
@@ -1202,7 +952,7 @@ class ObstacleDirectRouteNode(Node):
         while rclpy.ok():
             self._raise_if_stop_requested()
             now = time.monotonic()
-            visible, reason = self._line_is_visible_now()
+            visible, _reason = self._line_is_visible_now()
             if visible:
                 msg = self._last_line_track_msg
                 self.get_logger().info(
@@ -1223,9 +973,7 @@ class ObstacleDirectRouteNode(Node):
                 else:
                     self.get_logger().warn(
                         f'{stage_name}: line_track received but '
-                        f'line not usable for {timeout_sec:.1f}s, '
-                        f'reason={reason}, '
-                        f'{self._format_current_line_status()}'
+                        f'line not usable for {timeout_sec:.1f}s'
                     )
                 return False
 
@@ -1237,8 +985,8 @@ class ObstacleDirectRouteNode(Node):
                 else:
                     self.get_logger().info(
                         f'{stage_name}: still waiting for visible line, '
-                        f'reason={reason}, '
-                        f'{self._format_current_line_status()}'
+                        f'last_visible={self._last_line_track_msg.line_visible}, '
+                        f'confidence={self._last_line_track_msg.confidence:.3f}'
                     )
                 last_report_time = now
 
@@ -1346,9 +1094,6 @@ class ObstacleDirectRouteNode(Node):
                         f'{stage.name} sdk_action timeout after '
                         f'{timeout_sec:.2f}s'
                     )
-                self._log_route_status(
-                    f'{stage.name} sdk_action {stage.sdk_action}'
-                )
                 rclpy.spin_once(self, timeout_sec=0.0)
                 time.sleep(0.05)
             else:
@@ -1643,7 +1388,6 @@ class ObstacleDirectRouteNode(Node):
         while rclpy.ok() and time.monotonic() < end_time:
             self._raise_if_stop_requested()
             publisher.publish(msg)
-            self._log_route_status(label)
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
 
@@ -1653,7 +1397,6 @@ class ObstacleDirectRouteNode(Node):
 
         while rclpy.ok() and time.monotonic() < end_time:
             self._raise_if_stop_requested()
-            self._log_route_status('wait')
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
 
@@ -1664,9 +1407,6 @@ class ObstacleDirectRouteNode(Node):
         while rclpy.ok() and time.monotonic() < end_time:
             self._raise_if_stop_requested()
             self.publisher.publish(cmd)
-            self._log_route_status(
-                f'cmd_vel vx={cmd.linear.x:.3f}, wz={cmd.angular.z:.3f}'
-            )
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
 
@@ -1719,10 +1459,7 @@ def main(args=None):
     except Exception as error:
         if node is not None:
             node.get_logger().error(f'Route aborted: {error}')
-            node._publish_emergency_stop(
-                'abort final stop',
-                max(node.final_stop_sec, EMERGENCY_STOP_SEC)
-            )
+            node._publish_stop('abort final stop', node.final_stop_sec)
         else:
             raise
     finally:
