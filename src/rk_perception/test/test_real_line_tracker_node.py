@@ -46,6 +46,20 @@ def test_center_line_is_visible():
     assert abs(result.lateral_error) < 0.08
 
 
+def test_robot_center_offset_changes_lateral_error_reference():
+    image = draw_line(make_image(), bottom_x=320)
+
+    result = detect_line_in_image(
+        image,
+        default_config(),
+        robot_center_x=352.0
+    )
+
+    assert result.line_visible is True
+    assert result.robot_center_x == 352.0
+    assert result.lateral_error < -0.05
+
+
 def test_right_line_has_positive_lateral_error():
     image = draw_line(make_image(), bottom_x=430)
 
