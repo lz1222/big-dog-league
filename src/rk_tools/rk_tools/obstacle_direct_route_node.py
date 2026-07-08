@@ -9,6 +9,15 @@ import time
 from dataclasses import dataclass
 from importlib import import_module
 
+try:
+    import cv2
+    import numpy as np
+    from sensor_msgs.msg import Image
+except ImportError:
+    cv2 = None
+    np = None
+    Image = None
+
 import rclpy
 from geometry_msgs.msg import Twist
 from rk_interfaces.msg import LineTrack
@@ -34,14 +43,17 @@ class RouteStage:
     line_follow_duration_sec: float = 0.0
     line_follow_speed_mps: float = 0.30
     line_follow_until_lost: bool = False
+    line_follow_until_white_line: bool = False
+    line_follow_require_visible: bool = True
     enabled: bool = True
 
 
 # ========================= 用户调试修改区 =========================
 #
 # 这个文件现在统一负责：
-#   启停区出发 -> 续航步态巡线2秒 -> 前跳 -> 续航步态直接找线
-#   -> 继续巡线直到黑线消失
+#   启停区出发 -> 调用已跑通的 SDK 巡线，直到检测到长白线
+#   -> 向前直走2步 -> 前跳 -> 继续启动巡线自动找线
+#   -> 巡线5秒
 #   -> 避障区蛇形路线
 #
 # 直走和转弯仍然通过 /navigation/cmd_vel 走你已经验证能动的 SDK UDP
@@ -66,16 +78,24 @@ class RouteStage:
 #      你的 Go2 低于 0.27m/s 基本不动，所以默认按 0.30m/s 计算。
 #
 # 3.1 启停区巡线与跳跃：
-#    - START_LINE_FOLLOW_BEFORE_JUMP_SEC：起步后先巡线多久再前跳，默认 2 秒。
-#    - LINE_LOST_SWITCH_SEC：跳后继续巡线，黑线持续看不到多久后切入避障区。
-#      过早切避障就调大，进避障太晚就调小。
-#    - LINE_FOLLOW_UNTIL_LOST_MAX_SEC：跳后巡线兜底最长时间，防止识别误判
-#      导致没黑线也一直向前走。
+#    - START_LINE_FOLLOW_UNTIL_WHITE_MAX_SEC：
+#      起步后最多巡线多久等待长白线；检测到长白线会提前停巡线。
+#    - START_FORWARD_AFTER_WHITE_STEPS：
+#      检测到长白线后，先向前直走几步再跳。你这次要求为 2 步。
+#    - POST_JUMP_LINE_FOLLOW_SEC：
+#      跳完后继续巡线多久再切入避障区。你这次要求为 5 秒。
+#    - WHITE_LINE_*：
+#      长白线识别参数。默认会同时用图像里的横向白色条带，以及
+#      “黑线突然持续不可用”作为兜底触发，因为长白线通常会让黑线
+#      检测中断。
+#    - LINE_LOST_SWITCH_SEC：
+#      如果图像白线识别不稳定，黑线持续看不到多久后也认为到了长白线。
+#      过早触发就调大，触发太晚就调小。
 #    - FrontJump 是 Unitree SDK 内置动作，本接口没有蹲下速度参数；
 #      这里通过跳前停稳和跳后恢复等待来降低冲击。
 #
 # 4. SDK动作阶段 RouteStage 的字段：
-#    - sdk_action：'balance_stand' / 'economic_gait' / 'front_jump' /
+#    - sdk_action：'balance_stand' / 'front_jump' /
 #                  'recovery_stand' / 'stop_move'
 #    - sdk_wait_sec：动作发出后等待多久。
 #    - enabled：False 表示临时跳过这个阶段。
@@ -90,7 +110,7 @@ class RouteStage:
 #    - 先单独确认巡线系统 line_visible=true。
 #    - 再测：站稳 -> 巡线3步 -> 停。
 #    - 再打开跳跃，确认 FrontJump。
-#    - 最后接巡线4步和避障区。
+#    - 最后接跳后巡线和避障区。
 #
 # 急停：
 #   Ctrl+C 后本节点会立刻连续发布 0 速度和 mission_stop，并尽量调用
@@ -101,20 +121,33 @@ LINE_FOLLOW_STEP_LENGTH_M = 0.10
 LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.30
 LINE_FOLLOW_START_SETTLE_SEC = 0.35
 LINE_FOLLOW_STOP_SETTLE_SEC = 0.25
-START_LINE_FOLLOW_BEFORE_JUMP_SEC = 2.0
+START_LINE_FOLLOW_UNTIL_WHITE_MAX_SEC = 16.0
+START_FORWARD_AFTER_WHITE_STEPS = 3
+POST_JUMP_LINE_FOLLOW_SEC = 5.0
 LINE_VISIBLE_WAIT_TIMEOUT_SEC = 10.0
 LINE_LOST_SWITCH_SEC = 0.60
 LINE_TRACK_STALE_SEC = 0.80
-LINE_FOLLOW_UNTIL_LOST_MAX_SEC = 8.0
-ROUTE_LINE_MIN_CONFIDENCE = 0.55
+ROUTE_LINE_MIN_CONFIDENCE = 0.45
 ROUTE_LINE_MAX_ABS_LATERAL_ERROR = 0.95
-ECONOMIC_GAIT_WAIT_SEC = 0.30
+WHITE_LINE_DETECTION_ENABLED = True
+WHITE_LINE_IMAGE_TOPIC = '/camera/color/image_raw'
+WHITE_LINE_ROI_TOP_FRACTION = 0.42
+WHITE_LINE_ROI_BOTTOM_FRACTION = 0.94
+WHITE_LINE_ROI_SIDE_MARGIN_FRACTION = 0.05
+WHITE_LINE_MIN_WIDTH_FRACTION = 0.35
+WHITE_LINE_MIN_HEIGHT_FRACTION = 0.010
+WHITE_LINE_MAX_HEIGHT_FRACTION = 0.32
+WHITE_LINE_MIN_ASPECT_RATIO = 3.0
+WHITE_LINE_MIN_VALUE = 185
+WHITE_LINE_MAX_SATURATION = 95
+WHITE_LINE_STABLE_SEC = 0.18
+WHITE_LINE_STALE_SEC = 0.70
 DEFAULT_FORWARD_SPEED_MPS = 0.35
 DEFAULT_TURN_SPEED_RADPS = 0.80
 # 避障区转弯时也要给前进速度，避免原地扭腿。
-# 你的 Go2 实测 0.27m/s 以下基本不往前走，所以这里默认用 0.30。
+# 你的 Go2 实测 0.27m/s 以下基本不往前走，所以这里默认用 0.27。
 # 如果转弯半径太大容易撞墙，先降到 0.27；如果还是像原地转，升到 0.35。
-DEFAULT_TURN_FORWARD_SPEED_MPS = 0.24
+DEFAULT_TURN_FORWARD_SPEED_MPS = 0.27
 START_FORWARD_SPEED_MPS = 0.35
 USE_DIRECT_START_FORWARD = False
 
@@ -139,7 +172,6 @@ SDK_ACTION_API_IDS = {
     'stop_move': 1003,
     'recovery_stand': 1006,
     'front_jump': 1031,
-    'economic_gait': 1063,
 }
 SDK_LD_LIBRARY_PATH_PREFIX = (
     '/home/unitree/rk_inspection_ws/third_party/unitree_sdk2_official/'
@@ -273,38 +305,34 @@ ROUTE_STAGES = [
         sdk_wait_sec=2.0,
         enabled=ENABLE_START_SEQUENCE and START_FROM_PRONE,
     ),
-    # 第0-2阶段：站稳，准备接受 Move 速度控制。
+    # 第0-2阶段：启停区直接开始 SDK 巡线，直到识别到长白线。
+    # 这里不切续航步态，避免每次切换步态造成急停和动作不连贯。
+    # 要改等待长白线的最长时间，就改 START_LINE_FOLLOW_UNTIL_WHITE_MAX_SEC。
     RouteStage(
-        name='start_balance_stand',
-        description='第0-2阶段：站稳准备巡线',
-        sdk_action='balance_stand',
-        sdk_wait_sec=0.0,
-        enabled=ENABLE_START_SEQUENCE,
-    ),
-    # 第0-3阶段：切换续航步态，后面巡线和转弯更柔和。
-    RouteStage(
-        name='start_economic_gait',
-        description='第0-3阶段：切换续航步态',
-        sdk_action='economic_gait',
-        sdk_wait_sec=ECONOMIC_GAIT_WAIT_SEC,
-        enabled=ENABLE_START_SEQUENCE,
-    ),
-    # 第0-4阶段：起步后先巡线2秒，让狗沿黑线走到跳跃前位置。
-    # 要改跳前巡线时间，就改 START_LINE_FOLLOW_BEFORE_JUMP_SEC。
-    RouteStage(
-        name='line_follow_before_jump',
+        name='line_follow_until_white_line',
         description=(
-            f'第0-4阶段：启停区巡线'
-            f'{START_LINE_FOLLOW_BEFORE_JUMP_SEC:.1f}秒，到跳跃前位置'
+            '第0-2阶段：启停区 SDK 巡线，检测到长白线后停下'
         ),
-        line_follow_duration_sec=START_LINE_FOLLOW_BEFORE_JUMP_SEC,
+        line_follow_until_white_line=True,
+        line_follow_duration_sec=START_LINE_FOLLOW_UNTIL_WHITE_MAX_SEC,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
-    # 第0-4.5阶段：前跳前先站稳，降低从巡线速度直接进入跳跃动作的冲击。
+    # 第0-3阶段：检测到长白线后，再向前走两步，然后接前跳。
+    RouteStage(
+        name='forward_after_white_line',
+        description=(
+            f'第0-3阶段：长白线后向前直走 '
+            f'{START_FORWARD_AFTER_WHITE_STEPS} 步，再准备前跳'
+        ),
+        forward_steps=START_FORWARD_AFTER_WHITE_STEPS,
+        forward_speed_mps=START_FORWARD_SPEED_MPS,
+        enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
+    ),
+    # 第0-4阶段：前跳前先站稳，降低从巡线速度直接进入跳跃动作的冲击。
     RouteStage(
         name='prepare_front_jump_balance',
-        description='第0-4.5阶段：前跳前站稳，保护关节',
+        description='第0-4阶段：前跳前站稳，保护关节',
         sdk_action='balance_stand',
         sdk_wait_sec=FRONT_JUMP_PRE_BALANCE_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
@@ -317,7 +345,7 @@ ROUTE_STAGES = [
         sdk_wait_sec=FRONT_JUMP_ACTION_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
-    # 第0-6阶段：跳完后恢复站立，再切回续航步态。
+    # 第0-6阶段：跳完后恢复站立。
     RouteStage(
         name='recover_after_front_jump',
         description='第0-6阶段：跳完后恢复站立',
@@ -325,31 +353,15 @@ ROUTE_STAGES = [
         sdk_wait_sec=FRONT_JUMP_RECOVERY_WAIT_SEC,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
+    # 第0-7阶段：跳后继续调用现有 SDK 巡线5秒。
+    # 这里允许一开始没看见线：巡线节点会自己进入找线状态，找到线后继续跟线。
     RouteStage(
-        name='economic_after_front_jump',
-        description='第0-7阶段：跳完后重新切换续航步态',
-        sdk_action='economic_gait',
-        sdk_wait_sec=ECONOMIC_GAIT_WAIT_SEC,
-        enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
-    ),
-    # 第0-8阶段：跳后继续调用现有巡线。黑线持续消失后，
-    # 自动 mission_stop，然后接入下面的避障区写死路线。
-    RouteStage(
-        name='line_follow_until_obstacle_entry',
-        description='第0-8阶段：跳后巡线，黑线消失后切入避障区',
-        line_follow_until_lost=True,
-        line_follow_duration_sec=LINE_FOLLOW_UNTIL_LOST_MAX_SEC,
+        name='line_follow_after_jump',
+        description=f'第0-7阶段：跳后继续巡线 {POST_JUMP_LINE_FOLLOW_SEC:.1f} 秒',
+        line_follow_duration_sec=POST_JUMP_LINE_FOLLOW_SEC,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
+        line_follow_require_visible=False,
         enabled=ENABLE_START_SEQUENCE,
-    ),
-
-    # 避障区写死路线前再切一次续航步态，保证避障区全程用续航模式跑。
-    RouteStage(
-        name='obstacle_economic_gait',
-        description='避障区开始前：再次切换续航步态',
-        sdk_action='economic_gait',
-        sdk_wait_sec=ECONOMIC_GAIT_WAIT_SEC,
-        enabled=ENABLE_OBSTACLE_ROUTE,
     ),
 
     *build_obstacle_route_stages(OBSTACLE_ROUTE),
@@ -367,7 +379,6 @@ class ObstacleDirectRouteNode(Node):
         'none',
         'stand_up',
         'balance_stand',
-        'economic_gait',
         'front_jump',
         'recovery_stand',
         'stop_move',
@@ -392,6 +403,60 @@ class ObstacleDirectRouteNode(Node):
             'line_track_topic',
             LINE_TRACK_TOPIC
         ).value
+        self.white_line_detection_enabled = bool(self.declare_parameter(
+            'white_line_detection_enabled',
+            WHITE_LINE_DETECTION_ENABLED
+        ).value)
+        self.white_line_image_topic = self.declare_parameter(
+            'white_line_image_topic',
+            WHITE_LINE_IMAGE_TOPIC
+        ).value
+        self.white_line_roi_top_fraction = float(self.declare_parameter(
+            'white_line_roi_top_fraction',
+            WHITE_LINE_ROI_TOP_FRACTION
+        ).value)
+        self.white_line_roi_bottom_fraction = float(self.declare_parameter(
+            'white_line_roi_bottom_fraction',
+            WHITE_LINE_ROI_BOTTOM_FRACTION
+        ).value)
+        self.white_line_roi_side_margin_fraction = float(
+            self.declare_parameter(
+                'white_line_roi_side_margin_fraction',
+                WHITE_LINE_ROI_SIDE_MARGIN_FRACTION
+            ).value
+        )
+        self.white_line_min_width_fraction = float(self.declare_parameter(
+            'white_line_min_width_fraction',
+            WHITE_LINE_MIN_WIDTH_FRACTION
+        ).value)
+        self.white_line_min_height_fraction = float(self.declare_parameter(
+            'white_line_min_height_fraction',
+            WHITE_LINE_MIN_HEIGHT_FRACTION
+        ).value)
+        self.white_line_max_height_fraction = float(self.declare_parameter(
+            'white_line_max_height_fraction',
+            WHITE_LINE_MAX_HEIGHT_FRACTION
+        ).value)
+        self.white_line_min_aspect_ratio = float(self.declare_parameter(
+            'white_line_min_aspect_ratio',
+            WHITE_LINE_MIN_ASPECT_RATIO
+        ).value)
+        self.white_line_min_value = int(self.declare_parameter(
+            'white_line_min_value',
+            WHITE_LINE_MIN_VALUE
+        ).value)
+        self.white_line_max_saturation = int(self.declare_parameter(
+            'white_line_max_saturation',
+            WHITE_LINE_MAX_SATURATION
+        ).value)
+        self.white_line_stable_sec = float(self.declare_parameter(
+            'white_line_stable_sec',
+            WHITE_LINE_STABLE_SEC
+        ).value)
+        self.white_line_stale_sec = float(self.declare_parameter(
+            'white_line_stale_sec',
+            WHITE_LINE_STALE_SEC
+        ).value)
         self.line_visible_wait_timeout_sec = float(self.declare_parameter(
             'line_visible_wait_timeout_sec',
             LINE_VISIBLE_WAIT_TIMEOUT_SEC
@@ -474,6 +539,11 @@ class ObstacleDirectRouteNode(Node):
         self._active_sdk_process = None
         self._last_line_track_msg = None
         self._last_line_track_time = None
+        self._last_white_line_time = None
+        self._last_white_line_detected = False
+        self._white_line_candidate_since = None
+        self._last_white_line_score = 0.0
+        self._last_white_line_detail = 'not_checked'
 
         self._validate_parameters()
         self.publisher = self.create_publisher(Twist, self.cmd_vel_topic, 10)
@@ -483,6 +553,19 @@ class ObstacleDirectRouteNode(Node):
             self._on_line_track,
             10
         )
+        self.white_line_image_subscription = None
+        if self.white_line_detection_enabled and Image is not None:
+            self.white_line_image_subscription = self.create_subscription(
+                Image,
+                self.white_line_image_topic,
+                self._on_white_line_image,
+                5
+            )
+        elif self.white_line_detection_enabled:
+            self.get_logger().warn(
+                'white line image detection requested but sensor_msgs/Image '
+                'or OpenCV/Numpy is unavailable; line-lost fallback remains.'
+            )
         self.mission_start_publisher = self.create_publisher(
             Bool,
             self.mission_start_topic,
@@ -503,6 +586,8 @@ class ObstacleDirectRouteNode(Node):
             raise ValueError('mission_stop_topic must not be empty')
         if not self.line_track_topic:
             raise ValueError('line_track_topic must not be empty')
+        if self.white_line_detection_enabled and not self.white_line_image_topic:
+            raise ValueError('white_line_image_topic must not be empty')
 
         positive = {
             'publish_rate_hz': self.publish_rate_hz,
@@ -528,12 +613,45 @@ class ObstacleDirectRouteNode(Node):
             ),
             'line_lost_switch_sec': self.line_lost_switch_sec,
             'line_track_stale_sec': self.line_track_stale_sec,
+            'white_line_roi_top_fraction': self.white_line_roi_top_fraction,
+            'white_line_roi_bottom_fraction': (
+                self.white_line_roi_bottom_fraction
+            ),
+            'white_line_roi_side_margin_fraction': (
+                self.white_line_roi_side_margin_fraction
+            ),
+            'white_line_min_width_fraction': (
+                self.white_line_min_width_fraction
+            ),
+            'white_line_min_height_fraction': (
+                self.white_line_min_height_fraction
+            ),
+            'white_line_max_height_fraction': (
+                self.white_line_max_height_fraction
+            ),
+            'white_line_min_aspect_ratio': self.white_line_min_aspect_ratio,
+            'white_line_stable_sec': self.white_line_stable_sec,
+            'white_line_stale_sec': self.white_line_stale_sec,
         }
         for name, value in nonnegative.items():
             if not math.isfinite(value) or value < 0.0:
                 raise ValueError(
                     f'{name} must be a finite nonnegative number'
                 )
+        if self.white_line_roi_bottom_fraction <= (
+            self.white_line_roi_top_fraction
+        ):
+            raise ValueError(
+                'white_line_roi_bottom_fraction must be greater than '
+                'white_line_roi_top_fraction'
+            )
+        if self.white_line_min_height_fraction > (
+            self.white_line_max_height_fraction
+        ):
+            raise ValueError(
+                'white_line_min_height_fraction must be <= '
+                'white_line_max_height_fraction'
+            )
 
         if not self.sdk_network_interface:
             raise ValueError('sdk_network_interface must not be empty')
@@ -623,6 +741,7 @@ class ObstacleDirectRouteNode(Node):
             has_sdk_action = stage.sdk_action != 'none'
             has_line_follow = (
                 stage.line_follow_until_lost
+                or stage.line_follow_until_white_line
                 or stage.line_follow_steps > 0
                 or stage.line_follow_duration_sec > 0.0
             )
@@ -736,6 +855,10 @@ class ObstacleDirectRouteNode(Node):
             self._run_line_follow_until_lost(index, total, stage)
             return
 
+        if stage.line_follow_until_white_line:
+            self._run_line_follow_until_white_line(index, total, stage)
+            return
+
         if (
             stage.line_follow_steps > 0
             or stage.line_follow_duration_sec > 0.0
@@ -766,6 +889,166 @@ class ObstacleDirectRouteNode(Node):
     def _on_line_track(self, msg):
         self._last_line_track_msg = msg
         self._last_line_track_time = time.monotonic()
+
+    def _on_white_line_image(self, msg):
+        if not self.white_line_detection_enabled:
+            return
+
+        image = self._image_msg_to_bgr(msg)
+        if image is None:
+            self._last_white_line_detected = False
+            self._white_line_candidate_since = None
+            self._last_white_line_detail = 'image_decode_failed'
+            self._last_white_line_time = time.monotonic()
+            return
+
+        detected, score, detail = self._detect_long_white_line(image)
+        now = time.monotonic()
+        self._last_white_line_detected = detected
+        self._last_white_line_score = score
+        self._last_white_line_detail = detail
+        self._last_white_line_time = now
+
+        if detected:
+            if self._white_line_candidate_since is None:
+                self._white_line_candidate_since = now
+        else:
+            self._white_line_candidate_since = None
+
+    def _image_msg_to_bgr(self, msg):
+        if cv2 is None or np is None:
+            return None
+
+        encoding = str(msg.encoding or '').lower()
+        height = int(msg.height)
+        width = int(msg.width)
+        step = int(msg.step)
+        if height <= 0 or width <= 0 or step <= 0:
+            return None
+
+        try:
+            data = np.frombuffer(msg.data, dtype=np.uint8)
+            rows = data.reshape((height, step))
+            if encoding in ('bgr8', 'rgb8'):
+                channels = 3
+                image = rows[:, :width * channels].reshape(
+                    (height, width, channels)
+                )
+                if encoding == 'rgb8':
+                    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                return image
+            if encoding in ('bgra8', 'rgba8'):
+                channels = 4
+                image = rows[:, :width * channels].reshape(
+                    (height, width, channels)
+                )
+                if encoding == 'rgba8':
+                    return cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+                return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+            if encoding in ('mono8', '8uc1'):
+                gray = rows[:, :width].reshape((height, width))
+                return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        except (ValueError, cv2.error):
+            return None
+
+        return None
+
+    def _detect_long_white_line(self, image_bgr):
+        height, width = image_bgr.shape[:2]
+        y0 = int(max(0.0, min(0.98, self.white_line_roi_top_fraction)) * height)
+        y1 = int(max(0.01, min(1.0, self.white_line_roi_bottom_fraction)) * height)
+        x_margin = int(
+            max(0.0, min(0.45, self.white_line_roi_side_margin_fraction))
+            * width
+        )
+        x0 = x_margin
+        x1 = max(x0 + 1, width - x_margin)
+        if y1 <= y0 + 1:
+            return False, 0.0, 'empty_roi'
+
+        roi = image_bgr[y0:y1, x0:x1]
+        roi_h, roi_w = roi.shape[:2]
+        if roi_h <= 0 or roi_w <= 0:
+            return False, 0.0, 'empty_roi'
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        lower = np.array([0, 0, self.white_line_min_value], dtype=np.uint8)
+        upper = np.array([180, self.white_line_max_saturation, 255],
+                         dtype=np.uint8)
+        mask = cv2.inRange(hsv, lower, upper)
+
+        kernel_w = max(9, int(roi_w * 0.035))
+        if kernel_w % 2 == 0:
+            kernel_w += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_w, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
+        result = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+        contours = result[0] if len(result) == 2 else result[1]
+
+        best_score = 0.0
+        best_detail = 'no_candidate'
+        min_w = self.white_line_min_width_fraction
+        min_h = self.white_line_min_height_fraction
+        max_h = self.white_line_max_height_fraction
+
+        for contour in contours:
+            x, y, box_w, box_h = cv2.boundingRect(contour)
+            width_fraction = float(box_w) / float(max(1, roi_w))
+            height_fraction = float(box_h) / float(max(1, roi_h))
+            aspect = float(box_w) / float(max(1, box_h))
+            area_fraction = float(cv2.contourArea(contour)) / float(
+                max(1, roi_w * roi_h)
+            )
+            score = width_fraction * min(1.0, aspect / 10.0)
+            if score > best_score:
+                best_score = score
+                best_detail = (
+                    f'w={width_fraction:.2f},h={height_fraction:.2f},'
+                    f'aspect={aspect:.1f},area={area_fraction:.3f}'
+                )
+
+            if width_fraction < min_w:
+                continue
+            if height_fraction < min_h or height_fraction > max_h:
+                continue
+            if aspect < self.white_line_min_aspect_ratio:
+                continue
+
+            return True, score, (
+                f'accepted:{best_detail},roi=({x0},{y0})-({x1},{y1})'
+            )
+
+        return False, best_score, best_detail
+
+    def _white_line_is_visible_now(self):
+        if not self.white_line_detection_enabled:
+            return False, 'white_detection_disabled'
+        if self.white_line_image_subscription is None:
+            return False, 'white_image_subscription_unavailable'
+        if self._last_white_line_time is None:
+            return False, 'no_white_image'
+
+        now = time.monotonic()
+        age = now - float(self._last_white_line_time)
+        if age > self.white_line_stale_sec:
+            return False, f'white_image_stale_{age:.2f}s'
+        if not self._last_white_line_detected:
+            return False, f'white_not_detected:{self._last_white_line_detail}'
+
+        stable_for = now - float(self._white_line_candidate_since or now)
+        if stable_for < self.white_line_stable_sec:
+            return False, f'white_candidate_{stable_for:.2f}s'
+
+        return True, (
+            f'white_line score={self._last_white_line_score:.2f}, '
+            f'stable={stable_for:.2f}s, {self._last_white_line_detail}'
+        )
 
     def _line_is_visible_now(self):
         now = time.monotonic()
@@ -802,11 +1085,28 @@ class ObstacleDirectRouteNode(Node):
             f'duration={duration_sec:.2f}s'
         )
 
-        if not self._wait_for_line_visible(stage.name):
-            raise RuntimeError(
-                f'{stage.name}: cannot start line follow because no usable '
-                'black line is visible'
-            )
+        if stage.line_follow_require_visible:
+            if not self._wait_for_line_visible(stage.name):
+                raise RuntimeError(
+                    f'{stage.name}: cannot start line follow because no '
+                    'usable black line is visible'
+                )
+        else:
+            visible, reason = self._line_is_visible_now()
+            if visible:
+                msg = self._last_line_track_msg
+                self.get_logger().info(
+                    f'{stage.name}: black line already visible before '
+                    f'line-follow restart, confidence={msg.confidence:.3f}, '
+                    f'lateral={msg.lateral_error:.3f}, '
+                    f'heading={msg.heading_error:.3f}'
+                )
+            else:
+                self.get_logger().warn(
+                    f'{stage.name}: black line is not visible yet '
+                    f'({reason}); start the existing line follower anyway '
+                    'so it can search and reacquire.'
+                )
         self._publish_stop(
             f'before line follow {stage.name}',
             LINE_FOLLOW_START_SETTLE_SEC
@@ -826,6 +1126,113 @@ class ObstacleDirectRouteNode(Node):
         )
         self._publish_stop(
             f'after line follow {stage.name}',
+            LINE_FOLLOW_STOP_SETTLE_SEC
+        )
+
+    def _run_line_follow_until_white_line(self, index, total, stage):
+        max_duration_sec = stage.line_follow_duration_sec
+
+        self.get_logger().warn(
+            f'route stage {index}/{total}: {stage.name} '
+            f'line_follow_until_white_line, '
+            f'max_duration={max_duration_sec:.2f}s, '
+            f'white_topic={self.white_line_image_topic}, '
+            f'line_lost_fallback={self.line_lost_switch_sec:.2f}s'
+        )
+
+        if not self._wait_for_line_visible(stage.name):
+            raise RuntimeError(
+                f'{stage.name}: cannot start white-line search because no '
+                'usable black line is visible'
+            )
+
+        self._publish_stop(
+            f'before line follow until white line {stage.name}',
+            LINE_FOLLOW_START_SETTLE_SEC
+        )
+        self._publish_mission_command(
+            self.mission_start_publisher,
+            True,
+            f'{stage.name} mission_start',
+            LINE_FOLLOW_START_SETTLE_SEC
+        )
+
+        period_sec = 1.0 / self.publish_rate_hz
+        start_time = time.monotonic()
+        lost_since = None
+        last_report_time = 0.0
+        stop_reason = 'white_line_not_found'
+
+        while rclpy.ok():
+            self._raise_if_stop_requested()
+            now = time.monotonic()
+
+            if max_duration_sec > 0.0 and now - start_time >= max_duration_sec:
+                stop_reason = 'max_duration_reached'
+                self.get_logger().warn(
+                    f'{stage.name}: max duration reached without stable '
+                    f'white-line detection ({max_duration_sec:.2f}s); '
+                    'continue to the two-step-forward jump sequence'
+                )
+                break
+
+            white_visible, white_reason = self._white_line_is_visible_now()
+            if white_visible:
+                stop_reason = 'white_line_detected'
+                self.get_logger().warn(
+                    f'{stage.name}: long white line detected: {white_reason}'
+                )
+                break
+
+            visible, line_reason = self._line_is_visible_now()
+            if visible:
+                lost_since = None
+            else:
+                if lost_since is None:
+                    lost_since = now
+                    self.get_logger().warn(
+                        f'{stage.name}: black line lost candidate while '
+                        f'waiting white line, reason={line_reason}'
+                    )
+                lost_for = now - lost_since
+                if lost_for >= self.line_lost_switch_sec:
+                    stop_reason = 'line_lost_assume_white_line'
+                    self.get_logger().warn(
+                        f'{stage.name}: black line lost for {lost_for:.2f}s '
+                        f'(reason={line_reason}); assume long white line and '
+                        'continue to two-step-forward jump sequence'
+                    )
+                    break
+
+            if now - last_report_time >= 1.0:
+                msg = self._last_line_track_msg
+                if msg is None:
+                    line_summary = 'line=no_msg'
+                else:
+                    age = now - float(self._last_line_track_time or now)
+                    line_summary = (
+                        f'line_visible={bool(msg.line_visible)}, '
+                        f'conf={msg.confidence:.2f}, '
+                        f'lateral={msg.lateral_error:.2f}, age={age:.2f}s'
+                    )
+                self.get_logger().info(
+                    f'{stage.name}: searching white line, '
+                    f'{line_summary}, white={white_reason}, '
+                    f'white_score={self._last_white_line_score:.2f}'
+                )
+                last_report_time = now
+
+            rclpy.spin_once(self, timeout_sec=0.0)
+            time.sleep(period_sec)
+
+        self._publish_mission_command(
+            self.mission_stop_publisher,
+            True,
+            f'{stage.name} mission_stop ({stop_reason})',
+            LINE_FOLLOW_STOP_SETTLE_SEC
+        )
+        self._publish_stop(
+            f'after line follow until white line {stage.name}',
             LINE_FOLLOW_STOP_SETTLE_SEC
         )
 

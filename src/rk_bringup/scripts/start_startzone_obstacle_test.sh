@@ -59,12 +59,18 @@ run_clean_colcon_build() {
         -u CMAKE_PREFIX_PATH \
         -u COLCON_PREFIX_PATH \
         bash -lc \
-        "source \"${ros_setup}\" && cd \"${WORKSPACE_DIR}\" && colcon build --symlink-install --packages-up-to rk_bringup"
+        "source \"${ros_setup}\" && cd \"${WORKSPACE_DIR}\" && colcon build --symlink-install --packages-select rk_interfaces rk_config rk_unitree_driver rk_locomotion rk_mission rk_go2_sdk_bridge rk_navigation rk_perception rk_tools rk_bringup"
 }
 
 build_workspace_if_needed() {
     source_base_ros
     source_workspace_if_present
+
+    if [ "${RK_SKIP_BUILD:-false}" != "true" ]; then
+        echo "Building start-zone obstacle test packages..."
+        run_clean_colcon_build
+        return 0
+    fi
 
     if workspace_packages_ready; then
         return 0
@@ -110,9 +116,9 @@ resolve_env_script() {
 }
 
 ENV_SCRIPT="$(resolve_env_script)"
+stop_existing_processes
 build_workspace_if_needed
 source "$ENV_SCRIPT"
-stop_existing_processes
 
 SDK_INTERFACE="${RK_SDK_INTERFACE:-eth0}"
 LINE_DEBUG="${RK_LINE_DEBUG:-false}"
@@ -120,6 +126,10 @@ BRIDGE_MAX_LINEAR_X="${RK_GO2_BRIDGE_MAX_LINEAR_X:-0.60}"
 BRIDGE_MAX_ANGULAR_Z="${RK_GO2_BRIDGE_MAX_ANGULAR_Z:-1.00}"
 LINE_LOST_SWITCH_SEC="${RK_LINE_LOST_SWITCH_SEC:-0.6}"
 LINE_TRACK_STALE_SEC="${RK_LINE_TRACK_STALE_SEC:-0.8}"
+WHITE_LINE_DETECTION_ENABLED="${RK_WHITE_LINE_DETECTION_ENABLED:-true}"
+WHITE_LINE_MIN_WIDTH_FRACTION="${RK_WHITE_LINE_MIN_WIDTH_FRACTION:-0.35}"
+WHITE_LINE_MIN_VALUE="${RK_WHITE_LINE_MIN_VALUE:-185}"
+WHITE_LINE_MAX_SATURATION="${RK_WHITE_LINE_MAX_SATURATION:-95}"
 
 echo "Starting start-zone line-follow + obstacle direct route test"
 echo "workspace=${WORKSPACE_DIR}"
@@ -129,6 +139,10 @@ echo "bridge_max_linear_x=${BRIDGE_MAX_LINEAR_X}"
 echo "bridge_max_angular_z=${BRIDGE_MAX_ANGULAR_Z}"
 echo "line_lost_switch_sec=${LINE_LOST_SWITCH_SEC}"
 echo "line_track_stale_sec=${LINE_TRACK_STALE_SEC}"
+echo "white_line_detection_enabled=${WHITE_LINE_DETECTION_ENABLED}"
+echo "white_line_min_width_fraction=${WHITE_LINE_MIN_WIDTH_FRACTION}"
+echo "white_line_min_value=${WHITE_LINE_MIN_VALUE}"
+echo "white_line_max_saturation=${WHITE_LINE_MAX_SATURATION}"
 echo "Ctrl+C will trigger route-node emergency stop."
 
 exec ros2 launch rk_bringup obstacle_direct_open_loop.launch.py \
@@ -140,5 +154,9 @@ exec ros2 launch rk_bringup obstacle_direct_open_loop.launch.py \
     debug:="${LINE_DEBUG}" \
     line_lost_switch_sec:="${LINE_LOST_SWITCH_SEC}" \
     line_track_stale_sec:="${LINE_TRACK_STALE_SEC}" \
+    white_line_detection_enabled:="${WHITE_LINE_DETECTION_ENABLED}" \
+    white_line_min_width_fraction:="${WHITE_LINE_MIN_WIDTH_FRACTION}" \
+    white_line_min_value:="${WHITE_LINE_MIN_VALUE}" \
+    white_line_max_saturation:="${WHITE_LINE_MAX_SATURATION}" \
     run_without_sdk_actions:=false \
     allow_ros_topic_sdk_actions:=false

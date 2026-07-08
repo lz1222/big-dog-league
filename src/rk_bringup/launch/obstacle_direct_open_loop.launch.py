@@ -38,6 +38,16 @@ def generate_launch_description():
     )
     line_lost_switch_sec = LaunchConfiguration('line_lost_switch_sec')
     line_track_stale_sec = LaunchConfiguration('line_track_stale_sec')
+    white_line_detection_enabled = LaunchConfiguration(
+        'white_line_detection_enabled'
+    )
+    white_line_min_width_fraction = LaunchConfiguration(
+        'white_line_min_width_fraction'
+    )
+    white_line_min_value = LaunchConfiguration('white_line_min_value')
+    white_line_max_saturation = LaunchConfiguration(
+        'white_line_max_saturation'
+    )
     start_realsense = LaunchConfiguration('start_realsense')
     start_line_nodes = LaunchConfiguration('start_line_nodes')
     image_topic = LaunchConfiguration('image_topic')
@@ -148,6 +158,26 @@ def generate_launch_description():
                 'Treat /perception/line_track as lost if no fresh message '
                 'arrives within this many seconds.'
             )
+        ),
+        DeclareLaunchArgument(
+            'white_line_detection_enabled',
+            default_value='true',
+            description='Enable image-based long-white-line trigger.'
+        ),
+        DeclareLaunchArgument(
+            'white_line_min_width_fraction',
+            default_value='0.35',
+            description='Minimum ROI width fraction for the long white line.'
+        ),
+        DeclareLaunchArgument(
+            'white_line_min_value',
+            default_value='185',
+            description='HSV V lower threshold for white-line detection.'
+        ),
+        DeclareLaunchArgument(
+            'white_line_max_saturation',
+            default_value='95',
+            description='HSV S upper threshold for white-line detection.'
         ),
         DeclareLaunchArgument(
             'start_realsense',
@@ -263,6 +293,22 @@ def generate_launch_description():
                 'mission_stop_topic:=/mission/stop',
                 '-p',
                 'line_track_topic:=/perception/line_track',
+                '-p',
+                ['white_line_image_topic:=', image_topic],
+                '-p',
+                [
+                    'white_line_detection_enabled:=',
+                    white_line_detection_enabled,
+                ],
+                '-p',
+                [
+                    'white_line_min_width_fraction:=',
+                    white_line_min_width_fraction,
+                ],
+                '-p',
+                ['white_line_min_value:=', white_line_min_value],
+                '-p',
+                ['white_line_max_saturation:=', white_line_max_saturation],
                 '-p',
                 'line_visible_wait_timeout_sec:=10.0',
                 '-p',
