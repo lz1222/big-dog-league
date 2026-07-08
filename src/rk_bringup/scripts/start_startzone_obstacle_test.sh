@@ -124,12 +124,17 @@ SDK_INTERFACE="${RK_SDK_INTERFACE:-eth0}"
 LINE_DEBUG="${RK_LINE_DEBUG:-false}"
 BRIDGE_MAX_LINEAR_X="${RK_GO2_BRIDGE_MAX_LINEAR_X:-0.60}"
 BRIDGE_MAX_ANGULAR_Z="${RK_GO2_BRIDGE_MAX_ANGULAR_Z:-1.00}"
-LINE_LOST_SWITCH_SEC="${RK_LINE_LOST_SWITCH_SEC:-0.6}"
+LINE_LOST_SWITCH_SEC="${RK_LINE_LOST_SWITCH_SEC:-0.45}"
 LINE_TRACK_STALE_SEC="${RK_LINE_TRACK_STALE_SEC:-0.8}"
 WHITE_LINE_DETECTION_ENABLED="${RK_WHITE_LINE_DETECTION_ENABLED:-true}"
 WHITE_LINE_MIN_WIDTH_FRACTION="${RK_WHITE_LINE_MIN_WIDTH_FRACTION:-0.22}"
 WHITE_LINE_MIN_VALUE="${RK_WHITE_LINE_MIN_VALUE:-160}"
 WHITE_LINE_MAX_SATURATION="${RK_WHITE_LINE_MAX_SATURATION:-130}"
+WHITE_LINE_MAX_LINE_CONFIDENCE="${RK_WHITE_LINE_MAX_LINE_CONFIDENCE:-0.65}"
+CENTER_BEFORE_OBSTACLE_TIMEOUT_SEC="${RK_CENTER_TIMEOUT_SEC:-8.0}"
+CENTER_BEFORE_OBSTACLE_STABLE_SEC="${RK_CENTER_STABLE_SEC:-0.60}"
+CENTER_BEFORE_OBSTACLE_MAX_LATERAL_ERROR="${RK_CENTER_MAX_LATERAL_ERROR:-0.10}"
+CENTER_BEFORE_OBSTACLE_MAX_HEADING_ERROR="${RK_CENTER_MAX_HEADING_ERROR:-0.22}"
 
 echo "Starting start-zone line-follow + obstacle direct route test"
 echo "workspace=${WORKSPACE_DIR}"
@@ -143,6 +148,11 @@ echo "white_line_detection_enabled=${WHITE_LINE_DETECTION_ENABLED}"
 echo "white_line_min_width_fraction=${WHITE_LINE_MIN_WIDTH_FRACTION}"
 echo "white_line_min_value=${WHITE_LINE_MIN_VALUE}"
 echo "white_line_max_saturation=${WHITE_LINE_MAX_SATURATION}"
+echo "white_line_max_line_confidence=${WHITE_LINE_MAX_LINE_CONFIDENCE}"
+echo "center_timeout_sec=${CENTER_BEFORE_OBSTACLE_TIMEOUT_SEC}"
+echo "center_stable_sec=${CENTER_BEFORE_OBSTACLE_STABLE_SEC}"
+echo "center_max_lateral_error=${CENTER_BEFORE_OBSTACLE_MAX_LATERAL_ERROR}"
+echo "center_max_heading_error=${CENTER_BEFORE_OBSTACLE_MAX_HEADING_ERROR}"
 echo "Ctrl+C will trigger route-node emergency stop."
 
 exec ros2 launch rk_bringup obstacle_direct_open_loop.launch.py \
@@ -158,5 +168,10 @@ exec ros2 launch rk_bringup obstacle_direct_open_loop.launch.py \
     white_line_min_width_fraction:="${WHITE_LINE_MIN_WIDTH_FRACTION}" \
     white_line_min_value:="${WHITE_LINE_MIN_VALUE}" \
     white_line_max_saturation:="${WHITE_LINE_MAX_SATURATION}" \
+    white_line_max_line_confidence:="${WHITE_LINE_MAX_LINE_CONFIDENCE}" \
+    center_before_obstacle_timeout_sec:="${CENTER_BEFORE_OBSTACLE_TIMEOUT_SEC}" \
+    center_before_obstacle_stable_sec:="${CENTER_BEFORE_OBSTACLE_STABLE_SEC}" \
+    center_before_obstacle_max_lateral_error:="${CENTER_BEFORE_OBSTACLE_MAX_LATERAL_ERROR}" \
+    center_before_obstacle_max_heading_error:="${CENTER_BEFORE_OBSTACLE_MAX_HEADING_ERROR}" \
     run_without_sdk_actions:=false \
     allow_ros_topic_sdk_actions:=false

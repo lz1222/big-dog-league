@@ -30,7 +30,7 @@ real_line_tracker_node:
     # 如果机器狗实际中心在紫色线右侧，robot_center_x_offset_fraction 设为正数；
     # 如果在左侧，设为负数。每 0.01 约等于画面宽度的 1%。
     # 需要更精细时再用 robot_center_x_offset_px 微调像素。
-    robot_center_x_offset_fraction: 0.05
+    robot_center_x_offset_fraction: 0.0
     robot_center_x_offset_px: 0.0
 
     line_width_cm: 10.0
@@ -41,15 +41,15 @@ real_line_tracker_node:
     min_path_bands: 4
     min_valid_bands: 4
 
-    # 是否强制底部扫描带看到线。
-    # 急弯时底部经常不是完整黑线，建议 false；如果误跟旁边黑物体，再改回 true。
-    require_bottom_band: false
+    # 要求最靠近机器狗的底部扫描带必须看到线。
+    # 这是防止隔壁黑色物体抢线的关键开关，正常巡地面黑线建议保持 true。
+    require_bottom_band: true
 
     # 基础线宽范围，按图像宽度比例计算。
     # 如果黑线太粗被判 too_wide，提高 max_line_width_fraction。
     # 如果黑线太细被判 too_narrow，降低 min_line_width_fraction。
     min_line_width_fraction: 0.015
-    max_line_width_fraction: 0.24
+    max_line_width_fraction: 0.26
 
     # 透视线宽范围。靠近机器狗的线在画面底部更宽，远处更窄。
     # 如果底部黑线因为畸变/靠近相机显得很粗，提高 max_line_width_bottom_fraction。
@@ -57,38 +57,40 @@ real_line_tracker_node:
     perspective_width_enabled: true
     min_line_width_top_fraction: 0.006
     min_line_width_bottom_fraction: 0.018
-    max_line_width_top_fraction: 0.16
-    max_line_width_bottom_fraction: 0.36
+    max_line_width_top_fraction: 0.12
+    max_line_width_bottom_fraction: 0.42
 
     # 画面中黑色像素占比过大时判为异常，避免整块黑物体/阴影被当线。
     # 环境很暗且经常 too_dark 时可以略微提高；误识别黑物体时降低。
-    max_dark_fraction: 0.38
+    max_dark_fraction: 0.22
 
     # 可见置信度阈值。越高越保守，越低越容易跟错线。
-    visible_min_confidence: 0.45
+    # 4/11 个扫描带命中时置信度约 0.36；起步阶段允许 0.35，
+    # 再配合 require_bottom_band 和 track_lock 保持在中间线附近。
+    visible_min_confidence: 0.35
 
     # 路径锁定。开启后优先跟随上一帧附近的线，避免突然跳到隔壁黑物体。
     track_lock_enabled: true
 
     # 允许当前线位置相对上一帧跳变的最大比例。
     # 旁边黑物体抢线时降低；急弯/大偏移时识别过保守再提高。
-    max_track_jump_fraction: 0.26
-    max_reacquire_jump_fraction: 0.30
+    max_track_jump_fraction: 0.18
+    max_reacquire_jump_fraction: 0.12
 
     # 选线权重。数值越大，越偏向底部线和上一帧位置。
     # 隔壁黑物体干扰时提高；真实弯道切换不够灵活时降低。
-    bottom_band_preference_weight: 5.0
-    previous_center_weight: 6.0
+    bottom_band_preference_weight: 8.0
+    previous_center_weight: 10.0
 
     # 底部起点必须离图像中心/上一帧锁定线足够近。
     # 这是防止远处或侧边黑物体被当作起点的关键参数。
-    # 误识别时降到 0.25；正常急弯丢线时升到 0.45。
-    bottom_start_max_center_error_fraction: 0.42
+    # 误识别时降到 0.18；正常急弯丢线时升到 0.30。
+    bottom_start_max_center_error_fraction: 0.30
 
     # 相邻扫描带之间允许的中心跳变。越小越要求线连续。
     # 黑物体干扰时降低；弯道识别断续时提高。
-    max_band_center_jump_fraction: 0.24
-    max_band_gap: 3
+    max_band_center_jump_fraction: 0.16
+    max_band_gap: 2
 
     frame_id: d435i_color_optical_frame
 
@@ -105,37 +107,37 @@ line_follower_node:
     control_rate_hz: 10.0
     debug_log: true
 
-    # 低速居中巡线参数。base/mid/slow 分别对应偏差小/中/大时的前进速度。
-    # 这台 Go2 低于 0.27m/s 容易原地踏步，所以正常巡线最低保持 0.27。
+    # 低速居中巡线参数。现在优先稳和直，不追求速度。
+    # 这台 Go2 低于 0.27m/s 容易原地踏步，所以三个速度都先压在 0.27。
     min_driving_speed: 0.27
-    base_speed: 0.28
+    base_speed: 0.27
     mid_speed: 0.27
     slow_speed: 0.27
 
     # 偏差阈值。偏差越大，速度越慢。
     # 走得太冲可以降低 base_speed 或减小阈值；走得太慢可以提高 base_speed。
-    error_slow_threshold: 0.08
-    error_slowest_threshold: 0.20
+    error_slow_threshold: 0.12
+    error_slowest_threshold: 0.28
 
     # 转向增益。kp_lateral 管左右偏差，kp_heading 管线方向。
-    # 当前先优先走直线：转向增益不要太猛，否则会右一步左一步。
+    # 当前先优先走直线：转向增益要钝一点，否则会右一步左一步。
     # 如果还是左右摆：继续降低 kp_lateral 或 max_angular_z。
-    # 如果回中太慢：小幅提高 kp_lateral，每次加 0.2。
-    kp_lateral: 1.4
-    kp_heading: 0.7
-    max_angular_z: 0.45
-    angular_deadband: 0.04
-    angular_smoothing_alpha: 0.35
+    # 如果回中太慢：小幅提高 kp_lateral，每次加 0.1。
+    kp_lateral: 0.85
+    kp_heading: 0.35
+    max_angular_z: 0.28
+    angular_deadband: 0.08
+    angular_smoothing_alpha: 0.22
     line_follow_min_confidence: 0.0
 
     # 短暂丢线阶段。先停下，按最后转向方向原地找线。
-    short_lost_timeout: 0.6
+    short_lost_timeout: 0.75
     short_lost_linear_speed: 0.0
-    search_angular_speed: 0.35
+    search_angular_speed: 0.25
 
     # 丢线后按最后方向转向找线。不要把角速度调太大，机器狗会摆。
     turn_90_duration: 0.8
-    turn_90_angular_speed: 0.50
+    turn_90_angular_speed: 0.35
     turn_direction_mode: last_error
     default_turn_direction: 1
     turn_direction_deadband: 0.02
@@ -143,12 +145,12 @@ line_follower_node:
     # 转弯过程中丢线后的保持动作。线速度为 0，避免继续向前冲出线外。
     turn_lost_keep_time: 2.0
     lost_turn_linear_speed: 0.0
-    lost_turn_angular_speed: 0.35
+    lost_turn_angular_speed: 0.25
     turn_lost_min_angular_z: 0.08
 
     # 长时间找线阶段。原地左右交替扫线，找到稳定线后恢复巡线。
     search_linear_speed: 0.0
-    search_line_angular_speed: 0.30
+    search_line_angular_speed: 0.22
     search_sweep_period: 1.0
     search_timeout: 8.0
 
