@@ -86,15 +86,15 @@ class KeyboardRouteNode(Node):
         )
         self.forward_speed = self._nonnegative_float_parameter(
             'forward_speed',
-            0.30
+            0.25
         )
         self.backward_speed = self._nonnegative_float_parameter(
             'backward_speed',
-            0.30
+            0.25
         )
         self.turn_speed = self._nonnegative_float_parameter(
             'turn_speed',
-            0.75
+            0.65
         )
         self.key_action_duration_sec = self._positive_float_parameter(
             'key_action_duration_sec',
@@ -234,7 +234,7 @@ class KeyboardRouteNode(Node):
         )
         self.normal_gait_action = self._string_parameter(
             'normal_gait_action',
-            'balance_stand'
+            'classic_walk'
         )
         self.front_jump_action = self._string_parameter(
             'front_jump_action',

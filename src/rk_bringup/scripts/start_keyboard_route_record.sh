@@ -4,15 +4,16 @@ set -e
 WORKSPACE_DIR="${RK_INSPECTION_WS:-$HOME/rk_inspection_ws}"
 ROUTE_FILE="${RK_KEYBOARD_ROUTE_FILE:-$HOME/rk_keyboard_routes/latest_route.json}"
 
-MOTION_SPEED="${RK_KEYBOARD_SPEED:-0.30}"
+MOTION_SPEED="${RK_KEYBOARD_SPEED:-0.25}"
 FORWARD_SPEED="${RK_KEYBOARD_FORWARD_SPEED:-$MOTION_SPEED}"
 BACKWARD_SPEED="${RK_KEYBOARD_BACKWARD_SPEED:-$MOTION_SPEED}"
-TURN_SPEED="${RK_KEYBOARD_TURN_SPEED:-0.75}"
+TURN_SPEED="${RK_KEYBOARD_TURN_SPEED:-0.65}"
 ACTION_SEC="${RK_KEYBOARD_ACTION_SEC:-1.0}"
 MOTION_BACKEND="${RK_KEYBOARD_MOTION_BACKEND:-sdk_direct}"
 SDK_VELOCITY_RATE_HZ="${RK_KEYBOARD_SDK_RATE_HZ:-20.0}"
 SDK_VELOCITY_STOP_MODE="${RK_KEYBOARD_SDK_STOP_MODE:-move_zero}"
 SDK_VELOCITY_STOP_SEC="${RK_KEYBOARD_SDK_STOP_SEC:-0.10}"
+NORMAL_GAIT_ACTION="${RK_KEYBOARD_NORMAL_GAIT_ACTION:-classic_walk}"
 FRONT_JUMP_WAIT_SEC="${RK_KEYBOARD_FRONT_JUMP_WAIT_SEC:-2.0}"
 FRONT_JUMP_PRE_STOP_SEC="${RK_KEYBOARD_FRONT_JUMP_PRE_STOP_SEC:-2.0}"
 RECORD_GAIT_ACTIONS="${RK_KEYBOARD_RECORD_GAIT_ACTIONS:-true}"
@@ -67,6 +68,7 @@ action_sec=${ACTION_SEC}
 motion_backend=${MOTION_BACKEND}
 sdk_velocity_stop_mode=${SDK_VELOCITY_STOP_MODE}
 sdk_velocity_stop_sec=${SDK_VELOCITY_STOP_SEC}
+normal_gait_action=${NORMAL_GAIT_ACTION}
 front_jump_wait_sec=${FRONT_JUMP_WAIT_SEC}
 front_jump_pre_stop_sec=${FRONT_JUMP_PRE_STOP_SEC}
 record_gait_actions=${RECORD_GAIT_ACTIONS}
@@ -85,6 +87,7 @@ exec ros2 run rk_tools keyboard_route_recorder --ros-args \
     -p sdk_velocity_rate_hz:="${SDK_VELOCITY_RATE_HZ}" \
     -p sdk_velocity_stop_mode:="${SDK_VELOCITY_STOP_MODE}" \
     -p sdk_velocity_stop_sec:="${SDK_VELOCITY_STOP_SEC}" \
+    -p normal_gait_action:="${NORMAL_GAIT_ACTION}" \
     -p front_jump_wait_sec:="${FRONT_JUMP_WAIT_SEC}" \
     -p front_jump_pre_stop_sec:="${FRONT_JUMP_PRE_STOP_SEC}" \
     -p record_gait_actions:="${RECORD_GAIT_ACTIONS}" \
