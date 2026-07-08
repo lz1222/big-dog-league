@@ -81,7 +81,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'debug',
-            default_value='false',
+            default_value='true',
             description='Enable perception debug images and debug logs.'
         ),
         DeclareLaunchArgument(

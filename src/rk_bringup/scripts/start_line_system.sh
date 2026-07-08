@@ -18,7 +18,7 @@ RGB_PROFILE="${RK_REALSENSE_RGB_PROFILE:-424x240x15}"
 DEPTH_PROFILE="${RK_REALSENSE_DEPTH_PROFILE:-424x240x15}"
 IMAGE_TOPIC="${RK_IMAGE_TOPIC:-/camera/color/image_raw}"
 
-LINE_DEBUG_IMAGE="${RK_LINE_DEBUG_IMAGE:-false}"
+LINE_DEBUG_IMAGE="${RK_LINE_DEBUG_IMAGE:-true}"
 LINE_DEBUG_LOG="${RK_LINE_DEBUG_LOG:-true}"
 LINE_MIN_SPEED="${RK_LINE_MIN_SPEED:-0.20}"
 LINE_BASE_SPEED="${RK_LINE_BASE_SPEED:-0.25}"
@@ -209,6 +209,13 @@ topic_has_publisher() {
         | grep -Eq "Publisher count: [1-9][0-9]*"
 }
 
+topic_has_subscription() {
+    local topic_name="$1"
+
+    ros2 topic info "$topic_name" 2>/dev/null \
+        | grep -Eq "Subscription count: [1-9][0-9]*"
+}
+
 wait_for_topic_publisher() {
     local topic_name="$1"
     local timeout_sec="$2"
@@ -223,6 +230,26 @@ wait_for_topic_publisher() {
 
         if [ $(( $(date +%s) - start_time )) -ge "$timeout_sec" ]; then
             echo "WARN: timeout waiting for publisher on ${topic_name}" >&2
+            return 1
+        fi
+        sleep 1
+    done
+}
+
+wait_for_topic_subscription() {
+    local topic_name="$1"
+    local timeout_sec="$2"
+    local start_time
+    start_time="$(date +%s)"
+
+    while true; do
+        if topic_has_subscription "$topic_name"; then
+            echo "Topic subscriber ready: ${topic_name}"
+            return 0
+        fi
+
+        if [ $(( $(date +%s) - start_time )) -ge "$timeout_sec" ]; then
+            echo "ERROR: timeout waiting for subscriber on ${topic_name}" >&2
             return 1
         fi
         sleep 1
@@ -258,6 +285,13 @@ fi
 start_background "cmd_vel_udp_forwarder" \
     "exec ros2 run rk_go2_sdk_bridge cmd_vel_udp_forwarder.py --ros-args -p cmd_vel_topic:=/navigation/cmd_vel -p udp_host:=${SDK_UDP_HOST} -p udp_port:=${SDK_UDP_PORT} -p max_vx:=${BRIDGE_MAX_LINEAR_X} -p max_yaw:=${BRIDGE_MAX_ANGULAR_Z}"
 
+wait_for_topic_subscription "/navigation/cmd_vel" 10 || {
+    echo "ERROR: /navigation/cmd_vel has no subscriber." >&2
+    echo "cmd_vel_udp_forwarder is not connected, so the robot will not move." >&2
+    tail -n 40 "${LOG_DIR}/cmd_vel_udp_forwarder.log" >&2 || true
+    exit 1
+}
+
 start_background "realsense_camera" \
     "exec ros2 launch rk_bringup realsense_low_bandwidth.launch.py enable_color:=true enable_depth:=${ENABLE_DEPTH} rgb_camera.profile:=${RGB_PROFILE} depth_module.profile:=${DEPTH_PROFILE}"
 
@@ -271,6 +305,11 @@ start_background "line_follower" \
 
 wait_for_topic_publisher "/perception/line_track" 15 || true
 wait_for_topic_publisher "/navigation/cmd_vel" 10 || true
+wait_for_topic_subscription "/navigation/cmd_vel" 5 || {
+    echo "ERROR: /navigation/cmd_vel subscriber disappeared after startup." >&2
+    tail -n 40 "${LOG_DIR}/cmd_vel_udp_forwarder.log" >&2 || true
+    exit 1
+}
 
 cat <<EOF
 RK line system started in background.
@@ -283,6 +322,9 @@ $(cat "$PID_FILE")
 
 Check:
   ${WORKSPACE_DIR}/src/rk_bringup/scripts/check_line_system.sh
+View image debug:
+  ${WORKSPACE_DIR}/src/rk_bringup/scripts/view_line_debug.sh
+  ${WORKSPACE_DIR}/src/rk_bringup/scripts/stream_line_debug_web.sh
 Logs:
   tail -f ${LOG_DIR}/real_line_tracker.log
   tail -f ${LOG_DIR}/line_follower.log

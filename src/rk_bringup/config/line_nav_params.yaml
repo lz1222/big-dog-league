@@ -6,7 +6,7 @@ real_line_tracker_node:
 
     # 调试开关。比赛/真实巡线建议 false，能减轻相机和 CPU 压力。
     # 需要看 /perception/debug/line_overlay 时再临时改成 true。
-    enable_debug_image: false
+    enable_debug_image: true
     debug_log: true
 
     # ROI 检测区域。相机只看地面时通常保持全画面 ROI。
@@ -29,10 +29,8 @@ real_line_tracker_node:
     # 扫描带数量和最少有效带数量。
     # min_path_bands 越大，越不容易误识别零散黑块，但线短/画面卡顿时更容易丢线。
     num_scan_bands: 11
-    # 启停区刚开始画面里黑线可能只覆盖一半扫描带。
-    # 日志里 valid_bands=5/11 时已经是可用中线，所以这里不要卡太死。
-    min_path_bands: 4
-    min_valid_bands: 4
+    min_path_bands: 5
+    min_valid_bands: 5
 
     # 要求最靠近机器狗的底部扫描带必须看到线。
     # 这是防止隔壁黑色物体抢线的关键开关，正常巡地面黑线建议保持 true。
@@ -42,7 +40,7 @@ real_line_tracker_node:
     # 如果黑线太粗被判 too_wide，提高 max_line_width_fraction。
     # 如果黑线太细被判 too_narrow，降低 min_line_width_fraction。
     min_line_width_fraction: 0.015
-    max_line_width_fraction: 0.26
+    max_line_width_fraction: 0.20
 
     # 透视线宽范围。靠近机器狗的线在画面底部更宽，远处更窄。
     # 如果底部黑线因为畸变/靠近相机显得很粗，提高 max_line_width_bottom_fraction。
@@ -50,17 +48,15 @@ real_line_tracker_node:
     perspective_width_enabled: true
     min_line_width_top_fraction: 0.006
     min_line_width_bottom_fraction: 0.018
-    max_line_width_top_fraction: 0.12
-    max_line_width_bottom_fraction: 0.42
+    max_line_width_top_fraction: 0.08
+    max_line_width_bottom_fraction: 0.30
 
     # 画面中黑色像素占比过大时判为异常，避免整块黑物体/阴影被当线。
     # 环境很暗且经常 too_dark 时可以略微提高；误识别黑物体时降低。
     max_dark_fraction: 0.22
 
     # 可见置信度阈值。越高越保守，越低越容易跟错线。
-    # 5/11 个扫描带命中时置信度约 0.45，4/11 时约 0.36。
-    # 起步阶段允许 0.35，配合 require_bottom_band 和 track_lock 保持居中。
-    visible_min_confidence: 0.35
+    visible_min_confidence: 0.60
 
     # 路径锁定。开启后优先跟随上一帧附近的线，避免突然跳到隔壁黑物体。
     track_lock_enabled: true
@@ -100,12 +96,12 @@ line_follower_node:
     control_rate_hz: 10.0
     debug_log: true
 
-    # 低速居中巡线参数。base/mid/slow 分别对应偏差小/中/大时的前进速度。
-    # 这台 Go2 低于 0.27m/s 容易原地踏步，所以正常巡线最低保持 0.27。
-    min_driving_speed: 0.27
-    base_speed: 0.30
-    mid_speed: 0.28
-    slow_speed: 0.27
+    # 低速转弯调试参数。base/mid/slow 分别对应偏差小/中/大时的前进速度。
+    # 丢线找线速度允许为 0；正常巡线速度不要低于 slow_speed。
+    min_driving_speed: 0.20
+    base_speed: 0.25
+    mid_speed: 0.22
+    slow_speed: 0.20
 
     # 偏差阈值。偏差越大，速度越慢。
     # 走得太冲可以降低 base_speed 或减小阈值；走得太慢可以提高 base_speed。
@@ -113,11 +109,10 @@ line_follower_node:
     error_slowest_threshold: 0.20
 
     # 转向增益。kp_lateral 管左右偏差，kp_heading 管线方向。
-    # 当前比赛直线段优先保持身体在线中间，所以侧向误差权重大一点。
-    # 如果左右摆动明显，先把 kp_lateral 降到 2.4；如果回中太慢，升到 3.0。
-    kp_lateral: 2.7
-    kp_heading: 1.5
-    max_angular_z: 1.0
+    # 左右摆动大就降低；转弯跟不上就提高，但 max_angular_z 会限制最大转速。
+    kp_lateral: 2.2
+    kp_heading: 1.8
+    max_angular_z: 1.3
     line_follow_min_confidence: 0.0
 
     # 短暂丢线阶段。先停下，按最后转向方向原地找线。
