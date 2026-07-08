@@ -29,8 +29,8 @@ real_line_tracker_node:
     # 扫描带数量和最少有效带数量。
     # min_path_bands 越大，越不容易误识别零散黑块，但线短/画面卡顿时更容易丢线。
     num_scan_bands: 11
-    min_path_bands: 6
-    min_valid_bands: 6
+    min_path_bands: 5
+    min_valid_bands: 5
 
     # 要求最靠近机器狗的底部扫描带必须看到线。
     # 这是防止隔壁黑色物体抢线的关键开关，正常巡地面黑线建议保持 true。
@@ -49,22 +49,22 @@ real_line_tracker_node:
     min_line_width_top_fraction: 0.006
     min_line_width_bottom_fraction: 0.018
     max_line_width_top_fraction: 0.08
-    max_line_width_bottom_fraction: 0.24
+    max_line_width_bottom_fraction: 0.30
 
     # 画面中黑色像素占比过大时判为异常，避免整块黑物体/阴影被当线。
     # 环境很暗且经常 too_dark 时可以略微提高；误识别黑物体时降低。
     max_dark_fraction: 0.22
 
     # 可见置信度阈值。越高越保守，越低越容易跟错线。
-    visible_min_confidence: 0.65
+    visible_min_confidence: 0.60
 
     # 路径锁定。开启后优先跟随上一帧附近的线，避免突然跳到隔壁黑物体。
     track_lock_enabled: true
 
     # 允许当前线位置相对上一帧跳变的最大比例。
     # 旁边黑物体抢线时降低；急弯/大偏移时识别过保守再提高。
-    max_track_jump_fraction: 0.10
-    max_reacquire_jump_fraction: 0.08
+    max_track_jump_fraction: 0.18
+    max_reacquire_jump_fraction: 0.12
 
     # 选线权重。数值越大，越偏向底部线和上一帧位置。
     # 隔壁黑物体干扰时提高；真实弯道切换不够灵活时降低。
@@ -74,12 +74,12 @@ real_line_tracker_node:
     # 底部起点必须离图像中心/上一帧锁定线足够近。
     # 这是防止远处或侧边黑物体被当作起点的关键参数。
     # 误识别时降到 0.18；正常急弯丢线时升到 0.30。
-    bottom_start_max_center_error_fraction: 0.22
+    bottom_start_max_center_error_fraction: 0.30
 
     # 相邻扫描带之间允许的中心跳变。越小越要求线连续。
     # 黑物体干扰时降低；弯道识别断续时提高。
-    max_band_center_jump_fraction: 0.10
-    max_band_gap: 1
+    max_band_center_jump_fraction: 0.16
+    max_band_gap: 2
 
     frame_id: d435i_color_optical_frame
 
@@ -96,47 +96,47 @@ line_follower_node:
     control_rate_hz: 10.0
     debug_log: true
 
-    # Go2 实测低于约 0.27m/s 时腿基本不走。
-    # base/mid/slow 分别对应偏差小/中/大时的前进速度。
-    min_driving_speed: 0.27
-    base_speed: 0.30
-    mid_speed: 0.28
-    slow_speed: 0.27
+    # 低速转弯调试参数。base/mid/slow 分别对应偏差小/中/大时的前进速度。
+    # 如果 Go2 在 0.22m/s 附近迈步不稳定，把 min/mid/slow 逐步提高到 0.25。
+    min_driving_speed: 0.22
+    base_speed: 0.25
+    mid_speed: 0.23
+    slow_speed: 0.22
 
     # 偏差阈值。偏差越大，速度越慢。
     # 走得太冲可以降低 base_speed 或减小阈值；走得太慢可以提高 base_speed。
-    error_slow_threshold: 0.20
-    error_slowest_threshold: 0.50
+    error_slow_threshold: 0.10
+    error_slowest_threshold: 0.25
 
     # 转向增益。kp_lateral 管左右偏差，kp_heading 管线方向。
     # 左右摆动大就降低；转弯跟不上就提高，但 max_angular_z 会限制最大转速。
-    kp_lateral: 1.2
-    kp_heading: 0.8
-    max_angular_z: 0.8
+    kp_lateral: 1.8
+    kp_heading: 1.4
+    max_angular_z: 1.1
     line_follow_min_confidence: 0.0
 
     # 短暂丢线阶段。保持低速向前并小角速度找线。
     short_lost_timeout: 1.2
-    short_lost_linear_speed: 0.27
-    search_angular_speed: 0.20
+    short_lost_linear_speed: 0.22
+    search_angular_speed: 0.30
 
     # 丢线后按最后方向转向找线。不要把角速度调太大，机器狗会摆。
     turn_90_duration: 1.6
-    turn_90_angular_speed: 0.35
+    turn_90_angular_speed: 0.50
     turn_direction_mode: last_error
     default_turn_direction: 1
     turn_direction_deadband: 0.02
 
     # 转弯过程中丢线后的保持动作。
-    # lost_turn_linear_speed 保持 0.27，避免只原地转导致巡线中断。
+    # lost_turn_linear_speed 保持低速前进，避免只原地转导致巡线中断。
     turn_lost_keep_time: 2.0
-    lost_turn_linear_speed: 0.27
-    lost_turn_angular_speed: 0.15
-    turn_lost_min_angular_z: 0.12
+    lost_turn_linear_speed: 0.22
+    lost_turn_angular_speed: 0.30
+    turn_lost_min_angular_z: 0.08
 
     # 长时间找线阶段。continuous_search_enabled=true 时，超时后继续找线，不会只巡一次就停。
-    search_linear_speed: 0.27
-    search_line_angular_speed: 0.15
+    search_linear_speed: 0.22
+    search_line_angular_speed: 0.25
     search_timeout: 8.0
 
     # 重新识别确认帧数。值越小恢复越快，值越大越不容易被瞬时误识别骗回巡线。
