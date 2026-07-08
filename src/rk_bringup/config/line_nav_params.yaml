@@ -24,23 +24,32 @@ real_line_tracker_node:
 
     # 输出误差限制。一般不需要改。
     max_lateral_error: 1.0
+
+    # 机器狗实际中心线校准。
+    # 紫色线=相机画面几何中心；橙色粗线=机器狗控制中心。
+    # 如果机器狗实际中心在紫色线右侧，robot_center_x_offset_fraction 设为正数；
+    # 如果在左侧，设为负数。每 0.01 约等于画面宽度的 1%。
+    # 需要更精细时再用 robot_center_x_offset_px 微调像素。
+    robot_center_x_offset_fraction: 0.05
+    robot_center_x_offset_px: 0.0
+
     line_width_cm: 10.0
 
     # 扫描带数量和最少有效带数量。
     # min_path_bands 越大，越不容易误识别零散黑块，但线短/画面卡顿时更容易丢线。
     num_scan_bands: 11
-    min_path_bands: 5
-    min_valid_bands: 5
+    min_path_bands: 4
+    min_valid_bands: 4
 
-    # 要求最靠近机器狗的底部扫描带必须看到线。
-    # 这是防止隔壁黑色物体抢线的关键开关，正常巡地面黑线建议保持 true。
-    require_bottom_band: true
+    # 是否强制底部扫描带看到线。
+    # 急弯时底部经常不是完整黑线，建议 false；如果误跟旁边黑物体，再改回 true。
+    require_bottom_band: false
 
     # 基础线宽范围，按图像宽度比例计算。
     # 如果黑线太粗被判 too_wide，提高 max_line_width_fraction。
     # 如果黑线太细被判 too_narrow，降低 min_line_width_fraction。
     min_line_width_fraction: 0.015
-    max_line_width_fraction: 0.20
+    max_line_width_fraction: 0.24
 
     # 透视线宽范围。靠近机器狗的线在画面底部更宽，远处更窄。
     # 如果底部黑线因为畸变/靠近相机显得很粗，提高 max_line_width_bottom_fraction。
@@ -48,38 +57,38 @@ real_line_tracker_node:
     perspective_width_enabled: true
     min_line_width_top_fraction: 0.006
     min_line_width_bottom_fraction: 0.018
-    max_line_width_top_fraction: 0.08
-    max_line_width_bottom_fraction: 0.30
+    max_line_width_top_fraction: 0.16
+    max_line_width_bottom_fraction: 0.36
 
     # 画面中黑色像素占比过大时判为异常，避免整块黑物体/阴影被当线。
     # 环境很暗且经常 too_dark 时可以略微提高；误识别黑物体时降低。
-    max_dark_fraction: 0.22
+    max_dark_fraction: 0.38
 
     # 可见置信度阈值。越高越保守，越低越容易跟错线。
-    visible_min_confidence: 0.60
+    visible_min_confidence: 0.45
 
     # 路径锁定。开启后优先跟随上一帧附近的线，避免突然跳到隔壁黑物体。
     track_lock_enabled: true
 
     # 允许当前线位置相对上一帧跳变的最大比例。
     # 旁边黑物体抢线时降低；急弯/大偏移时识别过保守再提高。
-    max_track_jump_fraction: 0.18
-    max_reacquire_jump_fraction: 0.12
+    max_track_jump_fraction: 0.26
+    max_reacquire_jump_fraction: 0.30
 
     # 选线权重。数值越大，越偏向底部线和上一帧位置。
     # 隔壁黑物体干扰时提高；真实弯道切换不够灵活时降低。
-    bottom_band_preference_weight: 8.0
-    previous_center_weight: 10.0
+    bottom_band_preference_weight: 5.0
+    previous_center_weight: 6.0
 
     # 底部起点必须离图像中心/上一帧锁定线足够近。
     # 这是防止远处或侧边黑物体被当作起点的关键参数。
-    # 误识别时降到 0.18；正常急弯丢线时升到 0.30。
-    bottom_start_max_center_error_fraction: 0.30
+    # 误识别时降到 0.25；正常急弯丢线时升到 0.45。
+    bottom_start_max_center_error_fraction: 0.42
 
     # 相邻扫描带之间允许的中心跳变。越小越要求线连续。
     # 黑物体干扰时降低；弯道识别断续时提高。
-    max_band_center_jump_fraction: 0.16
-    max_band_gap: 2
+    max_band_center_jump_fraction: 0.24
+    max_band_gap: 3
 
     frame_id: d435i_color_optical_frame
 

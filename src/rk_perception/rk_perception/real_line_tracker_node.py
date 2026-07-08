@@ -206,6 +206,7 @@ class LineDetectionResult:
     roi_end_x: Optional[int] = None
     roi_end_y: Optional[int] = None
     preferred_center_x: Optional[float] = None
+    robot_center_x: Optional[float] = None
     tracking_anchor_x: Optional[float] = None
     current_bottom_x: Optional[float] = None
     last_bottom_x: Optional[float] = None
@@ -223,10 +224,15 @@ def detect_line_in_image(
     image,
     config,
     preferred_center_x=None,
+    robot_center_x=None,
     max_track_jump_fraction=0.30
 ):
     config = config.normalized()
     height, width = image.shape[:2]
+    robot_center_x = _normalize_preferred_center(
+        robot_center_x,
+        width
+    )
     preferred_center_x = _normalize_preferred_center(
         preferred_center_x,
         width
@@ -249,6 +255,7 @@ def detect_line_in_image(
             roi_start_y,
             'empty_roi',
             preferred_center_x=preferred_center_x,
+            robot_center_x=robot_center_x,
             **roi_bounds
         )
 
@@ -270,6 +277,7 @@ def detect_line_in_image(
             band_rows,
             candidates,
             preferred_center_x=preferred_center_x,
+            robot_center_x=robot_center_x,
             **roi_bounds
         )
 
@@ -299,6 +307,7 @@ def detect_line_in_image(
             band_rows,
             candidates,
             preferred_center_x=preferred_center_x,
+            robot_center_x=robot_center_x,
             **roi_bounds
         )
 
@@ -316,6 +325,7 @@ def detect_line_in_image(
             candidates,
             selected_bands,
             preferred_center_x=preferred_center_x,
+            robot_center_x=robot_center_x,
             **roi_bounds
         )
 
@@ -330,6 +340,7 @@ def detect_line_in_image(
             candidates,
             selected_bands,
             preferred_center_x=preferred_center_x,
+            robot_center_x=robot_center_x,
             **roi_bounds
         )
 
@@ -342,9 +353,10 @@ def detect_line_in_image(
     if tracking_anchor_x is None:
         tracking_anchor_x = float(x_bottom)
     image_center_x = width / 2.0
+    error_scale_x = max(1.0, image_center_x)
     lateral_error = (
-        (float(tracking_anchor_x) - image_center_x) / image_center_x
-        if image_center_x > 0.0 else 0.0
+        (float(tracking_anchor_x) - robot_center_x) / error_scale_x
+        if error_scale_x > 0.0 else 0.0
     )
     lateral_error = clamp(
         lateral_error,
@@ -365,6 +377,7 @@ def detect_line_in_image(
             selected_bands,
             (x_top, y_top, x_bottom, y_bottom),
             preferred_center_x=preferred_center_x,
+            robot_center_x=robot_center_x,
             tracking_anchor_x=tracking_anchor_x,
             current_bottom_x=tracking_anchor_x,
             **roi_bounds
@@ -387,6 +400,7 @@ def detect_line_in_image(
         roi_end_x=roi_end_x,
         roi_end_y=roi_end_y,
         preferred_center_x=preferred_center_x,
+        robot_center_x=robot_center_x,
         tracking_anchor_x=tracking_anchor_x,
         current_bottom_x=tracking_anchor_x,
         bottom_band_valid=bottom_band_valid,
@@ -777,6 +791,7 @@ def _lost_result(
     roi_end_x=None,
     roi_end_y=None,
     preferred_center_x=None,
+    robot_center_x=None,
     tracking_anchor_x=None,
     current_bottom_x=None,
     last_bottom_x=None,
@@ -810,6 +825,7 @@ def _lost_result(
         roi_end_x=roi_end_x,
         roi_end_y=roi_end_y,
         preferred_center_x=preferred_center_x,
+        robot_center_x=robot_center_x,
         tracking_anchor_x=tracking_anchor_x,
         current_bottom_x=current_bottom_x,
         last_bottom_x=last_bottom_x,
@@ -844,6 +860,8 @@ class RealLineTrackerNode(Node):
         self.declare_parameter('roi_right_margin_fraction', 0.03)
         self.declare_parameter('threshold_value', 80)
         self.declare_parameter('max_lateral_error', 1.0)
+        self.declare_parameter('robot_center_x_offset_fraction', 0.0)
+        self.declare_parameter('robot_center_x_offset_px', 0.0)
         self.declare_parameter('line_width_cm', 10.0)
         self.declare_parameter('num_scan_bands', 11)
         self.declare_parameter('min_path_bands', 3)
@@ -924,6 +942,9 @@ class RealLineTrackerNode(Node):
             f'line_track_topic={self.line_track_topic}, '
             f'enable_debug_image={self.enable_debug_image}, '
             f'debug_log={self.debug_log}, '
+            'robot_center_offset='
+            f'{self.robot_center_x_offset_fraction:.3f}+'
+            f'{self.robot_center_x_offset_px:.1f}px, '
             'line_mask_topic=/perception/debug/line_mask, '
             'line_overlay_topic=/perception/debug/line_overlay'
         )
@@ -965,6 +986,16 @@ class RealLineTrackerNode(Node):
             0.0,
             1.0
         )
+        self.robot_center_x_offset_fraction = clamp(
+            self.get_parameter(
+                'robot_center_x_offset_fraction'
+            ).get_parameter_value().double_value,
+            -0.45,
+            0.45
+        )
+        self.robot_center_x_offset_px = self.get_parameter(
+            'robot_center_x_offset_px'
+        ).get_parameter_value().double_value
         self.bottom_band_preference_weight = max(
             0.0,
             self.get_parameter(
@@ -1129,11 +1160,16 @@ class RealLineTrackerNode(Node):
         try:
             stage = 'detect_line_in_image'
             image_width = image.shape[1]
-            preferred_center_x = self.preferred_center_x(image_width)
+            robot_center_x = self.robot_center_x(image_width)
+            preferred_center_x = self.preferred_center_x(
+                image_width,
+                robot_center_x
+            )
             current_result = detect_line_in_image(
                 image,
                 self.tracker_config,
                 preferred_center_x=preferred_center_x,
+                robot_center_x=robot_center_x,
                 max_track_jump_fraction=self.max_track_jump_fraction
             )
             stage = 'apply_route_lock'
@@ -1213,7 +1249,16 @@ class RealLineTrackerNode(Node):
         self.publisher.publish(msg)
         self.log_debug_reason(reason)
 
-    def preferred_center_x(self, image_width):
+    def robot_center_x(self, image_width):
+        image_center_x = float(image_width) / 2.0
+        center_x = (
+            image_center_x
+            + float(image_width) * self.robot_center_x_offset_fraction
+            + self.robot_center_x_offset_px
+        )
+        return _normalize_preferred_center(center_x, image_width)
+
+    def preferred_center_x(self, image_width, robot_center_x):
         if (
             self.track_lock_enabled
             and self.last_bottom_x is not None
@@ -1222,7 +1267,7 @@ class RealLineTrackerNode(Node):
                 self.last_bottom_x,
                 image_width
             )
-        return _normalize_preferred_center(None, image_width)
+        return _normalize_preferred_center(robot_center_x, image_width)
 
     def apply_route_lock(self, result, image_width, preferred_center_x):
         current_bottom_x = self.result_bottom_x(result)
@@ -1314,6 +1359,7 @@ class RealLineTrackerNode(Node):
             roi_end_x=result.roi_end_x,
             roi_end_y=result.roi_end_y,
             preferred_center_x=preferred_center_x,
+            robot_center_x=result.robot_center_x,
             tracking_anchor_x=result.tracking_anchor_x,
             current_bottom_x=current_bottom_x,
             candidate_rejection_reason=(
@@ -1370,6 +1416,7 @@ class RealLineTrackerNode(Node):
             roi_end_x=result.roi_end_x,
             roi_end_y=result.roi_end_y,
             preferred_center_x=preferred_center_x,
+            robot_center_x=result.robot_center_x,
             tracking_anchor_x=result.tracking_anchor_x,
             current_bottom_x=current_bottom_x
         )
@@ -1393,6 +1440,7 @@ class RealLineTrackerNode(Node):
             roi_end_y=self.last_result.roi_end_y,
             selected_bands=self.last_result.selected_bands,
             fitted_line=self.last_result.fitted_line,
+            robot_center_x=current_result.robot_center_x,
             tracking_anchor_x=self.last_result.tracking_anchor_x,
             current_bottom_x=current_bottom_x,
             candidate_rejected=True,
@@ -1536,8 +1584,15 @@ class RealLineTrackerNode(Node):
         )
         self.draw_optional_vertical_line(
             overlay,
+            result.robot_center_x,
+            (0, 165, 255),
+            2
+        )
+        self.draw_optional_vertical_line(
+            overlay,
             result.preferred_center_x,
-            (0, 165, 255)
+            (0, 255, 255),
+            1
         )
         self.draw_optional_vertical_line(
             overlay,
@@ -1641,6 +1696,12 @@ class RealLineTrackerNode(Node):
             f'pending_bottom_x='
             f'{self.format_optional_float(result.pending_bottom_x)}',
             f'pending_stable_count={result.pending_stable_count}',
+            f'image_center_x={width / 2.0:.1f}',
+            f'robot_center_x='
+            f'{self.format_optional_float(result.robot_center_x)}',
+            'robot_center_offset='
+            f'{self.robot_center_x_offset_fraction:.3f}+'
+            f'{self.robot_center_x_offset_px:.1f}px',
             f'preferred_center_x='
             f'{self.format_optional_float(result.preferred_center_x)}',
             'track_lock_enabled='
@@ -1694,7 +1755,7 @@ class RealLineTrackerNode(Node):
             )
 
     @staticmethod
-    def draw_optional_vertical_line(image, x_value, color):
+    def draw_optional_vertical_line(image, x_value, color, thickness=1):
         if x_value is None:
             return
         height, width = image.shape[:2]
@@ -1705,7 +1766,7 @@ class RealLineTrackerNode(Node):
             (x, 0),
             (x, max(0, height - 1)),
             color,
-            1
+            thickness
         )
 
     @staticmethod
@@ -1956,6 +2017,11 @@ class RealLineTrackerNode(Node):
             f'pending_bottom_x='
             f'{self.format_optional_float(result.pending_bottom_x)}, '
             f'pending_stable_count={result.pending_stable_count}, '
+            f'robot_center_x='
+            f'{self.format_optional_float(result.robot_center_x)}, '
+            'robot_center_offset='
+            f'{self.robot_center_x_offset_fraction:.3f}+'
+            f'{self.robot_center_x_offset_px:.1f}px, '
             f'preferred_center_x='
             f'{self.format_optional_float(result.preferred_center_x)}, '
             'track_lock_enabled='
