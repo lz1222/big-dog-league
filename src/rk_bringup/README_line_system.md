@@ -238,7 +238,9 @@ Useful tuning variables:
 export RK_KEYBOARD_SPEED=0.30
 export RK_KEYBOARD_TURN_SPEED=0.80
 export RK_KEYBOARD_ACTION_SEC=1.0
-export RK_KEYBOARD_REAPPLY_GAIT=true
+export RK_KEYBOARD_RECORD_GAIT_ACTIONS=false
+export RK_KEYBOARD_RECORD_IDLE_GAPS=true
+export RK_KEYBOARD_MIN_IDLE_SEC=0.20
 export RK_KEYBOARD_LINE_FOLLOW_SEC=3.0
 export RK_KEYBOARD_REPLAY_SPEED_SCALE=0.8
 export RK_KEYBOARD_REPLAY_DURATION_SCALE=1.0
@@ -246,10 +248,12 @@ export RK_KEYBOARD_REPLAY_DURATION_SCALE=1.0
 
 `RK_KEYBOARD_SPEED` sets the default linear speed for `w` and `s`.
 `RK_KEYBOARD_TURN_SPEED` sets the in-place angular speed for `a` and `d`.
-`RK_KEYBOARD_REAPPLY_GAIT=true` re-sends `economic_gait` before each later
-motion after `x`, which helps when the robot drops out of endurance gait after
-stop/Move commands. If one direction needs separate tuning, override
-`RK_KEYBOARD_FORWARD_SPEED` or `RK_KEYBOARD_BACKWARD_SPEED`.
+`RK_KEYBOARD_RECORD_GAIT_ACTIONS=false` keeps `x` and `c` as live mode switches
+instead of recording them as replay route segments. No gait command is
+automatically re-sent after motion; the robot is expected to keep the selected
+mode. `RK_KEYBOARD_RECORD_IDLE_GAPS=true` records pauses between motion keys so
+replay does not compress the route timing. If one direction needs separate
+tuning, override `RK_KEYBOARD_FORWARD_SPEED` or `RK_KEYBOARD_BACKWARD_SPEED`.
 The source defaults live in
 `src/rk_tools/rk_tools/keyboard_route_node.py`; the easiest robot-side runtime
 edits are the environment variables in

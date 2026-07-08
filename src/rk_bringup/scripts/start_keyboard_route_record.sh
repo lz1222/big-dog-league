@@ -9,7 +9,9 @@ FORWARD_SPEED="${RK_KEYBOARD_FORWARD_SPEED:-$MOTION_SPEED}"
 BACKWARD_SPEED="${RK_KEYBOARD_BACKWARD_SPEED:-$MOTION_SPEED}"
 TURN_SPEED="${RK_KEYBOARD_TURN_SPEED:-0.80}"
 ACTION_SEC="${RK_KEYBOARD_ACTION_SEC:-1.0}"
-REAPPLY_GAIT="${RK_KEYBOARD_REAPPLY_GAIT:-true}"
+RECORD_GAIT_ACTIONS="${RK_KEYBOARD_RECORD_GAIT_ACTIONS:-false}"
+RECORD_IDLE_GAPS="${RK_KEYBOARD_RECORD_IDLE_GAPS:-true}"
+MIN_IDLE_SEC="${RK_KEYBOARD_MIN_IDLE_SEC:-0.20}"
 LINE_FOLLOW_SEC="${RK_KEYBOARD_LINE_FOLLOW_SEC:-3.0}"
 LINE_UNTIL_LOST_MAX_SEC="${RK_KEYBOARD_LINE_UNTIL_LOST_MAX_SEC:-30.0}"
 SDK_INTERFACE="${RK_SDK_INTERFACE:-eth0}"
@@ -56,7 +58,9 @@ route_file=${ROUTE_FILE}
 linear_speed=${MOTION_SPEED}
 turn_speed=${TURN_SPEED}
 action_sec=${ACTION_SEC}
-reapply_gait=${REAPPLY_GAIT}
+record_gait_actions=${RECORD_GAIT_ACTIONS}
+record_idle_gaps=${RECORD_IDLE_GAPS}
+min_idle_sec=${MIN_IDLE_SEC}
 sdk_interface=${SDK_INTERFACE}
 EOF
 
@@ -66,7 +70,9 @@ exec ros2 run rk_tools keyboard_route_recorder --ros-args \
     -p backward_speed:="${BACKWARD_SPEED}" \
     -p turn_speed:="${TURN_SPEED}" \
     -p key_action_duration_sec:="${ACTION_SEC}" \
-    -p reapply_gait_before_motion:="${REAPPLY_GAIT}" \
+    -p record_gait_actions:="${RECORD_GAIT_ACTIONS}" \
+    -p record_idle_gaps:="${RECORD_IDLE_GAPS}" \
+    -p record_idle_min_duration_sec:="${MIN_IDLE_SEC}" \
     -p line_insert_duration_sec:="${LINE_FOLLOW_SEC}" \
     -p line_until_lost_max_sec:="${LINE_UNTIL_LOST_MAX_SEC}" \
     -p sdk_network_interface:="${SDK_INTERFACE}"

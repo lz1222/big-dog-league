@@ -160,9 +160,19 @@ class KeyboardRouteNode(Node):
             'require_sdk_actions',
             False
         )
-        self.reapply_gait_before_motion = self._bool_parameter(
-            'reapply_gait_before_motion',
+        self.record_gait_actions = self._bool_parameter(
+            'record_gait_actions',
+            False
+        )
+        self.record_idle_gaps = self._bool_parameter(
+            'record_idle_gaps',
             True
+        )
+        self.record_idle_min_duration_sec = (
+            self._nonnegative_float_parameter(
+                'record_idle_min_duration_sec',
+                0.20
+            )
         )
         self.sdk_network_interface = self._string_parameter(
             'sdk_network_interface',
@@ -216,7 +226,7 @@ class KeyboardRouteNode(Node):
         self._active_motion_start = None
         self._active_cmd = Twist()
         self._last_key_label = 'stop'
-        self._current_gait_action = None
+        self._last_motion_end_time = None
 
     def _string_parameter(self, name, default):
         return str(self.declare_parameter(name, default).value).strip()
@@ -294,7 +304,6 @@ class KeyboardRouteNode(Node):
                             break
                         self._handle_record_key(key)
 
-                    self.publisher.publish(Twist())
                     rclpy.spin_once(self, timeout_sec=0.0)
 
                     now = time.monotonic()
@@ -385,18 +394,19 @@ class KeyboardRouteNode(Node):
             return
 
     def _record_motion_once(self, key):
+        self._record_idle_gap_if_needed()
         segment, cmd, label = self._motion_segment_for_key(key)
         duration_sec = self.key_action_duration_sec
-        segment['duration_sec'] = round(duration_sec, 3)
-        self._route['segments'].append(segment)
         self._last_key_label = label
-        self._reapply_current_gait_before_motion(label)
         self.get_logger().info(
             f'key={key!r}: run once {label}, vx={cmd.linear.x:.3f}, '
             f'wz={cmd.angular.z:.3f}, duration={duration_sec:.2f}s'
         )
-        self._publish_for_duration(cmd, duration_sec)
+        elapsed_sec = self._publish_for_duration(cmd, duration_sec)
+        segment['duration_sec'] = round(elapsed_sec, 3)
+        self._route['segments'].append(segment)
         self._publish_stop(f'after key {label}', self.step_stop_sec)
+        self._last_motion_end_time = time.monotonic()
 
     def _record_sdk_action(self, key, action, label):
         self._finalize_active_motion(f'key {label}')
@@ -410,17 +420,22 @@ class KeyboardRouteNode(Node):
             'action': action,
             'wait_sec': 1.0,
         }
-        self._route['segments'].append(segment)
-        self.get_logger().warn(
-            f'recorded sdk_action label={label}, action={action}'
-        )
+        if self._should_record_sdk_action(label):
+            self._route['segments'].append(segment)
+            self.get_logger().warn(
+                f'recorded sdk_action label={label}, action={action}'
+            )
+        else:
+            self.get_logger().warn(
+                f'run live gait switch label={label}, action={action}'
+            )
         self._run_sdk_action_segment(segment, fatal=False)
-        self._track_gait_action(action, label)
         self.get_logger().info(
             f'sdk_action key {key!r} finished; recorder stays active'
         )
 
     def _record_line_follow_segment(self, segment):
+        self._record_idle_gap_if_needed()
         self._finalize_active_motion(f'key {segment["mode"]}')
         self._active_cmd = Twist()
         self._last_key_label = segment['mode']
@@ -431,6 +446,7 @@ class KeyboardRouteNode(Node):
         )
         if self.execute_line_markers_during_record:
             self._run_line_follow_segment(segment)
+            self._last_motion_end_time = time.monotonic()
 
     def _motion_segment_for_key(self, key):
         cmd = Twist()
@@ -529,7 +545,11 @@ class KeyboardRouteNode(Node):
         try:
             for index, segment in enumerate(segments, start=1):
                 self._run_segment(index, len(segments), segment)
-                self._publish_stop('replay step stop', self.step_stop_sec)
+                if self._needs_replay_step_stop(segment):
+                    self._publish_stop(
+                        'replay step stop',
+                        self.step_stop_sec
+                    )
         finally:
             self._publish_mission_stop('replay final mission_stop', 0.20)
             self._publish_stop('replay final stop', self.final_stop_sec)
@@ -560,10 +580,6 @@ class KeyboardRouteNode(Node):
             return
         if segment_type == 'sdk_action':
             self._run_sdk_action_segment(segment)
-            self._track_gait_action(
-                str(segment.get('action', '')),
-                str(segment.get('label', ''))
-            )
             return
         if segment_type == 'line_follow':
             self._run_line_follow_segment(segment)
@@ -591,44 +607,43 @@ class KeyboardRouteNode(Node):
             f'cmd_vel vx={cmd.linear.x:.3f}, wz={cmd.angular.z:.3f}, '
             f'duration={duration_sec:.2f}s'
         )
-        self._reapply_current_gait_before_motion(
-            str(segment.get('label', 'cmd_vel'))
-        )
         self._publish_for_duration(cmd, duration_sec)
 
-    def _track_gait_action(self, action, label):
-        if label == 'normal_gait':
-            self._current_gait_action = None
-            self.get_logger().info(
-                'current gait action cleared by normal_gait'
-            )
+    def _record_idle_gap_if_needed(self):
+        if not self.record_idle_gaps or self._last_motion_end_time is None:
             return
 
-        if label != 'economic_gait':
-            return
-
-        self._current_gait_action = action
-        self.get_logger().info(
-            f'current gait action set to {action} by {label}'
-        )
-
-    def _reapply_current_gait_before_motion(self, label):
-        if (
-            not self.reapply_gait_before_motion
-            or not self._current_gait_action
-        ):
+        now = time.monotonic()
+        duration_sec = now - self._last_motion_end_time
+        if duration_sec < self.record_idle_min_duration_sec:
             return
 
         segment = {
-            'type': 'sdk_action',
-            'label': 'reapply_gait',
-            'action': self._current_gait_action,
-            'wait_sec': 0.0,
+            'type': 'cmd_vel',
+            'key': 'idle',
+            'label': 'pause',
+            'linear_x': 0.0,
+            'angular_z': 0.0,
+            'duration_sec': round(duration_sec, 3),
         }
+        self._route['segments'].append(segment)
         self.get_logger().info(
-            f'reapply gait before {label}: {self._current_gait_action}'
+            f'recorded pause: duration={duration_sec:.2f}s'
         )
-        self._run_sdk_action_segment(segment, fatal=False)
+        self._last_motion_end_time = now
+
+    def _should_record_sdk_action(self, label):
+        if label in {'economic_gait', 'normal_gait'}:
+            return self.record_gait_actions
+        return True
+
+    def _needs_replay_step_stop(self, segment):
+        if segment.get('type') != 'cmd_vel':
+            return True
+
+        linear_x = float(segment.get('linear_x', 0.0))
+        angular_z = float(segment.get('angular_z', 0.0))
+        return linear_x != 0.0 or angular_z != 0.0
 
     def _run_sdk_action_segment(self, segment, fatal=None):
         if fatal is None:
@@ -646,7 +661,10 @@ class KeyboardRouteNode(Node):
         if not action:
             raise RuntimeError('sdk_action segment has empty action')
 
-        self._publish_stop(f'before sdk_action {action}', self.pre_stop_sec)
+        pre_stop_sec = self._nonnegative_float(
+            segment.get('pre_stop_sec', self.pre_stop_sec)
+        )
+        self._publish_stop(f'before sdk_action {action}', pre_stop_sec)
         timeout_sec = wait_sec + self.sdk_action_timeout_padding_sec
         command = self._sdk_action_command(action, wait_sec)
 
@@ -860,19 +878,21 @@ class KeyboardRouteNode(Node):
 
     def _publish_stop(self, label, duration_sec):
         if duration_sec <= 0.0:
-            return
+            return 0.0
         self.get_logger().info(
             f'{label}: zero cmd_vel for {duration_sec:.2f}s'
         )
-        self._publish_for_duration(Twist(), duration_sec)
+        return self._publish_for_duration(Twist(), duration_sec)
 
     def _publish_for_duration(self, cmd, duration_sec):
         period_sec = 1.0 / self.publish_rate_hz
-        end_time = time.monotonic() + duration_sec
+        start_time = time.monotonic()
+        end_time = start_time + duration_sec
         while rclpy.ok() and time.monotonic() < end_time:
             self.publisher.publish(cmd)
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
+        return time.monotonic() - start_time
 
     def _wait_for_duration(self, duration_sec):
         period_sec = 1.0 / self.publish_rate_hz
