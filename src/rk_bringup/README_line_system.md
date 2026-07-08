@@ -183,6 +183,20 @@ Open image debug view from a VNC graphical desktop terminal:
 ~/rk_inspection_ws/src/rk_bringup/scripts/view_line_debug.sh
 ```
 
+If the GUI opens but stays blank, save one frame to `~/rk_line_logs`:
+
+```bash
+~/rk_inspection_ws/src/rk_bringup/scripts/save_line_debug_frame.sh
+~/rk_inspection_ws/src/rk_bringup/scripts/save_line_debug_frame.sh /camera/color/image_raw
+```
+
+If VNC/Qt still cannot display the image, open a browser preview:
+
+```bash
+~/rk_inspection_ws/src/rk_bringup/scripts/stream_line_debug_web.sh
+~/rk_inspection_ws/src/rk_bringup/scripts/stream_line_debug_web.sh /camera/color/image_raw
+```
+
 Check the ROS topic chain:
 
 ```bash
@@ -328,10 +342,11 @@ Bridge only receives zero velocity:
 `rqt_image_view` cannot see overlay:
 
 - Run `view_line_debug.sh` in a VNC graphical desktop terminal, not pure SSH.
-- The normal low-bandwidth line launch uses `debug:=false`, so overlay topics
-  are disabled by default. Restart with `debug:=true` only when inspecting
-  perception.
 - Confirm `/perception/debug/line_overlay` appears in `ros2 topic list`.
+- Run `save_line_debug_frame.sh` to verify whether the image topic itself is
+  delivering frames even when the GUI is blank.
+- Run `stream_line_debug_web.sh` and open the printed browser URL if Qt image
+  display still does not work.
 
 Robot does not move but topics show velocity:
 
