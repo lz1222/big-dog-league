@@ -22,3 +22,23 @@ real_line_tracker_node:
     visible_min_confidence: 0.45
     max_reacquire_jump_fraction: 0.20
     frame_id: d435i_color_optical_frame
+
+real_sign_detector_node:
+  ros__parameters:
+    image_topic: /camera/color/image_raw
+    sign_detections_topic: /perception/sign_detections
+    debug_image_topic: /perception/sign_debug_image
+    frame_id: d435i_color_optical_frame
+    min_confidence: 0.55
+    enable_qr: true
+    enable_color: true
+    enable_debug_image: true
+    debug_log: true
+    log_period_sec: 1.0
+    # QR/text labels are normalized to lowercase with '_' separators.
+    # Prefer QR labels when possible; they are much more stable than color-only
+    # sign recognition under changing light.
+    qr_value_map_json: '{"1":{"sign_type":"place_marker","sign_value":"place_1"},"place_1":{"sign_type":"place_marker","sign_value":"place_1"},"2":{"sign_type":"place_marker","sign_value":"place_2"},"place_2":{"sign_type":"place_marker","sign_value":"place_2"},"electric":{"sign_type":"warning","sign_value":"electric_shock"},"electric_shock":{"sign_type":"warning","sign_value":"electric_shock"},"oxidizer":{"sign_type":"warning","sign_value":"strong_oxidizer"},"strong_oxidizer":{"sign_type":"warning","sign_value":"strong_oxidizer"},"radiation":{"sign_type":"warning","sign_value":"radiation"},"radioactive":{"sign_type":"warning","sign_value":"radiation"}}'
+    # Fallback HSV color rules. Tune these on the robot if the printed signs
+    # are not QR-coded or if the venue lighting shifts.
+    color_rules_json: '[{"name":"red_warning","sign_type":"warning","sign_value":"electric_shock","hsv_ranges":[[0,80,60,12,255,255],[170,80,60,180,255,255]],"min_area_fraction":0.012,"min_confidence":0.55},{"name":"yellow_warning","sign_type":"warning","sign_value":"strong_oxidizer","hsv_ranges":[[18,70,70,38,255,255]],"min_area_fraction":0.012,"min_confidence":0.55},{"name":"blue_warning","sign_type":"warning","sign_value":"radiation","hsv_ranges":[[92,60,50,132,255,255]],"min_area_fraction":0.012,"min_confidence":0.55},{"name":"green_place_1","sign_type":"place_marker","sign_value":"place_1","hsv_ranges":[[42,50,50,88,255,255]],"min_area_fraction":0.014,"min_confidence":0.55},{"name":"purple_place_2","sign_type":"place_marker","sign_value":"place_2","hsv_ranges":[[132,45,45,164,255,255]],"min_area_fraction":0.014,"min_confidence":0.55}]'
