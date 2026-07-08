@@ -49,6 +49,8 @@ class KeyboardRouteNode(Node):
 
     MOTION_KEYS = {'w', 's', 'a', 'd', ' '}
     VALID_MODES = {'record', 'replay'}
+    VALID_MOTION_BACKENDS = {'cmd_vel', 'sdk_direct'}
+    VALID_SDK_VELOCITY_STOP_MODES = {'move_zero', 'stop_move', 'none'}
 
     def __init__(self, default_mode='record'):
         super().__init__('keyboard_route_node')
@@ -78,6 +80,10 @@ class KeyboardRouteNode(Node):
             'publish_rate_hz',
             20.0
         )
+        self.motion_backend = self._string_parameter(
+            'motion_backend',
+            'cmd_vel'
+        )
         self.forward_speed = self._nonnegative_float_parameter(
             'forward_speed',
             0.30
@@ -88,7 +94,7 @@ class KeyboardRouteNode(Node):
         )
         self.turn_speed = self._nonnegative_float_parameter(
             'turn_speed',
-            0.80
+            0.75
         )
         self.key_action_duration_sec = self._positive_float_parameter(
             'key_action_duration_sec',
@@ -106,9 +112,21 @@ class KeyboardRouteNode(Node):
             'speed_scale',
             1.0
         )
+        self.linear_speed_scale = self._positive_float_parameter(
+            'linear_speed_scale',
+            1.0
+        )
+        self.angular_speed_scale = self._positive_float_parameter(
+            'angular_speed_scale',
+            1.0
+        )
         self.duration_scale = self._positive_float_parameter(
             'duration_scale',
             1.0
+        )
+        self.replay_use_recorded_timing = self._bool_parameter(
+            'replay_use_recorded_timing',
+            True
         )
         self.record_min_duration_sec = self._nonnegative_float_parameter(
             'record_min_duration_sec',
@@ -162,7 +180,7 @@ class KeyboardRouteNode(Node):
         )
         self.record_gait_actions = self._bool_parameter(
             'record_gait_actions',
-            False
+            True
         )
         self.record_idle_gaps = self._bool_parameter(
             'record_idle_gaps',
@@ -182,11 +200,33 @@ class KeyboardRouteNode(Node):
             'sdk_action_executable',
             ''
         )
+        self.sdk_velocity_executable = self._string_parameter(
+            'sdk_velocity_executable',
+            ''
+        )
+        self.sdk_velocity_rate_hz = self._positive_float_parameter(
+            'sdk_velocity_rate_hz',
+            20.0
+        )
+        self.sdk_velocity_stop_mode = self._string_parameter(
+            'sdk_velocity_stop_mode',
+            'move_zero'
+        )
         self.sdk_action_timeout_padding_sec = (
             self._positive_float_parameter(
                 'sdk_action_timeout_padding_sec',
                 6.0
             )
+        )
+        self.sdk_velocity_timeout_padding_sec = (
+            self._positive_float_parameter(
+                'sdk_velocity_timeout_padding_sec',
+                6.0
+            )
+        )
+        self.sdk_velocity_stop_sec = self._nonnegative_float_parameter(
+            'sdk_velocity_stop_sec',
+            0.10
         )
         self.economic_gait_action = self._string_parameter(
             'economic_gait_action',
@@ -195,6 +235,18 @@ class KeyboardRouteNode(Node):
         self.normal_gait_action = self._string_parameter(
             'normal_gait_action',
             'balance_stand'
+        )
+        self.front_jump_action = self._string_parameter(
+            'front_jump_action',
+            'front_jump'
+        )
+        self.front_jump_wait_sec = self._nonnegative_float_parameter(
+            'front_jump_wait_sec',
+            2.0
+        )
+        self.front_jump_pre_stop_sec = self._nonnegative_float_parameter(
+            'front_jump_pre_stop_sec',
+            2.0
         )
 
         self._validate_parameters()
@@ -221,12 +273,15 @@ class KeyboardRouteNode(Node):
         self._last_line_track_time = None
         self._active_sdk_process = None
         self._sdk_action_executable_resolved = None
+        self._sdk_velocity_executable_resolved = None
         self._route = None
         self._active_motion_segment = None
         self._active_motion_start = None
         self._active_cmd = Twist()
         self._last_key_label = 'stop'
         self._last_motion_end_time = None
+        self._route_start_time = None
+        self._replay_start_time = None
 
     def _string_parameter(self, name, default):
         return str(self.declare_parameter(name, default).value).strip()
@@ -253,6 +308,19 @@ class KeyboardRouteNode(Node):
         if self.mode not in self.VALID_MODES:
             valid_modes = ', '.join(sorted(self.VALID_MODES))
             raise ValueError(f'mode must be one of: {valid_modes}')
+        if self.motion_backend not in self.VALID_MOTION_BACKENDS:
+            valid_backends = ', '.join(sorted(self.VALID_MOTION_BACKENDS))
+            raise ValueError(
+                f'motion_backend must be one of: {valid_backends}'
+            )
+        if (
+            self.sdk_velocity_stop_mode
+            not in self.VALID_SDK_VELOCITY_STOP_MODES
+        ):
+            valid_modes = ', '.join(sorted(self.VALID_SDK_VELOCITY_STOP_MODES))
+            raise ValueError(
+                f'sdk_velocity_stop_mode must be one of: {valid_modes}'
+            )
         if not self.route_file:
             raise ValueError('route_file must not be empty')
         if not self.cmd_vel_topic:
@@ -269,11 +337,14 @@ class KeyboardRouteNode(Node):
             raise ValueError('economic_gait_action must not be empty')
         if not self.normal_gait_action:
             raise ValueError('normal_gait_action must not be empty')
+        if not self.front_jump_action:
+            raise ValueError('front_jump_action must not be empty')
 
     def run(self):
         self.get_logger().info(
             f'keyboard route node mode={self.mode}, '
-            f'route_file={self.route_file}, cmd_vel={self.cmd_vel_topic}'
+            f'route_file={self.route_file}, cmd_vel={self.cmd_vel_topic}, '
+            f'motion_backend={self.motion_backend}'
         )
         if self.mode == 'record':
             self.record_route()
@@ -289,6 +360,7 @@ class KeyboardRouteNode(Node):
         self._route = self._new_route()
         self._print_record_help()
         self._publish_stop('record initial stop', self.pre_stop_sec)
+        self._route_start_time = time.monotonic()
 
         period_sec = 1.0 / self.publish_rate_hz
         last_status_time = 0.0
@@ -330,7 +402,10 @@ class KeyboardRouteNode(Node):
             f'{self.key_action_duration_sec:.2f}s',
             flush=True
         )
-        print('  x economic_gait, c normal gait, space stop', flush=True)
+        print(
+            '  x economic_gait, c normal gait, j front jump, space stop',
+            flush=True
+        )
         print('  l insert timed line-follow stage', flush=True)
         print('  u insert line-follow-until-lost stage', flush=True)
         print('  q finish and write route', flush=True)
@@ -371,6 +446,16 @@ class KeyboardRouteNode(Node):
             )
             return
 
+        if key == 'j':
+            self._record_sdk_action(
+                'j',
+                self.front_jump_action,
+                'front_jump',
+                wait_sec=self.front_jump_wait_sec,
+                pre_stop_sec=self.front_jump_pre_stop_sec
+            )
+            return
+
         if key == 'l':
             segment = {
                 'type': 'line_follow',
@@ -402,13 +487,33 @@ class KeyboardRouteNode(Node):
             f'key={key!r}: run once {label}, vx={cmd.linear.x:.3f}, '
             f'wz={cmd.angular.z:.3f}, duration={duration_sec:.2f}s'
         )
-        elapsed_sec = self._publish_for_duration(cmd, duration_sec)
+        start_time = time.monotonic()
+        elapsed_sec = self._run_motion_for_duration(
+            cmd,
+            duration_sec,
+            f'key {label}'
+        )
+        end_time = time.monotonic()
         segment['duration_sec'] = round(elapsed_sec, 3)
+        segment['command_duration_sec'] = round(duration_sec, 3)
+        self._add_segment_timing(segment, start_time, end_time)
         self._route['segments'].append(segment)
+        stop_start_time = time.monotonic()
         self._publish_stop(f'after key {label}', self.step_stop_sec)
+        segment['post_stop_wall_sec'] = round(
+            time.monotonic() - stop_start_time,
+            3
+        )
         self._last_motion_end_time = time.monotonic()
 
-    def _record_sdk_action(self, key, action, label):
+    def _record_sdk_action(
+        self,
+        key,
+        action,
+        label,
+        wait_sec=1.0,
+        pre_stop_sec=None
+    ):
         self._finalize_active_motion(f'key {label}')
         self._active_cmd = Twist()
         self._last_key_label = label
@@ -418,10 +523,13 @@ class KeyboardRouteNode(Node):
             'key': key,
             'label': label,
             'action': action,
-            'wait_sec': 1.0,
+            'wait_sec': round(wait_sec, 3),
         }
-        if self._should_record_sdk_action(label):
-            self._route['segments'].append(segment)
+        if pre_stop_sec is not None:
+            segment['pre_stop_sec'] = round(pre_stop_sec, 3)
+
+        should_record = self._should_record_sdk_action(label)
+        if should_record:
             self.get_logger().warn(
                 f'recorded sdk_action label={label}, action={action}'
             )
@@ -429,7 +537,13 @@ class KeyboardRouteNode(Node):
             self.get_logger().warn(
                 f'run live gait switch label={label}, action={action}'
             )
+        start_time = time.monotonic()
         self._run_sdk_action_segment(segment, fatal=False)
+        end_time = time.monotonic()
+        if should_record:
+            self._add_segment_timing(segment, start_time, end_time)
+            self._route['segments'].append(segment)
+            self._last_motion_end_time = end_time
         self.get_logger().info(
             f'sdk_action key {key!r} finished; recorder stays active'
         )
@@ -445,8 +559,11 @@ class KeyboardRouteNode(Node):
             f'duration={segment["duration_sec"]:.2f}s'
         )
         if self.execute_line_markers_during_record:
+            start_time = time.monotonic()
             self._run_line_follow_segment(segment)
-            self._last_motion_end_time = time.monotonic()
+            end_time = time.monotonic()
+            self._add_segment_timing(segment, start_time, end_time)
+            self._last_motion_end_time = end_time
 
     def _motion_segment_for_key(self, key):
         cmd = Twist()
@@ -501,6 +618,11 @@ class KeyboardRouteNode(Node):
             'mission_start_topic': self.mission_start_topic,
             'mission_stop_topic': self.mission_stop_topic,
             'line_track_topic': self.line_track_topic,
+            'motion_backend': self.motion_backend,
+            'timing': {
+                'step_stop_sec': round(self.step_stop_sec, 3),
+                'recorded_offsets': True,
+            },
             'controls': {
                 'w': 'forward',
                 's': 'backward',
@@ -508,6 +630,7 @@ class KeyboardRouteNode(Node):
                 'd': 'turn_right',
                 'x': 'economic_gait',
                 'c': 'normal_gait',
+                'j': 'front_jump',
                 'l': 'line_follow_duration',
                 'u': 'line_follow_until_lost',
                 'space': 'stop',
@@ -538,12 +661,16 @@ class KeyboardRouteNode(Node):
         self.get_logger().warn(
             f'replaying route {self.route_file}, segments={len(segments)}, '
             f'duration_scale={self.duration_scale:.3f}, '
-            f'speed_scale={self.speed_scale:.3f}'
+            f'speed_scale={self.speed_scale:.3f}, '
+            f'linear_speed_scale={self.linear_speed_scale:.3f}, '
+            f'angular_speed_scale={self.angular_speed_scale:.3f}'
         )
         self._publish_stop('replay initial stop', self.pre_stop_sec)
+        self._replay_start_time = time.monotonic()
 
         try:
             for index, segment in enumerate(segments, start=1):
+                self._wait_for_replay_offset(segment)
                 self._run_segment(index, len(segments), segment)
                 if self._needs_replay_step_stop(segment):
                     self._publish_stop(
@@ -588,18 +715,27 @@ class KeyboardRouteNode(Node):
         raise RuntimeError(f'unknown route segment type: {segment_type}')
 
     def _run_cmd_vel_segment(self, segment):
+        label = str(segment.get('label', 'cmd_vel'))
         duration_sec = self._scaled_duration(segment.get('duration_sec', 0.0))
         if duration_sec <= 0.0:
             return
 
         cmd = Twist()
         cmd.linear.x = self._clamp(
-            float(segment.get('linear_x', 0.0)) * self.speed_scale,
+            (
+                float(segment.get('linear_x', 0.0))
+                * self.speed_scale
+                * self.linear_speed_scale
+            ),
             -self.max_linear_x,
             self.max_linear_x
         )
         cmd.angular.z = self._clamp(
-            float(segment.get('angular_z', 0.0)) * self.speed_scale,
+            (
+                float(segment.get('angular_z', 0.0))
+                * self.speed_scale
+                * self.angular_speed_scale
+            ),
             -self.max_angular_z,
             self.max_angular_z
         )
@@ -607,7 +743,7 @@ class KeyboardRouteNode(Node):
             f'cmd_vel vx={cmd.linear.x:.3f}, wz={cmd.angular.z:.3f}, '
             f'duration={duration_sec:.2f}s'
         )
-        self._publish_for_duration(cmd, duration_sec)
+        self._run_motion_for_duration(cmd, duration_sec, label)
 
     def _record_idle_gap_if_needed(self):
         if not self.record_idle_gaps or self._last_motion_end_time is None:
@@ -626,11 +762,25 @@ class KeyboardRouteNode(Node):
             'angular_z': 0.0,
             'duration_sec': round(duration_sec, 3),
         }
+        self._add_segment_timing(
+            segment,
+            self._last_motion_end_time,
+            now
+        )
         self._route['segments'].append(segment)
         self.get_logger().info(
             f'recorded pause: duration={duration_sec:.2f}s'
         )
         self._last_motion_end_time = now
+
+    def _add_segment_timing(self, segment, start_time, end_time):
+        route_start = self._route_start_time
+        if route_start is None:
+            return
+
+        segment['start_offset_sec'] = round(start_time - route_start, 3)
+        segment['end_offset_sec'] = round(end_time - route_start, 3)
+        segment['wall_duration_sec'] = round(end_time - start_time, 3)
 
     def _should_record_sdk_action(self, label):
         if label in {'economic_gait', 'normal_gait'}:
@@ -639,11 +789,29 @@ class KeyboardRouteNode(Node):
 
     def _needs_replay_step_stop(self, segment):
         if segment.get('type') != 'cmd_vel':
-            return True
+            return False
 
         linear_x = float(segment.get('linear_x', 0.0))
         angular_z = float(segment.get('angular_z', 0.0))
         return linear_x != 0.0 or angular_z != 0.0
+
+    def _wait_for_replay_offset(self, segment):
+        if not self.replay_use_recorded_timing:
+            return
+        if self._replay_start_time is None:
+            return
+        if 'start_offset_sec' not in segment:
+            return
+
+        target_offset = self._scaled_duration(segment['start_offset_sec'])
+        target_time = self._replay_start_time + target_offset
+        period_sec = 1.0 / self.publish_rate_hz
+        while rclpy.ok():
+            remaining = target_time - time.monotonic()
+            if remaining <= 0.0:
+                return
+            rclpy.spin_once(self, timeout_sec=0.0)
+            time.sleep(min(period_sec, remaining))
 
     def _run_sdk_action_segment(self, segment, fatal=None):
         if fatal is None:
@@ -876,9 +1044,102 @@ class KeyboardRouteNode(Node):
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(period_sec)
 
+    def _run_motion_for_duration(self, cmd, duration_sec, label):
+        if self.motion_backend == 'cmd_vel':
+            return self._publish_for_duration(cmd, duration_sec)
+        return self._run_sdk_velocity_for_duration(cmd, duration_sec, label)
+
+    def _run_sdk_velocity_for_duration(
+        self,
+        cmd,
+        duration_sec,
+        label,
+        stop_mode=None,
+        stop_sec=None
+    ):
+        if duration_sec <= 0.0:
+            return 0.0
+
+        linear_x = self._clamp(
+            float(cmd.linear.x),
+            -self.max_linear_x,
+            self.max_linear_x
+        )
+        angular_z = self._clamp(
+            float(cmd.angular.z),
+            -self.max_angular_z,
+            self.max_angular_z
+        )
+        if stop_mode is None:
+            stop_mode = self.sdk_velocity_stop_mode
+        if stop_sec is None:
+            stop_sec = self.sdk_velocity_stop_sec
+
+        command = self._sdk_velocity_command(
+            linear_x,
+            angular_z,
+            duration_sec,
+            stop_mode,
+            stop_sec
+        )
+        timeout_sec = (
+            duration_sec
+            + stop_sec
+            + self.sdk_velocity_timeout_padding_sec
+        )
+        self.get_logger().info(
+            f'{label}: sdk_direct Move vx={linear_x:.3f}, '
+            f'wz={angular_z:.3f}, duration={duration_sec:.2f}s, '
+            f'stop_mode={stop_mode}, stop_sec={stop_sec:.2f}s'
+        )
+
+        try:
+            process = subprocess.Popen(command, env=self._sdk_action_env())
+            self._active_sdk_process = process
+            deadline = time.monotonic() + timeout_sec
+            return_code = None
+
+            while rclpy.ok():
+                return_code = process.poll()
+                if return_code is not None:
+                    break
+                if time.monotonic() >= deadline:
+                    self._terminate_active_sdk_process()
+                    raise RuntimeError(
+                        f'sdk_direct velocity timeout after '
+                        f'{timeout_sec:.2f}s'
+                    )
+                rclpy.spin_once(self, timeout_sec=0.0)
+                time.sleep(0.02)
+        except FileNotFoundError as error:
+            raise RuntimeError(
+                f'sdk velocity helper not found: {error}'
+            ) from error
+        except OSError as error:
+            raise RuntimeError(
+                f'failed to start sdk velocity helper: {error}'
+            ) from error
+        finally:
+            self._active_sdk_process = None
+
+        if return_code != 0:
+            raise RuntimeError(
+                f'sdk_direct velocity failed with exit code {return_code}'
+            )
+
+        return duration_sec
+
     def _publish_stop(self, label, duration_sec):
         if duration_sec <= 0.0:
             return 0.0
+        if self.motion_backend == 'sdk_direct':
+            return self._run_sdk_velocity_for_duration(
+                Twist(),
+                duration_sec,
+                label,
+                stop_mode='none',
+                stop_sec=0.0
+            )
         self.get_logger().info(
             f'{label}: zero cmd_vel for {duration_sec:.2f}s'
         )
@@ -920,6 +1181,33 @@ class KeyboardRouteNode(Node):
             f'{wait_sec:.3f}',
         ]
 
+    def _sdk_velocity_command(
+        self,
+        linear_x,
+        angular_z,
+        duration_sec,
+        stop_mode,
+        stop_sec
+    ):
+        executable = self._resolve_sdk_velocity_executable()
+        args = [
+            self.sdk_network_interface,
+            f'{linear_x:.4f}',
+            f'{angular_z:.4f}',
+            f'{duration_sec:.3f}',
+            f'{self.sdk_velocity_rate_hz:.3f}',
+            stop_mode,
+            f'{stop_sec:.3f}',
+        ]
+        if executable:
+            return [executable] + args
+        return [
+            'ros2',
+            'run',
+            'rk_go2_sdk_bridge',
+            'go2_sdk_velocity_action',
+        ] + args
+
     def _resolve_sdk_action_executable(self):
         if self._sdk_action_executable_resolved is not None:
             return self._sdk_action_executable_resolved
@@ -959,6 +1247,47 @@ class KeyboardRouteNode(Node):
                 return candidate
 
         self._sdk_action_executable_resolved = ''
+        return ''
+
+    def _resolve_sdk_velocity_executable(self):
+        if self._sdk_velocity_executable_resolved is not None:
+            return self._sdk_velocity_executable_resolved
+
+        explicit = self.sdk_velocity_executable.strip()
+        if explicit:
+            candidates = [os.path.expanduser(explicit)]
+        else:
+            candidates = [
+                os.environ.get('RK_GO2_SDK_VELOCITY_ACTION', ''),
+                os.path.join(
+                    os.getcwd(),
+                    'install',
+                    'rk_go2_sdk_bridge',
+                    'lib',
+                    'rk_go2_sdk_bridge',
+                    'go2_sdk_velocity_action'
+                ),
+                os.path.expanduser(
+                    '~/rk_inspection_ws/install/rk_go2_sdk_bridge/lib/'
+                    'rk_go2_sdk_bridge/go2_sdk_velocity_action'
+                ),
+                (
+                    '/home/unitree/rk_inspection_ws/install/'
+                    'rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/'
+                    'go2_sdk_velocity_action'
+                ),
+            ]
+
+        for candidate in candidates:
+            if (
+                candidate
+                and os.path.isfile(candidate)
+                and os.access(candidate, os.X_OK)
+            ):
+                self._sdk_velocity_executable_resolved = candidate
+                return candidate
+
+        self._sdk_velocity_executable_resolved = ''
         return ''
 
     def _sdk_action_env(self):

@@ -238,6 +238,9 @@ Useful tuning variables:
 export RK_KEYBOARD_SPEED=0.30
 export RK_KEYBOARD_TURN_SPEED=0.80
 export RK_KEYBOARD_ACTION_SEC=1.0
+export RK_KEYBOARD_MOTION_BACKEND=sdk_direct
+export RK_KEYBOARD_SDK_STOP_MODE=move_zero
+export RK_KEYBOARD_SDK_STOP_SEC=0.10
 export RK_KEYBOARD_RECORD_GAIT_ACTIONS=false
 export RK_KEYBOARD_RECORD_IDLE_GAPS=true
 export RK_KEYBOARD_MIN_IDLE_SEC=0.20
@@ -248,6 +251,13 @@ export RK_KEYBOARD_REPLAY_DURATION_SCALE=1.0
 
 `RK_KEYBOARD_SPEED` sets the default linear speed for `w` and `s`.
 `RK_KEYBOARD_TURN_SPEED` sets the in-place angular speed for `a` and `d`.
+`RK_KEYBOARD_MOTION_BACKEND=sdk_direct` makes keyboard route motion call
+Unitree `SportClient.Move()` directly. With
+`RK_KEYBOARD_SDK_STOP_MODE=move_zero`, each step ends by sending
+`Move(0,0,0)` instead of `StopMove()`, so an `x` gait switch is not
+automatically cancelled by the keyboard step stop. Set
+`RK_KEYBOARD_MOTION_BACKEND=cmd_vel` only if you deliberately want the old
+`/navigation/cmd_vel` path for direct keyboard steps.
 `RK_KEYBOARD_RECORD_GAIT_ACTIONS=false` keeps `x` and `c` as live mode switches
 instead of recording them as replay route segments. No gait command is
 automatically re-sent after motion; the robot is expected to keep the selected
@@ -259,7 +269,8 @@ The source defaults live in
 edits are the environment variables in
 `src/rk_bringup/scripts/start_keyboard_route_record.sh`.
 
-During keyboard replay, direct route segments publish `/navigation/cmd_vel`.
+During keyboard replay, direct route segments use the same motion backend as
+recording, `sdk_direct` by default.
 Line-follow stages first send `/mission/start`, wait for the recorded condition
 or duration, then send `/mission/stop` before returning to the recorded route.
 This is a manual test path; the normal line-follow-only chain remains the one

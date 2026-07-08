@@ -93,9 +93,18 @@ if(unitree_sdk2_FOUND)
     BUILD_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
     INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
   )
+  add_executable(go2_sdk_velocity_action
+    src/go2_sdk_velocity_action.cpp
+  )
+  target_link_libraries(go2_sdk_velocity_action unitree_sdk2)
+  set_target_properties(go2_sdk_velocity_action PROPERTIES
+    BUILD_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
+    INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
+  )
   install(TARGETS
     go2_sdk_speed_sweep
     go2_sdk_motion_action
+    go2_sdk_velocity_action
     DESTINATION lib/${PROJECT_NAME}
   )
 else()
