@@ -7,6 +7,81 @@ executes hard-coded task sequences from `config/arm_poses.yaml`, publishes arm
 state, and exposes the existing `/arm/execute_task` action used by
 `rk_mission`. It also provides `/arm/command_json` for quick field testing.
 
+## New Arm Adapter Framework
+
+The original D1 arm is treated as unavailable for the replacement-arm path.
+`new_arm_task_node` keeps the same upper-layer interfaces and moves all
+hardware-specific logic behind an Adapter:
+
+```text
+new_arm_task_node
+  -> DryRunArmAdapter
+  -> SdkBridgeArmAdapter
+       -> /arm/sdk_bridge/command_json
+       -> external vendor SDK bridge
+```
+
+Main files:
+
+- `config/new_arm_poses.yaml`: fixed joint poses and task sequences.
+- `config/new_arm_params.yaml`: topics, perception confirmation, and adapter
+  mode.
+- `rk_arm_control/adapters/base.py`: common hardware interface.
+- `rk_arm_control/adapters/dry_run_adapter.py`: safe no-hardware mode.
+- `rk_arm_control/adapters/sdk_bridge_adapter.py`: JSON bridge for the new arm
+  SDK.
+
+The grasping plan is fixed-pose first. Camera detections on
+`/perception/item_tags` or `/perception/object_xy_json` are used as optional
+confirmation, not as a hard dependency, so the mission can still run if vision
+is unstable.
+
+Start the replacement-arm framework in dry-run mode:
+
+```bash
+ros2 launch rk_arm_control new_arm_task.launch.py
+```
+
+Send a fixed-pose task:
+
+```bash
+ros2 topic pub --once /arm/command_json std_msgs/msg/String \
+  "{data: '{\"task\":\"PICK_START\"}'}"
+```
+
+Watch status and lock:
+
+```bash
+ros2 topic echo /arm/status
+ros2 topic echo /arm/control_lock
+```
+
+Simulate a camera confirmation target:
+
+```bash
+ros2 topic pub --once /perception/object_xy_json std_msgs/msg/String \
+  "{data: '{\"item_type\":\"start_item\",\"x\":0.12,\"y\":-0.03,\"confidence\":0.90}'}"
+```
+
+Switch to SDK bridge mode by editing `config/new_arm_params.yaml`:
+
+```yaml
+new_arm:
+  adapter:
+    mode: sdk_bridge
+```
+
+Then run a bridge listener for the real arm SDK and watch the outgoing command:
+
+```bash
+ros2 topic echo /arm/sdk_bridge/command_json
+```
+
+`SdkBridgeArmAdapter` has a `unitree_d1_json_reference` command format that
+mirrors the imported Unitree D1 example style (`funcode=2` multi-joint JSON).
+It is only a protocol reference; for a replacement arm, prefer a small
+vendor-specific bridge process that consumes `generic_json`.
+
 Current hardware mode: **DryRun**. No real arm topics or services such as
 `/arm/joint_cmd` or `/gripper/cmd` were found in this repository. The real
 driver should be connected inside `DryRunArmAdapter` in

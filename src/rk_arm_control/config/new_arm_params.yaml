@@ -1,0 +1,46 @@
+# 新机械臂节点参数。
+#
+# 这份文件主要调通信 topic、视觉确认策略和底层 Adapter。
+# 点位和任务步骤在 new_arm_poses.yaml 中配置。
+
+new_arm:
+  topics:
+    # 上层状态机和手动调试都继续使用这些旧接口，避免改任务主线。
+    command_json: /arm/command_json
+    status: /arm/status
+    control_lock: /arm/control_lock
+    action: /arm/execute_task
+
+    # 感知节点可选输出。固定点位方案不强依赖它们。
+    object_xy_json: /perception/object_xy_json
+    item_tags: /perception/item_tags
+
+  perception:
+    # 识别结果超过这个时间就认为过期。
+    target_timeout_sec: 3.0
+    # 低于这个置信度的目标不参与确认。
+    min_confidence: 0.50
+    # 当前方案是固定点位抓取，视觉失败不阻塞任务。
+    use_as_soft_confirm_only: true
+
+  adapter:
+    # 可选：
+    # - dry_run：只打印动作，默认安全模式；
+    # - sdk_bridge：发布 JSON 给新机械臂 SDK bridge。
+    mode: dry_run
+
+    sdk_bridge:
+      # 新机械臂 bridge 订阅这个 topic，然后调用厂家 SDK。
+      command_topic: /arm/sdk_bridge/command_json
+
+      # generic_json：推荐给新机械臂 bridge 使用；
+      # unitree_d1_json_reference：参考 D1 SDK 的 funcode=2 多关节命令格式。
+      command_format: generic_json
+
+      # joints 单位。建议新机械臂到货后统一用厂家调试软件显示的单位。
+      joint_unit: deg
+
+      # true 表示发完命令后按 duration_sec 等待，适合第一阶段开环调试。
+      fire_and_wait: true
+      initial_seq: 1000
+

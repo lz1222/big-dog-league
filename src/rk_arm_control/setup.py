@@ -1,6 +1,7 @@
 import os
 from glob import glob
 
+from setuptools import find_packages
 from setuptools import setup
 
 
@@ -9,7 +10,7 @@ package_name = 'rk_arm_control'
 setup(
     name=package_name,
     version='0.0.1',
-    packages=[package_name],
+    packages=find_packages(),
     data_files=[
         ('share/ament_index/resource_index/packages',
          ['resource/' + package_name]),
@@ -29,6 +30,7 @@ setup(
         'console_scripts': [
             'arm_task_node = rk_arm_control.arm_task_node:main',
             'd1_pick_node = rk_arm_control.d1_pick_node:main',
+            'new_arm_task_node = rk_arm_control.new_arm_task_node:main',
         ],
     },
 )

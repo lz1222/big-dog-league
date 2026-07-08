@@ -1,0 +1,192 @@
+# 新机械臂固定点位配置。
+#
+# 使用方法：
+# 1. 新机械臂到货后，先空载记录 HOME、预抓取、抓取、抬升、放置等点位；
+# 2. 把每个点位的关节角填入 joints；
+# 3. 默认单位按 new_arm_params.yaml 里的 adapter.sdk_bridge.joint_unit；
+# 4. 每个点位只改 YAML，不需要改 Python 代码。
+
+new_arm:
+  # 任务别名：状态机或手动命令可以用不同名字，最终映射到固定任务。
+  task_aliases:
+    PICK_START_ITEM: PICK_START
+    START_ITEM: PICK_START
+    DROP_START_ITEM: PLACE_TRANSFER
+    PICK_FIELD_ITEM: PICK_FIELD
+    FIELD_ITEM: PICK_FIELD
+    PLACE_FIELD_ITEM: PLACE_TARGET
+    PLACE_PLATFORM_1: PLACE_TARGET
+    PLACE_PLATFORM_2: PLACE_TARGET
+
+  timing:
+    # 单步默认超时时间。真实机械臂动作慢就适当加大。
+    default_step_timeout_sec: 5.0
+    # 点位未单独写 duration_sec 时使用这个默认移动时间。
+    default_move_duration_sec: 1.2
+    # wait 步骤未单独写时间时使用这个默认等待时间。
+    default_wait_sec: 0.4
+
+  gripper:
+    # 夹爪开合时间。新夹爪到货后先单独测试，再改这里。
+    open:
+      duration_sec: 0.6
+    close:
+      duration_sec: 0.6
+
+  poses:
+    # 下面都是占位角度，不能直接当真实机械臂安全点位。
+    # 建议记录点位顺序：
+    # HOME -> PRE_PICK_START -> PICK_START -> LIFT_START
+    #      -> PRE_PLACE_TRANSFER -> PLACE_TRANSFER -> LIFT_TRANSFER
+    #      -> PRE_PICK_FIELD -> PICK_FIELD -> LIFT_FIELD
+    #      -> PRE_PLACE_TARGET -> PLACE_TARGET -> LIFT_TARGET
+    HOME:
+      joints: [0.0, -20.0, 35.0, 0.0, 20.0, 0.0]
+      duration_sec: 1.2
+
+    PRE_PICK_START:
+      joints: [0.0, -15.0, 45.0, 0.0, 20.0, 0.0]
+      duration_sec: 1.2
+
+    PICK_START:
+      joints: [0.0, -5.0, 55.0, 0.0, 15.0, 0.0]
+      duration_sec: 1.0
+
+    LIFT_START:
+      joints: [0.0, -20.0, 40.0, 0.0, 20.0, 0.0]
+      duration_sec: 1.0
+
+    PRE_PLACE_TRANSFER:
+      joints: [25.0, -15.0, 45.0, 0.0, 20.0, 0.0]
+      duration_sec: 1.2
+
+    PLACE_TRANSFER:
+      joints: [25.0, -5.0, 55.0, 0.0, 15.0, 0.0]
+      duration_sec: 1.0
+
+    LIFT_TRANSFER:
+      joints: [25.0, -20.0, 40.0, 0.0, 20.0, 0.0]
+      duration_sec: 1.0
+
+    PRE_PICK_FIELD:
+      joints: [-25.0, -15.0, 45.0, 0.0, 20.0, 0.0]
+      duration_sec: 1.2
+
+    PICK_FIELD:
+      joints: [-25.0, -5.0, 55.0, 0.0, 15.0, 0.0]
+      duration_sec: 1.0
+
+    LIFT_FIELD:
+      joints: [-25.0, -20.0, 40.0, 0.0, 20.0, 0.0]
+      duration_sec: 1.0
+
+    PRE_PLACE_TARGET:
+      joints: [45.0, -15.0, 45.0, 0.0, 20.0, 0.0]
+      duration_sec: 1.2
+
+    PLACE_TARGET:
+      joints: [45.0, -5.0, 55.0, 0.0, 15.0, 0.0]
+      duration_sec: 1.0
+
+    LIFT_TARGET:
+      joints: [45.0, -20.0, 40.0, 0.0, 20.0, 0.0]
+      duration_sec: 1.0
+
+  tasks:
+    # check_target 是软确认：required=false 时，没识别到也继续固定点位。
+    # 比赛临近建议先保持 false，避免视觉不稳导致任务卡死。
+    PICK_START:
+      steps:
+        - type: check_target
+          accepted_item_types: [start_item]
+          required: false
+          timeout_sec: 1.0
+        - type: move
+          pose: HOME
+        - type: gripper
+          action: open
+        - type: move
+          pose: PRE_PICK_START
+        - type: move
+          pose: PICK_START
+        - type: gripper
+          action: close
+        - type: wait
+          duration_sec: 0.4
+        - type: move
+          pose: LIFT_START
+        - type: move
+          pose: HOME
+
+    PLACE_TRANSFER:
+      steps:
+        - type: move
+          pose: HOME
+        - type: move
+          pose: PRE_PLACE_TRANSFER
+        - type: move
+          pose: PLACE_TRANSFER
+        - type: gripper
+          action: open
+        - type: wait
+          duration_sec: 0.4
+        - type: move
+          pose: LIFT_TRANSFER
+        - type: move
+          pose: HOME
+
+    PICK_FIELD:
+      steps:
+        - type: check_target
+          accepted_item_types: [field_item]
+          required: false
+          timeout_sec: 1.0
+        - type: move
+          pose: HOME
+        - type: gripper
+          action: open
+        - type: move
+          pose: PRE_PICK_FIELD
+        - type: move
+          pose: PICK_FIELD
+        - type: gripper
+          action: close
+        - type: wait
+          duration_sec: 0.4
+        - type: move
+          pose: LIFT_FIELD
+        - type: move
+          pose: HOME
+
+    PLACE_TARGET:
+      steps:
+        - type: move
+          pose: HOME
+        - type: move
+          pose: PRE_PLACE_TARGET
+        - type: move
+          pose: PLACE_TARGET
+        - type: gripper
+          action: open
+        - type: wait
+          duration_sec: 0.4
+        - type: move
+          pose: LIFT_TARGET
+        - type: move
+          pose: HOME
+
+    HOME:
+      steps:
+        - type: move
+          pose: HOME
+
+    OPEN_GRIPPER:
+      steps:
+        - type: gripper
+          action: open
+
+    CLOSE_GRIPPER:
+      steps:
+        - type: gripper
+          action: close
+
