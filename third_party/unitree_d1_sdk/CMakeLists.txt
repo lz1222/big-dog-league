@@ -120,3 +120,5 @@ add_executable(get_arm_joint_angle src/get_arm_joint_angle.cpp src/msg/ArmString
 configure_d1_target(get_arm_joint_angle)
 add_executable(d1_servo_heat_diagnosis src/d1_servo_heat_diagnosis.cpp src/msg/ArmString_.cpp src/msg/PubServoInfo_.cpp)
 configure_d1_target(d1_servo_heat_diagnosis)
+add_executable(d1_joint5_control_diagnosis src/d1_joint5_control_diagnosis.cpp src/msg/ArmString_.cpp src/msg/PubServoInfo_.cpp)
+configure_d1_target(d1_joint5_control_diagnosis)

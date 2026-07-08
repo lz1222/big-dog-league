@@ -50,8 +50,8 @@ Run it on the robot while the D1 arm is powered, but do not send new motion
 commands during the test:
 
 ```bash
-source scripts/source_unitree_ros2.sh eth0
-LD_LIBRARY_PATH=$PWD/third_party/unitree_sdk2/install/lib:${LD_LIBRARY_PATH:-} \
+CYCLONEDDS_URI="<CycloneDDS><Domain><General><NetworkInterfaceAddress>eth0</NetworkInterfaceAddress></General></Domain></CycloneDDS>" \
+LD_LIBRARY_PATH=$PWD/third_party/unitree_sdk2/thirdparty/lib/aarch64:${LD_LIBRARY_PATH:-} \
   /tmp/unitree_d1_sdk_build/d1_servo_heat_diagnosis eth0 30 1.0 2.0
 ```
 
@@ -70,3 +70,51 @@ powered, which can cause heat through repeated position correction. If all
 servos are stable but a joint is still hot, suspect holding torque, a hard
 limit, overextended pose, gripper clamping, calibration offset, or mechanical
 friction.
+
+## Joint 5 Control Diagnosis
+
+This workspace also adds a small active diagnosis tool for the suspected fifth
+joint. It listens to all servo feedback, then, only when `--execute` is present,
+sends three tiny single-joint targets around the current angle:
+
+```text
+current + delta -> current - delta -> current
+```
+
+Build it:
+
+```bash
+cmake -S third_party/unitree_d1_sdk -B /tmp/unitree_d1_sdk_build
+cmake --build /tmp/unitree_d1_sdk_build --target d1_joint5_control_diagnosis -j2
+```
+
+Dry-run first. This only prints the planned command and writes feedback samples:
+
+```bash
+CYCLONEDDS_URI="<CycloneDDS><Domain><General><NetworkInterfaceAddress>eth0</NetworkInterfaceAddress></General></Domain></CycloneDDS>" \
+LD_LIBRARY_PATH=$PWD/third_party/unitree_sdk2/thirdparty/lib/aarch64:${LD_LIBRARY_PATH:-} \
+  /tmp/unitree_d1_sdk_build/d1_joint5_control_diagnosis eth0 5 4 1.0 0.8 /tmp/d1_joint5_control.csv
+```
+
+Execute only after the dry-run command looks correct and the hot joint has
+cooled:
+
+```bash
+CYCLONEDDS_URI="<CycloneDDS><Domain><General><NetworkInterfaceAddress>eth0</NetworkInterfaceAddress></General></Domain></CycloneDDS>" \
+LD_LIBRARY_PATH=$PWD/third_party/unitree_sdk2/thirdparty/lib/aarch64:${LD_LIBRARY_PATH:-} \
+  /tmp/unitree_d1_sdk_build/d1_joint5_control_diagnosis eth0 5 4 1.0 0.8 /tmp/d1_joint5_control.csv --execute
+```
+
+Arguments:
+
+- `eth0`: Unitree/D1 network interface.
+- `5`: SDK single-joint command id, intended for physical joint 5.
+- `4`: feedback servo index to monitor. Physical joint 5 is normally `servo4`
+  if joints are numbered 1-7.
+- `1.0`: tiny probe delta in degrees. The tool refuses values above 5 deg.
+- `0.8`: hold time per target. The tool refuses values above 5 sec.
+
+If `servo4` does not move, or another servo moves more than `servo4`, the
+result suggests command rejection, wrong id mapping, a servo/encoder fault,
+mechanical binding, or controller protection. Stop immediately if the joint
+heats quickly or moves toward a hard stop.
