@@ -27,7 +27,7 @@ new_arm:
     # 可选：
     # - dry_run：只打印动作，默认安全模式；
     # - sdk_bridge：发布 JSON 给新机械臂 SDK bridge。
-    mode: dry_run
+    mode: sdk_bridge
 
     sdk_bridge:
       # 新机械臂 bridge 订阅这个 topic，然后调用厂家 SDK。
