@@ -2,14 +2,11 @@ cmake_minimum_required(VERSION 3.5)
 project(rk_go2_sdk_bridge)
 
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
-find_package(OpenCV REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
 
 set(RK_UNITREE_SDK2_INSTALL_CANDIDATES
   "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/unitree_sdk2_official/install"
@@ -21,6 +18,7 @@ set(RK_UNITREE_SDK2_INSTALL_CANDIDATES
 
 set(RK_UNITREE_SDK2_PREFIX "")
 set(RK_UNITREE_SDK2_RUNTIME_DIRS "")
+set(RK_UNITREE_SDK2_INCLUDE_DIRS "")
 
 foreach(candidate ${RK_UNITREE_SDK2_INSTALL_CANDIDATES})
   if(candidate AND
@@ -73,7 +71,33 @@ else()
   endforeach()
 endif()
 
-install(PROGRAMS scripts/cmd_vel_udp_forwarder.py
+foreach(include_candidate
+    "${RK_UNITREE_SDK2_PREFIX}/include"
+    "${RK_UNITREE_SDK2_PREFIX}/thirdparty/include"
+    "${RK_UNITREE_SDK2_PREFIX}/../thirdparty/include")
+  if(include_candidate AND EXISTS "${include_candidate}")
+    list(APPEND RK_UNITREE_SDK2_INCLUDE_DIRS "${include_candidate}")
+  endif()
+endforeach()
+list(REMOVE_DUPLICATES RK_UNITREE_SDK2_INCLUDE_DIRS)
+
+function(rk_configure_unitree_sdk_target target_name)
+  target_include_directories(${target_name} BEFORE PRIVATE
+    ${RK_UNITREE_SDK2_INCLUDE_DIRS}
+  )
+  target_link_libraries(${target_name}
+    unitree_sdk2
+  )
+  set_target_properties(${target_name} PROPERTIES
+    BUILD_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
+    INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
+  )
+endfunction()
+
+install(PROGRAMS
+  scripts/cmd_vel_udp_forwarder.py
+  scripts/warning_sign_image_classifier.py
+  scripts/go2_warning_sign_sdk_loop.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -82,48 +106,22 @@ install(DIRECTORY launch/
 )
 
 if(unitree_sdk2_FOUND)
-  add_executable(go2_front_camera_node
-    src/go2_front_camera_node.cpp
+  add_executable(go2_sdk_capture_image
+    src/go2_sdk_capture_image.cpp
   )
-  target_include_directories(go2_front_camera_node PRIVATE
-    ${OpenCV_INCLUDE_DIRS}
-  )
-  target_link_libraries(go2_front_camera_node
-    unitree_sdk2
-    ${OpenCV_LIBS}
-  )
-  ament_target_dependencies(go2_front_camera_node
-    rclcpp
-    sensor_msgs
-  )
-  set_target_properties(go2_front_camera_node PROPERTIES
-    BUILD_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
-    INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
-  )
+  rk_configure_unitree_sdk_target(go2_sdk_capture_image)
   add_executable(go2_sdk_speed_sweep src/go2_sdk_speed_sweep.cpp)
-  target_link_libraries(go2_sdk_speed_sweep unitree_sdk2)
-  set_target_properties(go2_sdk_speed_sweep PROPERTIES
-    BUILD_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
-    INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
-  )
+  rk_configure_unitree_sdk_target(go2_sdk_speed_sweep)
   add_executable(go2_sdk_motion_action
     src/go2_sdk_motion_action.cpp
   )
-  target_link_libraries(go2_sdk_motion_action unitree_sdk2)
-  set_target_properties(go2_sdk_motion_action PROPERTIES
-    BUILD_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
-    INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
-  )
+  rk_configure_unitree_sdk_target(go2_sdk_motion_action)
   add_executable(go2_sdk_velocity_action
     src/go2_sdk_velocity_action.cpp
   )
-  target_link_libraries(go2_sdk_velocity_action unitree_sdk2)
-  set_target_properties(go2_sdk_velocity_action PROPERTIES
-    BUILD_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
-    INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
-  )
+  rk_configure_unitree_sdk_target(go2_sdk_velocity_action)
   install(TARGETS
-    go2_front_camera_node
+    go2_sdk_capture_image
     go2_sdk_speed_sweep
     go2_sdk_motion_action
     go2_sdk_velocity_action
