@@ -6,25 +6,57 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Threads REQUIRED)
 
+set(UNITREE_SDK2_SOURCE_CANDIDATES
+  "${CMAKE_CURRENT_SOURCE_DIR}/../unitree_sdk2"
+  "/home/unitree/big-dog-league/third_party/unitree_sdk2"
+  "/home/unitree/rk_inspection_ws/third_party/unitree_sdk2"
+)
+
+foreach(candidate ${UNITREE_SDK2_SOURCE_CANDIDATES})
+  if(candidate AND
+      EXISTS "${candidate}/CMakeLists.txt" AND
+      EXISTS "${candidate}/lib/${CMAKE_SYSTEM_PROCESSOR}/libunitree_sdk2.a")
+    set(BUILD_EXAMPLES OFF CACHE BOOL
+      "Do not build unitree_sdk2 examples from unitree_d1_sdk" FORCE)
+    add_subdirectory(
+      "${candidate}"
+      "${CMAKE_CURRENT_BINARY_DIR}/unitree_sdk2"
+      EXCLUDE_FROM_ALL
+    )
+    set(UNITREE_SDK2_PREFIX "${candidate}")
+    set(UNITREE_SDK2_RUNTIME_DIR
+      "${candidate}/thirdparty/lib/${CMAKE_SYSTEM_PROCESSOR}"
+    )
+    set(unitree_sdk2_FOUND TRUE)
+    message(STATUS
+      "Using architecture-matched unitree_sdk2 source at ${candidate} "
+      "for ${CMAKE_SYSTEM_PROCESSOR}"
+    )
+    break()
+  endif()
+endforeach()
+
 set(UNITREE_SDK2_PREFIX_CANDIDATES
-  "${CMAKE_CURRENT_SOURCE_DIR}/../unitree_sdk2/install"
   "$ENV{UNITREE_SDK2_PREFIX}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../unitree_sdk2/install"
   "/home/unitree/rk_inspection_ws/third_party/unitree_sdk2/install"
   "/home/unitree/unitree_sdk2/install"
   "/opt/unitree_robotics"
   "/usr/local"
 )
 
-foreach(candidate ${UNITREE_SDK2_PREFIX_CANDIDATES})
-  if(candidate AND
-      EXISTS "${candidate}/lib/cmake/unitree_sdk2/unitree_sdk2Config.cmake")
-    list(PREPEND CMAKE_PREFIX_PATH "${candidate}")
-    set(UNITREE_SDK2_PREFIX "${candidate}")
-    break()
-  endif()
-endforeach()
+if(NOT unitree_sdk2_FOUND)
+  foreach(candidate ${UNITREE_SDK2_PREFIX_CANDIDATES})
+    if(candidate AND
+        EXISTS "${candidate}/lib/cmake/unitree_sdk2/unitree_sdk2Config.cmake")
+      list(PREPEND CMAKE_PREFIX_PATH "${candidate}")
+      set(UNITREE_SDK2_PREFIX "${candidate}")
+      break()
+    endif()
+  endforeach()
 
-find_package(unitree_sdk2 QUIET CONFIG)
+  find_package(unitree_sdk2 QUIET CONFIG)
+endif()
 
 if(unitree_sdk2_FOUND)
   message(STATUS "Using unitree_sdk2 from ${UNITREE_SDK2_PREFIX}")
@@ -42,8 +74,8 @@ function(configure_d1_target target_name)
   target_link_libraries(${target_name} ${D1_SDK_LIBRARIES})
   if(UNITREE_SDK2_PREFIX)
     set_target_properties(${target_name} PROPERTIES
-      BUILD_RPATH "${UNITREE_SDK2_PREFIX}/lib"
-      INSTALL_RPATH "${UNITREE_SDK2_PREFIX}/lib"
+      BUILD_RPATH "${UNITREE_SDK2_PREFIX}/lib;${UNITREE_SDK2_RUNTIME_DIR}"
+      INSTALL_RPATH "${UNITREE_SDK2_PREFIX}/lib;${UNITREE_SDK2_RUNTIME_DIR}"
     )
   endif()
 endfunction()

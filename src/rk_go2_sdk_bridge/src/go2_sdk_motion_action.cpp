@@ -34,6 +34,21 @@ int32_t RunAction(unitree::robot::go2::SportClient& sport_client,
   if (action == "balance_stand") {
     return sport_client.BalanceStand();
   }
+  if (action == "classic_walk" || action == "classic_walk_on") {
+    return sport_client.ClassicWalk(true);
+  }
+  if (action == "classic_walk_off") {
+    return sport_client.ClassicWalk(false);
+  }
+  if (action == "static_walk") {
+    return sport_client.StaticWalk();
+  }
+  if (action == "trot_run") {
+    return sport_client.TrotRun();
+  }
+  if (action == "free_walk") {
+    return sport_client.FreeWalk();
+  }
   if (action == "stand_up") {
     return sport_client.StandUp();
   }
@@ -60,8 +75,9 @@ void PrintUsage(const char* program)
       << "  " << program
       << " <network_interface> <action> [wait_sec]\n\n"
       << "Actions:\n"
-      << "  stand_up | balance_stand | economic_gait | front_jump | "
-         "recovery_stand | stop_move\n\n"
+      << "  stand_up | balance_stand | classic_walk | classic_walk_on | "
+         "classic_walk_off | static_walk | trot_run | free_walk | "
+         "economic_gait | front_jump | recovery_stand | stop_move\n\n"
       << "Example:\n"
       << "  " << program << " eth0 front_jump 2.5\n";
 }

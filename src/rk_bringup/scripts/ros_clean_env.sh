@@ -55,7 +55,12 @@ remove_ld_path_entry() {
 cd "$WORKSPACE_DIR"
 ROS_SETUP="$(select_ros_setup)"
 source "$ROS_SETUP"
-source "$WORKSPACE_DIR/install/setup.bash"
+if [ -f "$WORKSPACE_DIR/install/setup.bash" ]; then
+    source "$WORKSPACE_DIR/install/setup.bash"
+else
+    echo "WARN: workspace overlay not found: $WORKSPACE_DIR/install/setup.bash" >&2
+    echo "WARN: run colcon build --symlink-install in $WORKSPACE_DIR before starting RK nodes." >&2
+fi
 
 export ROS_DOMAIN_ID=10
 

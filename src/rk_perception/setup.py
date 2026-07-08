@@ -32,6 +32,8 @@ setup(
             'rk_perception.mock_line_tracker_node:main',
             'real_line_tracker_node = '
             'rk_perception.real_line_tracker_node:main',
+            'real_sign_detector_node = '
+            'rk_perception.real_sign_detector_node:main',
             'mock_sign_detector_node = '
             'rk_perception.mock_sign_detector_node:main',
             'mock_item_tag_node = rk_perception.mock_item_tag_node:main',

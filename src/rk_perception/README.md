@@ -17,6 +17,20 @@ The node subscribes to the RGB image topic:
 /camera/color/image_raw
 ```
 
+## Real Sign Detector
+
+`real_sign_detector_node` detects simple competition signs from the same RGB
+stream and publishes `rk_interfaces/msg/SignDetectionArray` on:
+
+```bash
+/perception/sign_detections
+```
+
+It tries QR/text labels first and uses HSV color rules as a field-tunable
+fallback. The default values map `place_1`, `place_2`, `electric_shock`,
+`strong_oxidizer`, and `radiation` into the sign messages already consumed by
+the mission code.
+
 `realsense2_camera` is intentionally not a hard dependency of this package.
 Install and start the RealSense ROS 2 wrapper separately:
 
@@ -52,6 +66,31 @@ If your RealSense launch publishes a different color image topic, override it:
 ros2 launch rk_perception perception.launch.py \
   use_mock_perception:=false \
   image_topic:=/camera/camera/color/image_raw
+```
+
+Run the sign detector by itself:
+
+```bash
+ros2 run rk_perception real_sign_detector_node --ros-args \
+  --params-file src/rk_perception/config/perception.yaml \
+  -p image_topic:=/camera/color/image_raw
+```
+
+Run sign recognition plus conservative Go2 body actions:
+
+```bash
+ros2 launch rk_bringup sign_action_debug.launch.py \
+  start_realsense:=true \
+  start_gait_control:=true \
+  dry_run_action:=false
+```
+
+Watch the detector and action mapping:
+
+```bash
+ros2 topic echo /perception/sign_detections
+ros2 topic echo /sign_action/status
+ros2 topic echo /gait/command_json
 ```
 
 ## OpenCV Pipeline

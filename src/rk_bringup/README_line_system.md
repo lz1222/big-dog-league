@@ -128,10 +128,12 @@ ros2 run rk_go2_sdk_bridge go2_sdk_motion_action eth0 economic_gait 1.0
 ~/rk_inspection_ws/src/rk_bringup/scripts/mission_start.sh
 ```
 
-The available SDK actions are `stand_up`, `balance_stand`, `economic_gait`,
-`front_jump`, `recovery_stand`, and `stop_move`. The Python `gait_control_node`
-still publishes `cmd_vel` for fixed actions; its body-height and recovery-stand
-adapters are placeholders until the Unitree posture APIs are wired there.
+The available SDK actions are `stand_up`, `balance_stand`, `classic_walk`,
+`classic_walk_on`, `classic_walk_off`, `static_walk`, `trot_run`, `free_walk`,
+`economic_gait`, `front_jump`, `recovery_stand`, and `stop_move`. The Python
+`gait_control_node` still publishes `cmd_vel` for fixed actions; its
+body-height and recovery-stand adapters are placeholders until the Unitree
+posture APIs are wired there.
 
 VM/Humble development build note:
 
@@ -209,11 +211,12 @@ Keyboard controls:
 
 - `w`: forward.
 - `s`: backward.
-- `a`: forward while turning left.
-- `d`: forward while turning right.
+- `a`: turn left in place.
+- `d`: turn right in place.
 - Each motion key press runs one fixed-duration action.
 - `x`: switch to `economic_gait`.
-- `c`: switch to normal gait, mapped to `balance_stand` by default.
+- `c`: switch to normal gait, mapped to `classic_walk` by default.
+- `j` or `J`: front jump.
 - Space: stop and record a pause.
 - `l`: insert a timed line-follow stage.
 - `u`: insert a line-follow-until-lost stage.
@@ -235,25 +238,48 @@ Replay the saved route:
 Useful tuning variables:
 
 ```bash
-export RK_KEYBOARD_SPEED=0.30
-export RK_KEYBOARD_TURN_SPEED=0.80
+export RK_KEYBOARD_SPEED=0.25
+export RK_KEYBOARD_TURN_SPEED=0.65
 export RK_KEYBOARD_ACTION_SEC=1.0
+export RK_KEYBOARD_MOTION_BACKEND=sdk_direct
+export RK_KEYBOARD_SDK_STOP_MODE=move_zero
+export RK_KEYBOARD_SDK_STOP_SEC=0.10
+export RK_KEYBOARD_NORMAL_GAIT_ACTION=classic_walk
+export RK_KEYBOARD_FRONT_JUMP_WAIT_SEC=2.0
+export RK_KEYBOARD_FRONT_JUMP_PRE_STOP_SEC=2.0
+export RK_KEYBOARD_RECORD_GAIT_ACTIONS=true
+export RK_KEYBOARD_RECORD_IDLE_GAPS=true
+export RK_KEYBOARD_MIN_IDLE_SEC=0.20
 export RK_KEYBOARD_LINE_FOLLOW_SEC=3.0
 export RK_KEYBOARD_REPLAY_SPEED_SCALE=0.8
 export RK_KEYBOARD_REPLAY_DURATION_SCALE=1.0
 ```
 
-`RK_KEYBOARD_SPEED` sets the default value for forward, backward, and turning
-commands' linear speed. `RK_KEYBOARD_TURN_SPEED` sets the angular speed for
-`a` and `d`. During `a` and `d`, the node publishes linear.x and angular.z at
-the same time. If one direction needs separate tuning, override
-`RK_KEYBOARD_FORWARD_SPEED`, `RK_KEYBOARD_BACKWARD_SPEED`, or
-`RK_KEYBOARD_TURN_LINEAR_SPEED`. The source defaults live in
+`RK_KEYBOARD_SPEED` sets the default linear speed for `w` and `s`.
+`RK_KEYBOARD_TURN_SPEED` sets the in-place angular speed for `a` and `d`.
+`RK_KEYBOARD_MOTION_BACKEND=sdk_direct` makes keyboard route motion call
+Unitree `SportClient.Move()` directly. With
+`RK_KEYBOARD_SDK_STOP_MODE=move_zero`, each step ends by sending
+`Move(0,0,0)` instead of `StopMove()`, so an `x` gait switch is not
+automatically cancelled by the keyboard step stop. Set
+`RK_KEYBOARD_MOTION_BACKEND=cmd_vel` only if you deliberately want the old
+`/navigation/cmd_vel` path for direct keyboard steps.
+`RK_KEYBOARD_NORMAL_GAIT_ACTION=classic_walk` controls what `c` sends. If the
+robot still does not return to the gait you want, test
+`RK_KEYBOARD_NORMAL_GAIT_ACTION=trot_run` or `balance_stand` without changing
+code. `RK_KEYBOARD_RECORD_GAIT_ACTIONS=true` records `x` and `c` once at the
+point where you pressed them. No gait command is automatically re-sent after
+every motion. `RK_KEYBOARD_RECORD_IDLE_GAPS=true` records pauses between motion
+keys so replay does not compress the route timing. If one direction needs
+separate tuning, override `RK_KEYBOARD_FORWARD_SPEED` or
+`RK_KEYBOARD_BACKWARD_SPEED`.
+The source defaults live in
 `src/rk_tools/rk_tools/keyboard_route_node.py`; the easiest robot-side runtime
 edits are the environment variables in
 `src/rk_bringup/scripts/start_keyboard_route_record.sh`.
 
-During keyboard replay, direct route segments publish `/navigation/cmd_vel`.
+During keyboard replay, direct route segments use the same motion backend as
+recording, `sdk_direct` by default.
 Line-follow stages first send `/mission/start`, wait for the recorded condition
 or duration, then send `/mission/stop` before returning to the recorded route.
 This is a manual test path; the normal line-follow-only chain remains the one
