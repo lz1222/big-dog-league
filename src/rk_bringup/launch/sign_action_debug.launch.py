@@ -10,6 +10,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    start_go2_camera = LaunchConfiguration('start_go2_camera')
     start_realsense = LaunchConfiguration('start_realsense')
     start_gait_control = LaunchConfiguration('start_gait_control')
     image_topic = LaunchConfiguration('image_topic')
@@ -17,6 +18,8 @@ def generate_launch_description():
     debug_log = LaunchConfiguration('debug_log')
     rgb_camera_profile = LaunchConfiguration('rgb_camera.profile')
     dry_run_action = LaunchConfiguration('dry_run_action')
+    sdk_network_interface = LaunchConfiguration('sdk_network_interface')
+    go2_camera_rate_hz = LaunchConfiguration('go2_camera_rate_hz')
 
     perception_config = PathJoinSubstitution([
         FindPackageShare('rk_perception'),
@@ -31,18 +34,23 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'start_realsense',
+            'start_go2_camera',
             default_value='true',
-            description='Start the robot RealSense color camera.'
+            description='Start the built-in Go2 front camera via SDK2.'
+        ),
+        DeclareLaunchArgument(
+            'start_realsense',
+            default_value='false',
+            description='Start the external RealSense color camera.'
         ),
         DeclareLaunchArgument(
             'start_gait_control',
-            default_value='true',
+            default_value='false',
             description='Start rk_locomotion gait_control_node.'
         ),
         DeclareLaunchArgument(
             'image_topic',
-            default_value='/camera/color/image_raw',
+            default_value='/go2/front/image_raw',
             description='RGB image topic for sign recognition.'
         ),
         DeclareLaunchArgument(
@@ -65,7 +73,32 @@ def generate_launch_description():
             default_value='false',
             description='Print mapped actions without publishing commands.'
         ),
+        DeclareLaunchArgument(
+            'sdk_network_interface',
+            default_value='eth0',
+            description='Network interface used by Unitree SDK2.'
+        ),
+        DeclareLaunchArgument(
+            'go2_camera_rate_hz',
+            default_value='8.0',
+            description='Go2 front camera publish rate.'
+        ),
         LogInfo(msg='Starting sign recognition and body-action debug stack.'),
+        Node(
+            package='rk_go2_sdk_bridge',
+            executable='go2_front_camera_node',
+            name='go2_front_camera_node',
+            output='screen',
+            condition=IfCondition(start_go2_camera),
+            parameters=[{
+                'network_interface': sdk_network_interface,
+                'image_topic': image_topic,
+                'publish_rate_hz': ParameterValue(
+                    go2_camera_rate_hz,
+                    value_type=float
+                ),
+            }],
+        ),
         Node(
             package='realsense2_camera',
             executable='realsense2_camera_node',
@@ -90,6 +123,7 @@ def generate_launch_description():
                 perception_config,
                 {
                     'image_topic': image_topic,
+                    'enable_warning_templates': True,
                     'enable_debug_image': ParameterValue(
                         enable_debug_image,
                         value_type=bool
@@ -122,6 +156,7 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'dry_run': ParameterValue(dry_run_action, value_type=bool),
+                'sdk_network_interface': sdk_network_interface,
             }]
         ),
     ])

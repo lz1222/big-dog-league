@@ -7,6 +7,7 @@
 
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/go2/sport/sport_client.hpp>
+#include <unitree/robot/go2/vui/vui_client.hpp>
 
 namespace
 {
@@ -26,6 +27,30 @@ void SleepSec(double seconds)
     return;
   }
   std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
+}
+
+int32_t BlinkFrontLight(int count, double on_sec, double off_sec,
+                        int high_level, int low_level)
+{
+  unitree::robot::go2::VuiClient vui_client;
+  vui_client.SetTimeout(2.0F);
+  vui_client.Init();
+
+  int32_t result = 0;
+  for (int index = 0; index < count; ++index) {
+    const int32_t on_result = vui_client.SetBrightness(high_level);
+    if (on_result != 0) {
+      result = on_result;
+    }
+    SleepSec(on_sec);
+
+    const int32_t off_result = vui_client.SetBrightness(low_level);
+    if (off_result != 0) {
+      result = off_result;
+    }
+    SleepSec(off_sec);
+  }
+  return result;
 }
 
 int32_t RunAction(unitree::robot::go2::SportClient& sport_client,
@@ -58,6 +83,15 @@ int32_t RunAction(unitree::robot::go2::SportClient& sport_client,
   if (action == "front_jump") {
     return sport_client.FrontJump();
   }
+  if (action == "hello" || action == "wave") {
+    return sport_client.Hello();
+  }
+  if (action == "stretch") {
+    return sport_client.Stretch();
+  }
+  if (action == "blink_front_light_3" || action == "blink_light_3") {
+    return BlinkFrontLight(3, 0.35, 0.35, 10, 0);
+  }
   if (action == "recovery_stand") {
     return sport_client.RecoveryStand();
   }
@@ -77,7 +111,8 @@ void PrintUsage(const char* program)
       << "Actions:\n"
       << "  stand_up | balance_stand | classic_walk | classic_walk_on | "
          "classic_walk_off | static_walk | trot_run | free_walk | "
-         "economic_gait | front_jump | recovery_stand | stop_move\n\n"
+         "economic_gait | front_jump | stretch | hello | wave | "
+         "blink_front_light_3 | recovery_stand | stop_move\n\n"
       << "Example:\n"
       << "  " << program << " eth0 front_jump 2.5\n";
 }

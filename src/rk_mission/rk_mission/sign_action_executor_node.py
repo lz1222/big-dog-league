@@ -2,6 +2,8 @@
 
 import json
 import math
+import os
+import subprocess
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
@@ -17,19 +19,13 @@ from rk_interfaces.msg import SignDetectionArray
 
 DEFAULT_ACTION_MAP = {
     'warning:electric_shock': [
-        {'command': 'HOLD_STABLE', 'duration_sec': 1.2},
+        {'sdk_action': 'stretch', 'wait_sec': 3.0},
     ],
     'warning:strong_oxidizer': [
-        {'command': 'TURN_IN_PLACE', 'wz': 0.35, 'duration_sec': 0.45},
-        {'wait_sec': 0.15},
-        {'command': 'TURN_IN_PLACE', 'wz': -0.35, 'duration_sec': 0.45},
-        {'wait_sec': 0.15},
-        {'command': 'TURN_IN_PLACE', 'wz': 0.35, 'duration_sec': 0.35},
+        {'sdk_action': 'hello', 'wait_sec': 3.0},
     ],
     'warning:radiation': [
-        {'command': 'TURN_IN_PLACE', 'wz': 0.45, 'duration_sec': 0.65},
-        {'wait_sec': 0.15},
-        {'command': 'TURN_IN_PLACE', 'wz': -0.45, 'duration_sec': 0.65},
+        {'sdk_action': 'blink_front_light_3', 'wait_sec': 2.5},
     ],
     'place_marker:place_1': [
         {'command': 'HOLD_STABLE', 'duration_sec': 0.8},
@@ -38,6 +34,20 @@ DEFAULT_ACTION_MAP = {
         {'command': 'HOLD_STABLE', 'duration_sec': 0.8},
     ],
 }
+
+DEFAULT_SDK_ACTION_EXECUTABLE = (
+    '/home/unitree/rk_inspection_ws/install/'
+    'rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/go2_sdk_motion_action'
+)
+SDK_LD_LIBRARY_PATH_PREFIX = (
+    '/home/unitree/rk_inspection_ws/third_party/unitree_sdk2_official/'
+    'thirdparty/lib/aarch64',
+    '/home/unitree/rk_inspection_ws/install/rk_go2_sdk_bridge/lib',
+    '/home/unitree/rk_inspection_ws/third_party/unitree_sdk2_official/'
+    'thirdparty/lib/x86_64',
+    '/usr/local/lib',
+    '/home/unitree/cyclonedds_ws/install/cyclonedds/lib',
+)
 
 
 def normalize_label(value):
@@ -94,6 +104,16 @@ class SignActionExecutorNode(Node):
         self.gait_command_topic = self._string_parameter('gait_command_topic')
         self.status_topic = self._string_parameter('status_topic')
         self.mission_stop_topic = self._string_parameter('mission_stop_topic')
+        self.sdk_network_interface = self._string_parameter(
+            'sdk_network_interface'
+        )
+        self.sdk_action_executable = self._string_parameter(
+            'sdk_action_executable'
+        )
+        self.sdk_action_timeout_padding_sec = self._float_parameter(
+            'sdk_action_timeout_padding_sec',
+            5.0
+        )
         self.min_confidence = self._float_parameter('min_confidence', 0.60)
         self.action_cooldown_sec = self._float_parameter(
             'action_cooldown_sec',
@@ -119,6 +139,7 @@ class SignActionExecutorNode(Node):
         self._active = False
         self._last_action_time = 0.0
         self._triggered_keys = set()
+        self._sdk_action_executable_resolved = None
 
         self.gait_publisher = self.create_publisher(
             String,
@@ -153,7 +174,9 @@ class SignActionExecutorNode(Node):
         self.get_logger().info(
             'Sign action executor ready: '
             f'sign_topic={self.sign_detections_topic}, '
-            f'gait_topic={self.gait_command_topic}, dry_run={self.dry_run}'
+            f'gait_topic={self.gait_command_topic}, '
+            f'sdk_interface={self.sdk_network_interface}, '
+            f'dry_run={self.dry_run}'
         )
 
     def _declare_parameters(self):
@@ -164,6 +187,12 @@ class SignActionExecutorNode(Node):
         self.declare_parameter('gait_command_topic', '/gait/command_json')
         self.declare_parameter('status_topic', '/sign_action/status')
         self.declare_parameter('mission_stop_topic', '/mission/stop')
+        self.declare_parameter('sdk_network_interface', 'eth0')
+        self.declare_parameter(
+            'sdk_action_executable',
+            DEFAULT_SDK_ACTION_EXECUTABLE
+        )
+        self.declare_parameter('sdk_action_timeout_padding_sec', 5.0)
         self.declare_parameter('min_confidence', 0.60)
         self.declare_parameter('action_cooldown_sec', 4.0)
         self.declare_parameter('command_gap_sec', 0.15)
@@ -251,6 +280,27 @@ class SignActionExecutorNode(Node):
                     time.sleep(max(0.0, wait_sec))
                     continue
 
+                sdk_action = str(step.get('sdk_action', '')).strip()
+                if sdk_action:
+                    self._publish_status(
+                        key,
+                        'RUNNING',
+                        sdk_action,
+                        True,
+                        'sdk action start'
+                    )
+                    self._run_sdk_action_step(step)
+                    self._publish_status(
+                        key,
+                        'RUNNING',
+                        sdk_action,
+                        True,
+                        'sdk action finished'
+                    )
+                    if self.command_gap_sec > 0.0:
+                        time.sleep(self.command_gap_sec)
+                    continue
+
                 command = dict(step)
                 if not command.get('command'):
                     continue
@@ -288,6 +338,113 @@ class SignActionExecutorNode(Node):
         finally:
             with self._state_lock:
                 self._active = False
+
+    def _run_sdk_action_step(self, step):
+        action = str(step.get('sdk_action', '')).strip()
+        if not action:
+            raise RuntimeError('sdk_action step has empty sdk_action')
+
+        wait_sec = self._optional_float(step.get('wait_sec'))
+        if wait_sec is None:
+            wait_sec = 0.0
+
+        timeout_sec = max(
+            1.0,
+            wait_sec + self.sdk_action_timeout_padding_sec
+        )
+        command = [
+            self._resolve_sdk_action_executable(),
+            self.sdk_network_interface,
+            action,
+            f'{wait_sec:.3f}',
+        ]
+
+        if self.dry_run:
+            self.get_logger().info(
+                '[DRY_RUN] SDK action: ' + ' '.join(command)
+            )
+            time.sleep(max(0.0, wait_sec))
+            return
+
+        self.get_logger().warn(
+            f'Running SDK sign action: action={action}, '
+            f'interface={self.sdk_network_interface}, '
+            f'wait={wait_sec:.2f}s, timeout={timeout_sec:.2f}s'
+        )
+        try:
+            completed = subprocess.run(
+                command,
+                env=self._sdk_action_env(),
+                timeout=timeout_sec,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(
+                f'SDK sign action {action} failed to run: {error}'
+            ) from error
+
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f'SDK sign action {action} failed with exit code '
+                f'{completed.returncode}'
+            )
+
+    def _resolve_sdk_action_executable(self):
+        if self._sdk_action_executable_resolved:
+            return self._sdk_action_executable_resolved
+
+        candidates = []
+        explicit = str(self.sdk_action_executable).strip()
+        if explicit:
+            candidates.append(os.path.expanduser(explicit))
+        candidates.extend([
+            os.environ.get('RK_GO2_SDK_MOTION_ACTION', ''),
+            os.path.join(
+                os.getcwd(),
+                'install',
+                'rk_go2_sdk_bridge',
+                'lib',
+                'rk_go2_sdk_bridge',
+                'go2_sdk_motion_action'
+            ),
+            os.path.expanduser(
+                '~/rk_inspection_ws/install/rk_go2_sdk_bridge/lib/'
+                'rk_go2_sdk_bridge/go2_sdk_motion_action'
+            ),
+            DEFAULT_SDK_ACTION_EXECUTABLE,
+        ])
+
+        for candidate in candidates:
+            if (
+                candidate
+                and os.path.isfile(candidate)
+                and os.access(candidate, os.X_OK)
+            ):
+                self._sdk_action_executable_resolved = candidate
+                return candidate
+
+        checked = ', '.join(candidate for candidate in candidates if candidate)
+        raise FileNotFoundError(
+            'go2_sdk_motion_action not found or not executable. '
+            f'Checked: {checked}'
+        )
+
+    def _sdk_action_env(self):
+        env = os.environ.copy()
+        paths = list(SDK_LD_LIBRARY_PATH_PREFIX)
+        current = env.get('LD_LIBRARY_PATH', '')
+        if current:
+            paths.extend(current.split(':'))
+
+        merged_paths = []
+        seen = set()
+        for path in paths:
+            if path and path not in seen:
+                merged_paths.append(path)
+                seen.add(path)
+
+        env['LD_LIBRARY_PATH'] = ':'.join(merged_paths)
+        return env
 
     def _publish_gait_command(self, command):
         payload = json.dumps(command, separators=(',', ':'))

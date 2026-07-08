@@ -7,6 +7,9 @@ endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
+find_package(OpenCV REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 set(RK_UNITREE_SDK2_INSTALL_CANDIDATES
   "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/unitree_sdk2_official/install"
@@ -79,6 +82,24 @@ install(DIRECTORY launch/
 )
 
 if(unitree_sdk2_FOUND)
+  add_executable(go2_front_camera_node
+    src/go2_front_camera_node.cpp
+  )
+  target_include_directories(go2_front_camera_node PRIVATE
+    ${OpenCV_INCLUDE_DIRS}
+  )
+  target_link_libraries(go2_front_camera_node
+    unitree_sdk2
+    ${OpenCV_LIBS}
+  )
+  ament_target_dependencies(go2_front_camera_node
+    rclcpp
+    sensor_msgs
+  )
+  set_target_properties(go2_front_camera_node PROPERTIES
+    BUILD_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
+    INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
+  )
   add_executable(go2_sdk_speed_sweep src/go2_sdk_speed_sweep.cpp)
   target_link_libraries(go2_sdk_speed_sweep unitree_sdk2)
   set_target_properties(go2_sdk_speed_sweep PROPERTIES
@@ -102,6 +123,7 @@ if(unitree_sdk2_FOUND)
     INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
   )
   install(TARGETS
+    go2_front_camera_node
     go2_sdk_speed_sweep
     go2_sdk_motion_action
     go2_sdk_velocity_action
