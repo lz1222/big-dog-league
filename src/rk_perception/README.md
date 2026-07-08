@@ -77,22 +77,31 @@ ros2 run rk_perception real_sign_detector_node --ros-args \
   -p image_topic:=/camera/color/image_raw
 ```
 
-Run sign recognition plus conservative Go2 body actions:
+For Go2 built-in front-camera warning-sign recognition, use the SDK-only
+tools in `rk_go2_sdk_bridge` instead of ROS2 topics:
 
 ```bash
-ros2 launch rk_bringup sign_action_debug.launch.py \
-  sdk_network_interface:=eth0 \
-  start_go2_camera:=true \
-  start_realsense:=false \
-  dry_run_action:=false
+./install/rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/go2_warning_sign_sdk_loop.sh \
+  eth0 \
+  --dry-run
+
+./install/rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/go2_warning_sign_sdk_loop.sh \
+  eth0
 ```
 
-Watch the detector and action mapping:
+Capture one Go2 front-camera image without ROS2:
 
 ```bash
-ros2 topic echo /perception/sign_detections
-ros2 topic echo /sign_action/status
-ros2 topic hz /go2/front/image_raw
+./install/rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/go2_sdk_capture_image \
+  eth0 \
+  /tmp/go2_front.jpg
+```
+
+Classify a saved image without ROS2:
+
+```bash
+python3 src/rk_go2_sdk_bridge/scripts/warning_sign_image_classifier.py \
+  /tmp/go2_front.jpg
 ```
 
 ## OpenCV Pipeline
