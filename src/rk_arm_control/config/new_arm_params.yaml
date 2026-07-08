@@ -44,3 +44,29 @@ new_arm:
       fire_and_wait: true
       initial_seq: 1000
 
+  sdk_bridge_node:
+    # 这个节点订阅 adapter.sdk_bridge.command_topic，然后调用厂家 SDK。
+    # 新机械臂没到之前用 mock；真正接 SDK 时再改 real，并补代码 TODO。
+    command_topic: /arm/sdk_bridge/command_json
+    status_topic: /arm/sdk_bridge/status
+    bridge_mode: mock
+
+    # 当前 YAML 占位按 6 轴写；新机械臂如果是 4/5/7 轴，先改这里。
+    expected_joint_count: 6
+    # true 会强制关节数量完全一致；初期调试建议 false，只报警不中断。
+    strict_joint_count: false
+
+    # 保护动作持续时间，避免误填 0 或特别大的值。
+    min_duration_sec: 0.05
+    max_duration_sec: 10.0
+
+    # mock 模式默认不额外等待，避免和上层 fire_and_wait 重复拖慢测试。
+    simulate_duration_wait: false
+
+    real:
+      # 真实 SDK 未接好之前必须保持 false，防止误动作。
+      enable_real_sdk: false
+      # 下面字段按新机械臂 SDK 文档填写；当前只是占位。
+      sdk_name: TODO_VENDOR_SDK
+      device: ""
+      network_interface: ""

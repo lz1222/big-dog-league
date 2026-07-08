@@ -31,6 +31,8 @@ setup(
             'arm_task_node = rk_arm_control.arm_task_node:main',
             'd1_pick_node = rk_arm_control.d1_pick_node:main',
             'new_arm_task_node = rk_arm_control.new_arm_task_node:main',
+            'new_arm_sdk_bridge_node = '
+            'rk_arm_control.new_arm_sdk_bridge_node:main',
         ],
     },
 )

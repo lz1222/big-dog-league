@@ -30,6 +30,8 @@ Main files:
 - `rk_arm_control/adapters/dry_run_adapter.py`: safe no-hardware mode.
 - `rk_arm_control/adapters/sdk_bridge_adapter.py`: JSON bridge for the new arm
   SDK.
+- `rk_arm_control/new_arm_sdk_bridge_node.py`: vendor SDK bridge template with
+  mock/real modes.
 
 The grasping plan is fixed-pose first. Camera detections on
 `/perception/item_tags` or `/perception/object_xy_json` are used as optional
@@ -76,6 +78,25 @@ Then run a bridge listener for the real arm SDK and watch the outgoing command:
 ```bash
 ros2 topic echo /arm/sdk_bridge/command_json
 ```
+
+Run the SDK bridge template in mock mode:
+
+```bash
+ros2 launch rk_arm_control new_arm_sdk_bridge.launch.py bridge_mode:=mock
+ros2 topic echo /arm/sdk_bridge/status
+```
+
+Or start the task node and bridge together:
+
+```bash
+ros2 launch rk_arm_control new_arm_with_bridge.launch.py bridge_mode:=mock
+```
+
+`new_arm_sdk_bridge_node` validates `MOVE_JOINTS`, `GRIPPER`, and `STOP`
+commands. In `mock` mode it only prints and publishes `/arm/sdk_bridge/status`.
+In `real` mode it is intentionally gated by
+`sdk_bridge_node.real.enable_real_sdk`; fill the TODO functions in
+`new_arm_sdk_bridge_node.py` after the replacement arm SDK arrives.
 
 `SdkBridgeArmAdapter` has a `unitree_d1_json_reference` command format that
 mirrors the imported Unitree D1 example style (`funcode=2` multi-joint JSON).
