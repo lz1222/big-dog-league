@@ -1,18 +1,32 @@
 #!/usr/bin/env python3
 
+import json
+import math
+import os
+import subprocess
 import threading
 import time
 
 import rclpy
+from geometry_msgs.msg import Twist
 from rclpy.action import ActionClient, ActionServer
 from rclpy.action.server import GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 from rk_interfaces.action import ExecuteArmTask, ExecuteMotion, RunMission
-from rk_interfaces.msg import ItemTagArray, SignDetectionArray
+from rk_interfaces.msg import (
+    ItemTagArray,
+    LineTrack,
+    SignDetectionArray,
+    SpecialTargetDetection,
+)
+from rk_mission.sign_action_executor_node import (
+    DEFAULT_SDK_ACTION_EXECUTABLE,
+    SDK_LD_LIBRARY_PATH_PREFIX,
+)
 
 
 STAGES = [
@@ -783,6 +797,807 @@ class MissionStateMachineNode(Node):
         return str(value).strip().lower().replace('-', '_').replace(' ', '_')
 
 
+LINE_COURSE_STATES = {
+    'WAIT_START',
+    'LINE_FOLLOW',
+    'CORNER_PRE_TURN',
+    'REACQUIRE_LINE',
+    'APPROACH_RED_CIRCLE',
+    'DO_RED_ACTION',
+    'TURN_AFTER_RED',
+    'HANDLE_WHITE_BAR',
+    'APPROACH_STOP_ZONE',
+    'FINAL_STOP',
+    'EMERGENCY_STOP',
+}
+
+
+class LineCourseMissionNode(Node):
+    """Own final velocity decisions for the visual line course."""
+
+    def __init__(self):
+        super().__init__('line_course_mission_node')
+        self._declare_line_course_parameters()
+        self._read_line_course_parameters()
+
+        self.state = 'WAIT_START'
+        self.state_enter_time = time.monotonic()
+        self.mission_started = False
+        self.latest_suggested_cmd = Twist()
+        self.latest_suggested_time = None
+        self.latest_line = None
+        self.latest_line_time = None
+        self.latest_red = None
+        self.latest_red_time = None
+        self.latest_stop_zone = None
+        self.latest_stop_zone_time = None
+        self.latest_white_bar = None
+        self.latest_white_bar_time = None
+        self.latest_corner = None
+        self.latest_corner_time = None
+        self.red_seen_count = 0
+        self.stop_seen_count = 0
+        self.stop_inside_count = 0
+        self.white_seen_count = 0
+        self.corner_seen_count = 0
+        self.reacquire_seen_count = 0
+        self.red_handled = False
+        self.white_bar_handled = False
+        self.white_bar_action_done = False
+        self.last_corner_finish_time = -1.0e9
+        self.red_action_process = None
+        self.red_action_start_time = None
+        self.last_published_state = ''
+
+        self.cmd_publisher = self.create_publisher(
+            Twist,
+            self.cmd_vel_topic,
+            10
+        )
+        self.state_publisher = self.create_publisher(
+            String,
+            self.mission_state_topic,
+            10
+        )
+        self.create_subscription(
+            Twist,
+            self.suggested_cmd_topic,
+            self._on_suggested_cmd,
+            10
+        )
+        self.create_subscription(
+            LineTrack,
+            self.line_track_topic,
+            self._on_line_track,
+            10
+        )
+        self.create_subscription(
+            SpecialTargetDetection,
+            self.red_circle_topic,
+            self._on_red_circle,
+            10
+        )
+        self.create_subscription(
+            SpecialTargetDetection,
+            self.stop_zone_topic,
+            self._on_stop_zone,
+            10
+        )
+        self.create_subscription(
+            SpecialTargetDetection,
+            self.white_bar_topic,
+            self._on_white_bar,
+            10
+        )
+        self.create_subscription(
+            SpecialTargetDetection,
+            self.corner_candidate_topic,
+            self._on_corner_candidate,
+            10
+        )
+        self.create_subscription(
+            Bool,
+            self.mission_start_topic,
+            self._on_line_course_start,
+            10
+        )
+        self.create_subscription(
+            Bool,
+            self.mission_stop_topic,
+            self._on_line_course_stop,
+            10
+        )
+        self.create_subscription(
+            Bool,
+            self.white_bar_action_done_topic,
+            self._on_white_bar_action_done,
+            10
+        )
+        self.control_timer = self.create_timer(
+            1.0 / max(1.0, self.control_rate_hz),
+            self._on_line_course_timer
+        )
+        self.get_logger().info(
+            'Line course mission ready: final_cmd_vel='
+            f'{self.cmd_vel_topic}, suggested_cmd={self.suggested_cmd_topic}, '
+            f'sdk_action={self.red_circle_sdk_action or "disabled"}'
+        )
+
+    def _declare_line_course_parameters(self):
+        topics = {
+            'cmd_vel_topic': '/navigation/cmd_vel',
+            'suggested_cmd_topic': '/navigation/line_follow_cmd_suggested',
+            'mission_state_topic': '/mission/line_course_state',
+            'line_track_topic': '/perception/line_track',
+            'red_circle_topic': '/perception/red_circle_detection',
+            'stop_zone_topic': '/perception/stop_zone_detection',
+            'white_bar_topic': '/perception/white_bar_detection',
+            'corner_candidate_topic': '/perception/corner_candidate',
+            'mission_start_topic': '/mission/start',
+            'mission_stop_topic': '/mission/stop',
+            'white_bar_action_done_topic': '/mission/white_bar_action_done',
+        }
+        for name, value in topics.items():
+            self.declare_parameter(name, value)
+
+        defaults = {
+            'control_rate_hz': 10.0,
+            'suggested_cmd_timeout_sec': 0.5,
+            'detection_timeout_sec': 0.8,
+            'enable_corner_pre_turn': True,
+            'corner_turn_direction': 'left',
+            'corner_confirm_frames': 3,
+            'corner_min_confidence': 0.45,
+            'corner_vx': 0.03,
+            'corner_angular_z': 0.32,
+            'corner_min_time_sec': 0.8,
+            'corner_max_time_sec': 2.5,
+            'corner_exit_confidence': 0.30,
+            'corner_exit_stable_frames': 3,
+            'corner_cooldown_sec': 3.0,
+            'red_circle_confirm_frames': 3,
+            'red_circle_min_confidence': 0.55,
+            'red_circle_approach_speed': 0.04,
+            'red_circle_stop_area_ratio': 0.020,
+            'red_circle_stop_y_ratio': 0.65,
+            'red_circle_approach_timeout_sec': 8.0,
+            'red_circle_sdk_action': 'stretch',
+            'red_circle_sdk_wait_sec': 3.0,
+            'red_circle_action_timeout_sec': 8.0,
+            'sdk_network_interface': 'eth0',
+            'sdk_action_executable': DEFAULT_SDK_ACTION_EXECUTABLE,
+            'turn_after_red_direction': 'left',
+            'turn_after_red_angle_deg': 90.0,
+            'turn_after_red_angular_z': 0.35,
+            'turn_after_red_timeout_sec': 5.0,
+            'white_bar_confirm_frames': 3,
+            'white_bar_min_confidence': 0.55,
+            'white_bar_approach_speed': 0.03,
+            'white_bar_stop_y_ratio': 0.70,
+            'white_bar_action_timeout_sec': 5.0,
+            'stop_zone_confirm_frames': 3,
+            'stop_zone_min_confidence': 0.55,
+            'stop_zone_approach_speed': 0.04,
+            'stop_zone_inside_confirm_frames': 3,
+            'stop_zone_approach_timeout_sec': 10.0,
+            'reacquire_timeout_sec': 8.0,
+            'reacquire_min_confidence': 0.30,
+            'reacquire_stable_frames': 3,
+        }
+        for name, value in defaults.items():
+            self.declare_parameter(name, value)
+
+    def _read_line_course_parameters(self):
+        topic_names = (
+            'cmd_vel_topic',
+            'suggested_cmd_topic',
+            'mission_state_topic',
+            'line_track_topic',
+            'red_circle_topic',
+            'stop_zone_topic',
+            'white_bar_topic',
+            'corner_candidate_topic',
+            'mission_start_topic',
+            'mission_stop_topic',
+            'white_bar_action_done_topic',
+            'corner_turn_direction',
+            'red_circle_sdk_action',
+            'sdk_network_interface',
+            'sdk_action_executable',
+            'turn_after_red_direction',
+        )
+        for name in topic_names:
+            setattr(self, name, str(self.get_parameter(name).value).strip())
+
+        bool_names = ('enable_corner_pre_turn',)
+        for name in bool_names:
+            setattr(self, name, bool(self.get_parameter(name).value))
+
+        int_names = (
+            'corner_confirm_frames',
+            'corner_exit_stable_frames',
+            'red_circle_confirm_frames',
+            'white_bar_confirm_frames',
+            'stop_zone_confirm_frames',
+            'stop_zone_inside_confirm_frames',
+            'reacquire_stable_frames',
+        )
+        for name in int_names:
+            setattr(
+                self,
+                name,
+                max(1, int(self.get_parameter(name).value))
+            )
+
+        float_names = (
+            'control_rate_hz',
+            'suggested_cmd_timeout_sec',
+            'detection_timeout_sec',
+            'corner_min_confidence',
+            'corner_vx',
+            'corner_angular_z',
+            'corner_min_time_sec',
+            'corner_max_time_sec',
+            'corner_exit_confidence',
+            'corner_cooldown_sec',
+            'red_circle_min_confidence',
+            'red_circle_approach_speed',
+            'red_circle_stop_area_ratio',
+            'red_circle_stop_y_ratio',
+            'red_circle_approach_timeout_sec',
+            'red_circle_sdk_wait_sec',
+            'red_circle_action_timeout_sec',
+            'turn_after_red_angle_deg',
+            'turn_after_red_angular_z',
+            'turn_after_red_timeout_sec',
+            'white_bar_min_confidence',
+            'white_bar_approach_speed',
+            'white_bar_stop_y_ratio',
+            'white_bar_action_timeout_sec',
+            'stop_zone_min_confidence',
+            'stop_zone_approach_speed',
+            'stop_zone_approach_timeout_sec',
+            'reacquire_timeout_sec',
+            'reacquire_min_confidence',
+        )
+        for name in float_names:
+            value = float(self.get_parameter(name).value)
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f'{name} must be finite and nonnegative')
+            setattr(self, name, value)
+        if self.control_rate_hz <= 0.0:
+            raise ValueError('control_rate_hz must be positive')
+        if self.corner_max_time_sec < self.corner_min_time_sec:
+            self.corner_max_time_sec = self.corner_min_time_sec
+
+    def _on_suggested_cmd(self, msg):
+        self.latest_suggested_cmd = msg
+        self.latest_suggested_time = time.monotonic()
+
+    def _on_line_track(self, msg):
+        self.latest_line = msg
+        self.latest_line_time = time.monotonic()
+        if (
+            msg.line_visible
+            and float(msg.confidence) >= self.reacquire_min_confidence
+        ):
+            self.reacquire_seen_count += 1
+        else:
+            self.reacquire_seen_count = 0
+
+    def _on_red_circle(self, msg):
+        self.latest_red = msg
+        self.latest_red_time = time.monotonic()
+        self.red_seen_count = self._updated_confirm_count(
+            self.red_seen_count,
+            msg,
+            self.red_circle_min_confidence
+        )
+
+    def _on_stop_zone(self, msg):
+        self.latest_stop_zone = msg
+        self.latest_stop_zone_time = time.monotonic()
+        self.stop_seen_count = self._updated_confirm_count(
+            self.stop_seen_count,
+            msg,
+            self.stop_zone_min_confidence
+        )
+        if (
+            bool(msg.visible)
+            and bool(msg.inside_candidate)
+            and float(msg.confidence) >= self.stop_zone_min_confidence
+        ):
+            self.stop_inside_count += 1
+        else:
+            self.stop_inside_count = 0
+
+    def _on_white_bar(self, msg):
+        self.latest_white_bar = msg
+        self.latest_white_bar_time = time.monotonic()
+        self.white_seen_count = self._updated_confirm_count(
+            self.white_seen_count,
+            msg,
+            self.white_bar_min_confidence
+        )
+
+    def _on_corner_candidate(self, msg):
+        self.latest_corner = msg
+        self.latest_corner_time = time.monotonic()
+        self.corner_seen_count = self._updated_confirm_count(
+            self.corner_seen_count,
+            msg,
+            self.corner_min_confidence
+        )
+
+    @staticmethod
+    def _updated_confirm_count(current, msg, min_confidence):
+        if bool(msg.visible) and float(msg.confidence) >= min_confidence:
+            return current + 1
+        return 0
+
+    def _on_line_course_start(self, msg):
+        if not msg.data:
+            return
+        self._terminate_red_action()
+        self.mission_started = True
+        self.red_handled = False
+        self.white_bar_handled = False
+        self.white_bar_action_done = False
+        self._reset_detection_counts()
+        self._set_line_course_state('LINE_FOLLOW', 'mission_start')
+
+    def _on_line_course_stop(self, msg):
+        if not msg.data:
+            return
+        self.mission_started = False
+        self._terminate_red_action()
+        self._set_line_course_state('WAIT_START', 'mission_stop')
+        self._publish_final_cmd(Twist())
+
+    def _on_white_bar_action_done(self, msg):
+        if msg.data:
+            self.white_bar_action_done = True
+
+    def _on_line_course_timer(self):
+        now = time.monotonic()
+        if self.state == 'WAIT_START':
+            self._publish_final_cmd(Twist())
+            return
+        if self.state in ('FINAL_STOP', 'EMERGENCY_STOP'):
+            self._publish_final_cmd(Twist())
+            return
+        if not self.mission_started:
+            self._set_line_course_state('WAIT_START', 'mission_not_started')
+            self._publish_final_cmd(Twist())
+            return
+
+        if self.state == 'LINE_FOLLOW':
+            self._control_line_follow(now)
+        elif self.state == 'CORNER_PRE_TURN':
+            self._control_corner_pre_turn(now)
+        elif self.state == 'REACQUIRE_LINE':
+            self._control_reacquire_line(now)
+        elif self.state == 'APPROACH_RED_CIRCLE':
+            self._control_approach_red(now)
+        elif self.state == 'DO_RED_ACTION':
+            self._control_red_action(now)
+        elif self.state == 'TURN_AFTER_RED':
+            self._control_turn_after_red(now)
+        elif self.state == 'HANDLE_WHITE_BAR':
+            self._control_white_bar(now)
+        elif self.state == 'APPROACH_STOP_ZONE':
+            self._control_approach_stop_zone(now)
+        else:
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                f'unhandled_state_{self.state}'
+            )
+            self._publish_final_cmd(Twist())
+
+    def _control_line_follow(self, now):
+        if (
+            self._is_fresh(self.latest_stop_zone_time, now)
+            and self.stop_seen_count >= self.stop_zone_confirm_frames
+        ):
+            self._set_line_course_state(
+                'APPROACH_STOP_ZONE',
+                'stop_zone_confirmed'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        if (
+            not self.red_handled
+            and self._is_fresh(self.latest_red_time, now)
+            and self.red_seen_count >= self.red_circle_confirm_frames
+        ):
+            self._set_line_course_state(
+                'APPROACH_RED_CIRCLE',
+                'red_circle_confirmed'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        if (
+            not self.white_bar_handled
+            and self._is_fresh(self.latest_white_bar_time, now)
+            and self.white_seen_count >= self.white_bar_confirm_frames
+        ):
+            self._set_line_course_state(
+                'HANDLE_WHITE_BAR',
+                'white_bar_confirmed'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        if (
+            self.enable_corner_pre_turn
+            and self._is_fresh(self.latest_corner_time, now)
+            and self.corner_seen_count >= self.corner_confirm_frames
+            and now - self.last_corner_finish_time
+            >= self.corner_cooldown_sec
+        ):
+            self._set_line_course_state(
+                'CORNER_PRE_TURN',
+                'corner_candidate_confirmed'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        self._publish_suggested_or_stop(now)
+
+    def _control_corner_pre_turn(self, now):
+        elapsed = now - self.state_enter_time
+        line_recovered = (
+            elapsed >= self.corner_min_time_sec
+            and self.latest_line is not None
+            and bool(self.latest_line.line_visible)
+            and float(self.latest_line.confidence)
+            >= self.corner_exit_confidence
+            and self.reacquire_seen_count
+            >= self.corner_exit_stable_frames
+        )
+        if line_recovered or elapsed >= self.corner_max_time_sec:
+            self.last_corner_finish_time = now
+            self._set_line_course_state(
+                'REACQUIRE_LINE',
+                'corner_turn_complete'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        cmd = Twist()
+        cmd.linear.x = self.corner_vx
+        direction = self._turn_direction(
+            self.corner_turn_direction,
+            self.latest_corner
+        )
+        cmd.angular.z = direction * self.corner_angular_z
+        self._publish_final_cmd(cmd)
+
+    def _control_reacquire_line(self, now):
+        if self.reacquire_seen_count >= self.reacquire_stable_frames:
+            self._set_line_course_state(
+                'LINE_FOLLOW',
+                'line_reacquired'
+            )
+            self._publish_suggested_or_stop(now)
+            return
+        if now - self.state_enter_time >= self.reacquire_timeout_sec:
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'reacquire_timeout'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        cmd = self._copy_suggested_cmd(now)
+        cmd.linear.x = 0.0
+        self._publish_final_cmd(cmd)
+
+    def _control_approach_red(self, now):
+        red = self.latest_red
+        if not self._is_fresh(self.latest_red_time, now):
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'red_circle_detection_stale'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        if (
+            red is not None
+            and (
+                float(red.area_ratio) >= self.red_circle_stop_area_ratio
+                or float(red.center_y) >= self.red_circle_stop_y_ratio
+            )
+        ):
+            self._set_line_course_state('DO_RED_ACTION', 'red_circle_reached')
+            self._publish_final_cmd(Twist())
+            return
+        if now - self.state_enter_time >= self.red_circle_approach_timeout_sec:
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'red_circle_approach_timeout'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        cmd = self._copy_suggested_cmd(now)
+        cmd.linear.x = self.red_circle_approach_speed
+        self._publish_final_cmd(cmd)
+
+    def _control_red_action(self, now):
+        self._publish_final_cmd(Twist())
+        if self.red_action_process is None:
+            try:
+                self._start_red_action()
+            except (OSError, RuntimeError) as exc:
+                self.get_logger().error(f'Red SDK action failed: {exc}')
+                self._set_line_course_state(
+                    'EMERGENCY_STOP',
+                    'red_action_start_failed'
+                )
+            return
+
+        return_code = self.red_action_process.poll()
+        if return_code is not None:
+            self.red_action_process = None
+            self.red_action_start_time = None
+            if return_code != 0:
+                self._set_line_course_state(
+                    'EMERGENCY_STOP',
+                    f'red_action_exit_{return_code}'
+                )
+                return
+            self.red_handled = True
+            self.red_seen_count = 0
+            self._set_line_course_state(
+                'TURN_AFTER_RED',
+                'red_action_complete'
+            )
+            return
+
+        if (
+            self.red_action_start_time is not None
+            and now - self.red_action_start_time
+            >= self.red_circle_action_timeout_sec
+        ):
+            self._terminate_red_action()
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'red_action_timeout'
+            )
+
+    def _control_turn_after_red(self, now):
+        angular_speed = self.turn_after_red_angular_z
+        if angular_speed <= 0.0:
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'turn_after_red_zero_speed'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        target_duration = math.radians(
+            self.turn_after_red_angle_deg
+        ) / angular_speed
+        target_duration = min(
+            target_duration,
+            self.turn_after_red_timeout_sec
+        )
+        if now - self.state_enter_time >= target_duration:
+            self._set_line_course_state(
+                'REACQUIRE_LINE',
+                'turn_after_red_complete'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        cmd = Twist()
+        cmd.angular.z = (
+            self._turn_direction(self.turn_after_red_direction)
+            * angular_speed
+        )
+        self._publish_final_cmd(cmd)
+
+    def _control_white_bar(self, now):
+        if self.white_bar_action_done:
+            self.white_bar_handled = True
+            self.white_seen_count = 0
+            self._set_line_course_state(
+                'REACQUIRE_LINE',
+                'white_bar_action_done'
+            )
+            return
+        if not self._is_fresh(self.latest_white_bar_time, now):
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'white_bar_detection_stale'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        if now - self.state_enter_time >= self.white_bar_action_timeout_sec:
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'white_bar_action_not_configured'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        if (
+            self.latest_white_bar is not None
+            and float(self.latest_white_bar.center_y)
+            < self.white_bar_stop_y_ratio
+        ):
+            cmd = self._copy_suggested_cmd(now)
+            cmd.linear.x = self.white_bar_approach_speed
+            self._publish_final_cmd(cmd)
+            return
+        self._publish_final_cmd(Twist())
+
+    def _control_approach_stop_zone(self, now):
+        if not self._is_fresh(self.latest_stop_zone_time, now):
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'stop_zone_detection_stale'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        if self.stop_inside_count >= self.stop_zone_inside_confirm_frames:
+            self._set_line_course_state('FINAL_STOP', 'inside_stop_zone')
+            self._publish_final_cmd(Twist())
+            return
+        if now - self.state_enter_time >= self.stop_zone_approach_timeout_sec:
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'stop_zone_approach_timeout'
+            )
+            self._publish_final_cmd(Twist())
+            return
+        cmd = self._copy_suggested_cmd(now)
+        cmd.linear.x = self.stop_zone_approach_speed
+        self._publish_final_cmd(cmd)
+
+    def _publish_suggested_or_stop(self, now):
+        self._publish_final_cmd(self._copy_suggested_cmd(now))
+
+    def _copy_suggested_cmd(self, now):
+        cmd = Twist()
+        if (
+            self.latest_suggested_time is None
+            or now - self.latest_suggested_time
+            > self.suggested_cmd_timeout_sec
+        ):
+            return cmd
+        source = self.latest_suggested_cmd
+        cmd.linear.x = float(source.linear.x)
+        cmd.linear.y = float(source.linear.y)
+        cmd.linear.z = float(source.linear.z)
+        cmd.angular.x = float(source.angular.x)
+        cmd.angular.y = float(source.angular.y)
+        cmd.angular.z = float(source.angular.z)
+        return cmd
+
+    def _publish_final_cmd(self, cmd):
+        values = (
+            cmd.linear.x,
+            cmd.linear.y,
+            cmd.linear.z,
+            cmd.angular.x,
+            cmd.angular.y,
+            cmd.angular.z,
+        )
+        if not all(math.isfinite(float(value)) for value in values):
+            self.get_logger().error('Rejected non-finite final cmd_vel')
+            cmd = Twist()
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                'non_finite_final_cmd'
+            )
+        self.cmd_publisher.publish(cmd)
+        self._publish_line_course_state(cmd)
+
+    def _publish_line_course_state(self, cmd):
+        msg = String()
+        msg.data = json.dumps({
+            'state': self.state,
+            'mission_started': bool(self.mission_started),
+            'final_vx': float(cmd.linear.x),
+            'final_wz': float(cmd.angular.z),
+            'red_confirm_count': self.red_seen_count,
+            'white_bar_confirm_count': self.white_seen_count,
+            'stop_zone_confirm_count': self.stop_seen_count,
+            'stop_zone_inside_count': self.stop_inside_count,
+            'corner_confirm_count': self.corner_seen_count,
+        }, separators=(',', ':'))
+        self.state_publisher.publish(msg)
+
+    def _set_line_course_state(self, new_state, reason):
+        if new_state not in LINE_COURSE_STATES:
+            new_state = 'EMERGENCY_STOP'
+            reason = f'invalid_state:{new_state}'
+        if new_state == self.state:
+            return
+        old_state = self.state
+        self.state = new_state
+        self.state_enter_time = time.monotonic()
+        self.reacquire_seen_count = 0
+        if new_state == 'HANDLE_WHITE_BAR':
+            self.white_bar_action_done = False
+        self.get_logger().info(
+            f'[LINE_COURSE] {old_state} -> {new_state}: {reason}'
+        )
+
+    def _reset_detection_counts(self):
+        self.red_seen_count = 0
+        self.stop_seen_count = 0
+        self.stop_inside_count = 0
+        self.white_seen_count = 0
+        self.corner_seen_count = 0
+        self.reacquire_seen_count = 0
+
+    def _is_fresh(self, receive_time, now):
+        return (
+            receive_time is not None
+            and now - receive_time <= self.detection_timeout_sec
+        )
+
+    @staticmethod
+    def _turn_direction(mode, detection=None):
+        normalized = str(mode).strip().lower()
+        if normalized == 'hint' and detection is not None:
+            normalized = str(detection.direction_hint).strip().lower()
+        return -1.0 if normalized == 'right' else 1.0
+
+    def _start_red_action(self):
+        action = self.red_circle_sdk_action.strip()
+        if not action:
+            raise RuntimeError('red_circle_sdk_action is empty')
+        executable = os.path.expanduser(self.sdk_action_executable)
+        if not os.path.isfile(executable) or not os.access(
+            executable,
+            os.X_OK
+        ):
+            raise RuntimeError(
+                f'SDK action executable is unavailable: {executable}'
+            )
+        command = [
+            executable,
+            self.sdk_network_interface,
+            action,
+            f'{self.red_circle_sdk_wait_sec:.3f}',
+        ]
+        self.get_logger().warn(
+            'Starting existing Unitree SDK action: ' + ' '.join(command)
+        )
+        self.red_action_process = subprocess.Popen(
+            command,
+            env=self._sdk_action_env()
+        )
+        self.red_action_start_time = time.monotonic()
+
+    @staticmethod
+    def _sdk_action_env():
+        env = os.environ.copy()
+        paths = list(SDK_LD_LIBRARY_PATH_PREFIX)
+        current = env.get('LD_LIBRARY_PATH', '')
+        if current:
+            paths.extend(current.split(':'))
+        unique_paths = []
+        for path in paths:
+            if path and path not in unique_paths:
+                unique_paths.append(path)
+        env['LD_LIBRARY_PATH'] = ':'.join(unique_paths)
+        return env
+
+    def _terminate_red_action(self):
+        process = self.red_action_process
+        self.red_action_process = None
+        self.red_action_start_time = None
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1.0)
+
+    def destroy_node(self):
+        self._terminate_red_action()
+        return super().destroy_node()
+
+
 def main(args=None):
     rclpy.init(args=args)
     node = MissionStateMachineNode()
@@ -794,6 +1609,19 @@ def main(args=None):
         pass
     finally:
         executor.shutdown()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def line_course_main(args=None):
+    rclpy.init(args=args)
+    node = LineCourseMissionNode()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

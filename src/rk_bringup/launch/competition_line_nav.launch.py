@@ -11,7 +11,6 @@ from launch.conditions import IfCondition
 from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
-    PythonExpression,
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -29,8 +28,6 @@ FORWARDER_ENV = {}
 
 def generate_launch_description():
     debug = LaunchConfiguration('debug')
-    bridge_type = LaunchConfiguration('bridge_type')
-    backend = LaunchConfiguration('backend')
     start_sdk_server = LaunchConfiguration('start_sdk_server')
     sdk_server = LaunchConfiguration('sdk_server')
     start_economic_gait = LaunchConfiguration('start_economic_gait')
@@ -49,23 +46,10 @@ def generate_launch_description():
     search_linear_speed = LaunchConfiguration('search_linear_speed')
     bridge_max_linear_x = LaunchConfiguration('bridge_max_linear_x')
     bridge_max_angular_z = LaunchConfiguration('bridge_max_angular_z')
-    zero_cmd_debounce_time = LaunchConfiguration('zero_cmd_debounce_time')
     sdk_udp_host = LaunchConfiguration('sdk_udp_host')
     sdk_udp_port = LaunchConfiguration('sdk_udp_port')
 
-    use_sdk_bridge = IfCondition(
-        PythonExpression(["'", bridge_type, "' == 'sdk_udp'"])
-    )
-    use_sdk_server = IfCondition(
-        PythonExpression([
-            "'", bridge_type, "' == 'sdk_udp' and '",
-            start_sdk_server,
-            "' == 'true'",
-        ])
-    )
-    use_unitree_driver = IfCondition(
-        PythonExpression(["'", bridge_type, "' == 'unitree_driver'"])
-    )
+    use_sdk_server = IfCondition(start_sdk_server)
     use_economic_gait = IfCondition(start_economic_gait)
 
     line_nav_config = PathJoinSubstitution([
@@ -73,32 +57,11 @@ def generate_launch_description():
         'config',
         'line_nav_params.yaml',
     ])
-    go2_config = PathJoinSubstitution([
-        FindPackageShare('rk_unitree_driver'),
-        'config',
-        'go2_driver.yaml',
-    ])
     return LaunchDescription([
         DeclareLaunchArgument(
             'debug',
             default_value='true',
             description='Enable perception debug images and debug logs.'
-        ),
-        DeclareLaunchArgument(
-            'bridge_type',
-            default_value='sdk_udp',
-            description=(
-                'Low-level bridge: sdk_udp uses the working SDK UDP chain; '
-                'unitree_driver uses rk_unitree_driver.'
-            )
-        ),
-        DeclareLaunchArgument(
-            'backend',
-            default_value='mock',
-            description=(
-                'Only used when bridge_type:=unitree_driver. Values: mock '
-                'or unitree_ros2.'
-            )
         ),
         DeclareLaunchArgument(
             'start_sdk_server',
@@ -197,14 +160,6 @@ def generate_launch_description():
             description='cmd_vel bridge angular.z safety limit.'
         ),
         DeclareLaunchArgument(
-            'zero_cmd_debounce_time',
-            default_value='0.60',
-            description=(
-                'Seconds that unitree_driver waits before converting a zero '
-                'cmd_vel into StopMove.'
-            )
-        ),
-        DeclareLaunchArgument(
             'sdk_udp_host',
             default_value='127.0.0.1',
             description='SDK UDP server host.'
@@ -219,8 +174,7 @@ def generate_launch_description():
             'Robot waits for /mission/start before moving.'
         ),
         LogInfo(msg=['debug: ', debug]),
-        LogInfo(msg=['bridge_type: ', bridge_type]),
-        LogInfo(msg=['cmd_vel bridge backend: ', backend]),
+        LogInfo(msg='Robot execution backend: Unitree SDK UDP only'),
         LogInfo(msg=['start_realsense: ', start_realsense]),
         LogInfo(msg=['start_economic_gait: ', start_economic_gait]),
         Node(
@@ -292,6 +246,18 @@ def generate_launch_description():
                 },
             ],
         ),
+        Node(
+            package='rk_mission',
+            executable='line_course_mission_node',
+            name='line_course_mission_node',
+            output='screen',
+            parameters=[
+                line_nav_config,
+                {
+                    'sdk_network_interface': sdk_interface,
+                },
+            ],
+        ),
         ExecuteProcess(
             cmd=[sdk_server],
             output='screen',
@@ -322,7 +288,6 @@ def generate_launch_description():
             executable='cmd_vel_udp_forwarder.py',
             name='cmd_vel_udp_forwarder',
             output='screen',
-            condition=use_sdk_bridge,
             additional_env=FORWARDER_ENV,
             parameters=[{
                 'cmd_vel_topic': '/navigation/cmd_vel',
@@ -337,31 +302,5 @@ def generate_launch_description():
                     value_type=float
                 ),
             }],
-        ),
-        Node(
-            package='rk_unitree_driver',
-            executable='cmd_vel_bridge_node',
-            name='cmd_vel_bridge_node',
-            output='screen',
-            condition=use_unitree_driver,
-            parameters=[
-                go2_config,
-                {
-                    'backend': backend,
-                    'cmd_vel_topic': '/navigation/cmd_vel',
-                    'max_linear_x': ParameterValue(
-                        bridge_max_linear_x,
-                        value_type=float
-                    ),
-                    'max_angular_z': ParameterValue(
-                        bridge_max_angular_z,
-                        value_type=float
-                    ),
-                    'zero_cmd_debounce_time': ParameterValue(
-                        zero_cmd_debounce_time,
-                        value_type=float
-                    ),
-                },
-            ],
         ),
     ])

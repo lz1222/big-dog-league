@@ -20,6 +20,8 @@ setup(
     entry_points={
         'console_scripts': [
             'mission_state_machine_node = rk_mission.mission_state_machine_node:main',
+            'line_course_mission_node = '
+            'rk_mission.mission_state_machine_node:line_course_main',
             'sign_action_executor_node = rk_mission.sign_action_executor_node:main',
         ],
     },

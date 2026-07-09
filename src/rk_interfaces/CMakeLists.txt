@@ -8,6 +8,7 @@ find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/LineTrack.msg"
+  "msg/SpecialTargetDetection.msg"
   "msg/SignDetection.msg"
   "msg/SignDetectionArray.msg"
   "msg/ItemTag.msg"

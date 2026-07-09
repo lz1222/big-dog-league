@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
+import json
 import math
 
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 from rk_interfaces.msg import LineTrack
 
@@ -43,7 +44,14 @@ class LineFollowerNode(Node):
     def __init__(self):
         super().__init__('line_follower_node')
 
-        self.declare_parameter('cmd_vel_topic', '/navigation/cmd_vel')
+        self.declare_parameter(
+            'suggested_cmd_topic',
+            '/navigation/line_follow_cmd_suggested'
+        )
+        self.declare_parameter(
+            'line_follow_status_topic',
+            '/navigation/line_follow_status'
+        )
         self.declare_parameter('line_track_topic', '/perception/line_track')
         self.declare_parameter('mission_start_topic', '/mission/start')
         self.declare_parameter('mission_stop_topic', '/mission/stop')
@@ -95,7 +103,12 @@ class LineFollowerNode(Node):
         self.declare_parameter('line_msg_timeout', 0.5)
         self.declare_parameter('continuous_search_enabled', True)
 
-        self.cmd_vel_topic = self.string_parameter('cmd_vel_topic')
+        self.suggested_cmd_topic = self.string_parameter(
+            'suggested_cmd_topic'
+        )
+        self.line_follow_status_topic = self.string_parameter(
+            'line_follow_status_topic'
+        )
         self.line_track_topic = self.string_parameter('line_track_topic')
         self.mission_start_topic = self.string_parameter(
             'mission_start_topic'
@@ -121,6 +134,7 @@ class LineFollowerNode(Node):
         self.last_debug_log_ns = 0
         self.debug_log_period_ns = 1_000_000_000
         self.last_loss_reason = 'none'
+        self.lost_line_count = 0
         self.gait_control_locked = False
         self.mission_started = False
         self.last_published_cmd_is_zero = True
@@ -129,7 +143,16 @@ class LineFollowerNode(Node):
 
         self.refresh_parameters()
 
-        self.publisher = self.create_publisher(Twist, self.cmd_vel_topic, 10)
+        self.publisher = self.create_publisher(
+            Twist,
+            self.suggested_cmd_topic,
+            10
+        )
+        self.status_publisher = self.create_publisher(
+            String,
+            self.line_follow_status_topic,
+            10
+        )
         self.line_subscription = self.create_subscription(
             LineTrack,
             self.line_track_topic,
@@ -164,7 +187,8 @@ class LineFollowerNode(Node):
         self.get_logger().info(
             'Line follower state machine started: '
             f'line_track_topic={self.line_track_topic}, '
-            f'cmd_vel_topic={self.cmd_vel_topic}, '
+            f'suggested_cmd_topic={self.suggested_cmd_topic}, '
+            f'status_topic={self.line_follow_status_topic}, '
             f'start_topic={self.mission_start_topic}, '
             f'stop_topic={self.mission_stop_topic}, '
             f'gait_control_lock_topic={self.gait_control_lock_topic}, '
@@ -346,6 +370,7 @@ class LineFollowerNode(Node):
         self.last_line_msg_time = now
 
         if not self.is_valid_line_msg(msg):
+            self.lost_line_count += 1
             self.last_loss_reason = 'invalid_line_track'
             if self.state in RUNNING_STATES:
                 self.log_invalid_line_track_stop(msg, now)
@@ -354,6 +379,7 @@ class LineFollowerNode(Node):
             return
 
         if self.is_trackable_line(msg):
+            self.lost_line_count = 0
             self.last_seen_time = now
             self.last_seen_line_time = now
             self.last_lateral_error = float(msg.lateral_error)
@@ -366,8 +392,10 @@ class LineFollowerNode(Node):
             elif self.state == STOP and self.mission_started:
                 self.log_line_recovered('line_recovered_from_stop', msg)
                 self.set_state(LINE_FOLLOW, 'line_recovered_from_stop', now)
-        elif self.state == LINE_FOLLOW:
-            self.enter_line_lost_state(msg, now)
+        else:
+            self.lost_line_count += 1
+            if self.state == LINE_FOLLOW:
+                self.enter_line_lost_state(msg, now)
 
         if self.state == SEARCH_LINE:
             self.update_reacquire_count(
@@ -962,6 +990,24 @@ class LineFollowerNode(Node):
             lateral_error = float(self.last_line_msg.lateral_error)
             heading_error = float(self.last_line_msg.heading_error)
 
+        status = String()
+        status.data = json.dumps({
+            'nav_state': self.state,
+            'mission_started': bool(self.mission_started),
+            'line_visible': line_visible,
+            'confidence': (
+                float(self.last_line_msg.confidence)
+                if self.last_line_msg is not None else 0.0
+            ),
+            'lateral_error': lateral_error,
+            'heading_error': heading_error,
+            'lost_line_count': int(self.lost_line_count),
+            'suggested_vx': float(cmd.linear.x),
+            'suggested_wz': float(cmd.angular.z),
+            'reason': str(stop_reason),
+        }, separators=(',', ':'))
+        self.status_publisher.publish(status)
+
         self.log_debug(
             'control: '
             f'mission_started={self.mission_started}, '
@@ -969,8 +1015,8 @@ class LineFollowerNode(Node):
             f'control_lock={self.gait_control_locked}, '
             f'lateral_error={lateral_error:.3f}, '
             f'heading_error={heading_error:.3f}, '
-            f'cmd_vel.linear.x={cmd.linear.x:.3f}, '
-            f'cmd_vel.angular.z={cmd.angular.z:.3f}, '
+            f'suggested_cmd.linear.x={cmd.linear.x:.3f}, '
+            f'suggested_cmd.angular.z={cmd.angular.z:.3f}, '
             f'stop_reason={stop_reason}, '
             f'last_loss_reason={self.last_loss_reason}, '
             f'stable_seen_count={self.stable_seen_count}'

@@ -20,10 +20,10 @@ IMAGE_TOPIC="${RK_IMAGE_TOPIC:-/camera/color/image_raw}"
 
 LINE_DEBUG_IMAGE="${RK_LINE_DEBUG_IMAGE:-true}"
 LINE_DEBUG_LOG="${RK_LINE_DEBUG_LOG:-true}"
-LINE_MIN_SPEED="${RK_LINE_MIN_SPEED:-0.20}"
-LINE_BASE_SPEED="${RK_LINE_BASE_SPEED:-0.25}"
-LINE_MID_SPEED="${RK_LINE_MID_SPEED:-0.22}"
-LINE_SLOW_SPEED="${RK_LINE_SLOW_SPEED:-0.20}"
+LINE_MIN_SPEED="${RK_LINE_MIN_SPEED:-0.27}"
+LINE_BASE_SPEED="${RK_LINE_BASE_SPEED:-0.27}"
+LINE_MID_SPEED="${RK_LINE_MID_SPEED:-0.27}"
+LINE_SLOW_SPEED="${RK_LINE_SLOW_SPEED:-0.27}"
 SHORT_LOST_LINEAR_SPEED="${RK_SHORT_LOST_LINEAR_SPEED:-0.0}"
 SEARCH_LINEAR_SPEED="${RK_SEARCH_LINEAR_SPEED:-0.0}"
 BRIDGE_MAX_LINEAR_X="${RK_GO2_BRIDGE_MAX_LINEAR_X:-$LINE_BASE_SPEED}"
@@ -71,6 +71,7 @@ workspace_packages_ready() {
     ros2 pkg prefix rk_bringup >/dev/null 2>&1 \
         && ros2 pkg prefix rk_perception >/dev/null 2>&1 \
         && ros2 pkg prefix rk_navigation >/dev/null 2>&1 \
+        && ros2 pkg prefix rk_mission >/dev/null 2>&1 \
         && ros2 pkg prefix rk_go2_sdk_bridge >/dev/null 2>&1 \
         && ros2 pkg prefix rk_tools >/dev/null 2>&1
 }
@@ -164,6 +165,7 @@ stop_existing_processes() {
     pkill -f "cmd_vel_udp_forwarder.py" || true
     pkill -f "real_line_tracker_node" || true
     pkill -f "line_follower_node" || true
+    pkill -f "line_course_mission_node" || true
     pkill -f "realsense2_camera_node" || true
     pkill -f "realsense2_camera" || true
     set -e
@@ -303,7 +305,11 @@ start_background "real_line_tracker" \
 start_background "line_follower" \
     "exec ros2 run rk_navigation line_follower_node --ros-args --params-file \"${LINE_CONFIG}\" -p debug_log:=${LINE_DEBUG_LOG} -p min_driving_speed:=${LINE_MIN_SPEED} -p base_speed:=${LINE_BASE_SPEED} -p mid_speed:=${LINE_MID_SPEED} -p slow_speed:=${LINE_SLOW_SPEED} -p short_lost_linear_speed:=${SHORT_LOST_LINEAR_SPEED} -p search_linear_speed:=${SEARCH_LINEAR_SPEED}"
 
+start_background "line_course_mission" \
+    "exec ros2 run rk_mission line_course_mission_node --ros-args --params-file \"${LINE_CONFIG}\" -p sdk_network_interface:=${SDK_INTERFACE}"
+
 wait_for_topic_publisher "/perception/line_track" 15 || true
+wait_for_topic_publisher "/navigation/line_follow_cmd_suggested" 10 || true
 wait_for_topic_publisher "/navigation/cmd_vel" 10 || true
 wait_for_topic_subscription "/navigation/cmd_vel" 5 || {
     echo "ERROR: /navigation/cmd_vel subscriber disappeared after startup." >&2
@@ -328,6 +334,7 @@ View image debug:
 Logs:
   tail -f ${LOG_DIR}/real_line_tracker.log
   tail -f ${LOG_DIR}/line_follower.log
+  tail -f ${LOG_DIR}/line_course_mission.log
   tail -f ${LOG_DIR}/cmd_vel_udp_forwarder.log
 
 Motion is NOT started yet.

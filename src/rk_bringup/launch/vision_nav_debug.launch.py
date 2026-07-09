@@ -79,4 +79,11 @@ def generate_launch_description():
                 },
             ]
         ),
+        Node(
+            package='rk_mission',
+            executable='line_course_mission_node',
+            name='line_course_mission_node',
+            output='screen',
+            parameters=[navigation_config]
+        ),
     ])

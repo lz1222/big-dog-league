@@ -3,6 +3,10 @@ real_line_tracker_node:
     # 图像输入/输出话题。正常只需要改 image_topic，除非你的相机话题名变了。
     image_topic: /camera/color/image_raw
     line_track_topic: /perception/line_track
+    red_circle_topic: /perception/red_circle_detection
+    stop_zone_topic: /perception/stop_zone_detection
+    white_bar_topic: /perception/white_bar_detection
+    corner_candidate_topic: /perception/corner_candidate
 
     # 调试开关。比赛/真实巡线建议 false，能减轻相机和 CPU 压力。
     # 需要看 /perception/debug/line_overlay 时再临时改成 true。
@@ -92,13 +96,37 @@ real_line_tracker_node:
     max_band_center_jump_fraction: 0.16
     max_band_gap: 2
 
+    # 特殊目标仅输出视觉证据，停车、转向和动作均由 mission 决定。
+    red_circle_min_area_ratio: 0.002
+    red_circle_min_circularity: 0.55
+
+    # 蓝色启停区 HSV 与进入判定参考点。
+    blue_h_min: 90
+    blue_h_max: 130
+    blue_s_min: 60
+    blue_v_min: 40
+    stop_zone_min_area_ratio: 0.05
+    stop_zone_reference_y_ratio: 0.85
+
+    # 白色横线：高亮、低饱和、横向长条。
+    white_bar_v_min: 180
+    white_bar_s_max: 80
+    white_bar_min_width_ratio: 0.20
+    white_bar_max_height_ratio: 0.15
+    white_bar_min_area_ratio: 0.002
+
+    # 危险弯角只发布候选和方向提示，不在视觉节点控制机器狗。
+    corner_min_heading_error: 0.30
+    corner_edge_fraction: 0.28
+
     frame_id: d435i_color_optical_frame
 
 line_follower_node:
   ros__parameters:
     # ROS 话题名。除非你改了系统接口，否则不要改。
     line_track_topic: /perception/line_track
-    cmd_vel_topic: /navigation/cmd_vel
+    suggested_cmd_topic: /navigation/line_follow_cmd_suggested
+    line_follow_status_topic: /navigation/line_follow_status
     mission_start_topic: /mission/start
     mission_stop_topic: /mission/stop
     gait_control_lock_topic: /gait/control_lock
@@ -163,3 +191,70 @@ line_follower_node:
     # 线检测消息超时。相机/识别卡顿时可以提高到 1.5，但无图像时盲走风险也会增加。
     line_msg_timeout: 1.0
     continuous_search_enabled: true
+
+line_course_mission_node:
+  ros__parameters:
+    # 最终速度控制权只属于 mission；SDK forwarder 只订阅并执行。
+    cmd_vel_topic: /navigation/cmd_vel
+    suggested_cmd_topic: /navigation/line_follow_cmd_suggested
+    mission_state_topic: /mission/line_course_state
+    line_track_topic: /perception/line_track
+    red_circle_topic: /perception/red_circle_detection
+    stop_zone_topic: /perception/stop_zone_detection
+    white_bar_topic: /perception/white_bar_detection
+    corner_candidate_topic: /perception/corner_candidate
+    mission_start_topic: /mission/start
+    mission_stop_topic: /mission/stop
+    white_bar_action_done_topic: /mission/white_bar_action_done
+
+    control_rate_hz: 10.0
+    suggested_cmd_timeout_sec: 0.5
+    detection_timeout_sec: 0.8
+
+    # 危险直角弯提前转向。
+    enable_corner_pre_turn: true
+    corner_turn_direction: left
+    corner_confirm_frames: 3
+    corner_min_confidence: 0.45
+    corner_vx: 0.03
+    corner_angular_z: 0.32
+    corner_min_time_sec: 0.8
+    corner_max_time_sec: 2.5
+    corner_exit_confidence: 0.30
+    corner_exit_stable_frames: 3
+    corner_cooldown_sec: 3.0
+
+    # 红圈靠近、已有 SDK 动作和动作后的左转。
+    red_circle_confirm_frames: 3
+    red_circle_min_confidence: 0.55
+    red_circle_approach_speed: 0.04
+    red_circle_stop_area_ratio: 0.020
+    red_circle_stop_y_ratio: 0.65
+    red_circle_approach_timeout_sec: 8.0
+    red_circle_sdk_action: stretch
+    red_circle_sdk_wait_sec: 3.0
+    red_circle_action_timeout_sec: 8.0
+    sdk_network_interface: eth0
+    sdk_action_executable: /home/unitree/rk_inspection_ws/install/rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/go2_sdk_motion_action
+    turn_after_red_direction: left
+    turn_after_red_angle_deg: 90.0
+    turn_after_red_angular_z: 0.35
+    turn_after_red_timeout_sec: 5.0
+
+    # 白横线动作尚未明确：默认停车，等待外部完成反馈；超时进入安全停机。
+    white_bar_confirm_frames: 3
+    white_bar_min_confidence: 0.55
+    white_bar_approach_speed: 0.03
+    white_bar_stop_y_ratio: 0.70
+    white_bar_action_timeout_sec: 5.0
+
+    # 蓝区先靠近，机器人参考点连续进入后最终停车。
+    stop_zone_confirm_frames: 3
+    stop_zone_min_confidence: 0.55
+    stop_zone_approach_speed: 0.04
+    stop_zone_inside_confirm_frames: 3
+    stop_zone_approach_timeout_sec: 10.0
+
+    reacquire_timeout_sec: 8.0
+    reacquire_min_confidence: 0.30
+    reacquire_stable_frames: 3

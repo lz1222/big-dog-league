@@ -57,6 +57,13 @@ def generate_launch_description():
             parameters=[competition_config]
         ),
         Node(
+            package='rk_mission',
+            executable='line_course_mission_node',
+            name='line_course_mission_node',
+            output='screen',
+            parameters=[competition_config]
+        ),
+        Node(
             package='rk_tools',
             executable='mock_locomotion_server',
             name='mock_locomotion_server',

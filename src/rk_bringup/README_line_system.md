@@ -11,8 +11,11 @@ RealSense D435i
 -> real_line_tracker_node
 -> /perception/line_track
 -> line_follower_node
+-> /navigation/line_follow_cmd_suggested
+-> line_course_mission_node
 -> /navigation/cmd_vel
--> cmd_vel_udp_forwarder.py or cmd_vel_bridge_node
+-> cmd_vel_udp_forwarder.py
+-> Unitree SDK UDP server
 -> Go2 Sport Move()
 -> robot motion
 ```
@@ -75,7 +78,7 @@ Start all line-system nodes without starting motion:
 ~/rk_inspection_ws/src/rk_bringup/scripts/start_line_system.sh
 ```
 
-The startup script defaults to the verified SDK UDP bridge
+The startup script uses the verified SDK UDP bridge only
 and starts every process with `nohup` in the background. It does not use tmux,
 so closing the SSH terminal will not stop the nodes.
 
@@ -131,9 +134,9 @@ ros2 run rk_go2_sdk_bridge go2_sdk_motion_action eth0 economic_gait 1.0
 The available SDK actions are `stand_up`, `balance_stand`, `classic_walk`,
 `classic_walk_on`, `classic_walk_off`, `static_walk`, `trot_run`, `free_walk`,
 `economic_gait`, `front_jump`, `recovery_stand`, and `stop_move`. The Python
-`gait_control_node` still publishes `cmd_vel` for fixed actions; its
-body-height and recovery-stand adapters are placeholders until the Unitree
-posture APIs are wired there.
+Do not start `gait_control_node` with this line-course launch: the mission node
+must remain the only `/navigation/cmd_vel` publisher. Red-circle body actions
+invoke the existing `go2_sdk_motion_action` helper directly.
 
 VM/Humble development build note:
 
@@ -307,13 +310,15 @@ documented above.
 - `cmd_vel_udp_forwarder`: `/navigation/cmd_vel` to SDK UDP.
 - `realsense_camera`: low-bandwidth color stream.
 - `real_line_tracker`: `/camera/color/image_raw` to `/perception/line_track`.
-- `line_follower`: `/perception/line_track` to `/navigation/cmd_vel`.
+- `line_follower`: line tracking to `/navigation/line_follow_cmd_suggested`.
+- `line_course_mission`: special-event decisions and final `/navigation/cmd_vel`.
 
 Useful log commands:
 
 ```bash
 tail -f ~/rk_line_logs/real_line_tracker.log
 tail -f ~/rk_line_logs/line_follower.log
+tail -f ~/rk_line_logs/line_course_mission.log
 tail -f ~/rk_line_logs/cmd_vel_udp_forwarder.log
 ```
 
@@ -323,7 +328,7 @@ tail -f ~/rk_line_logs/cmd_vel_udp_forwarder.log
 
 - Confirm `line_visible=true` in `~/rk_line_logs/real_line_tracker.log`.
 - Confirm `/mission/start` was sent manually with `mission_start.sh`.
-- Check `line_follower_node` logs in `~/rk_line_logs/line_follower.log`.
+- Check both `line_follower.log` and `line_course_mission.log`.
 
 `line_visible=false`:
 
@@ -334,9 +339,9 @@ tail -f ~/rk_line_logs/cmd_vel_udp_forwarder.log
 
 Bridge only receives zero velocity:
 
-- Confirm `/navigation/cmd_vel` is nonzero in the `cmd_vel` tmux window.
+- Confirm `/navigation/cmd_vel` is nonzero with `ros2 topic echo`.
 - Run `check_line_system.sh` and confirm `/navigation/cmd_vel` has exactly one
-  publisher, `line_follower_node`.
+  publisher, `line_course_mission_node`.
 - Confirm normal ROS nodes use `ROS_DOMAIN_ID=10`.
 
 `rqt_image_view` cannot see overlay:

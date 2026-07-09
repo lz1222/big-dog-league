@@ -61,6 +61,7 @@ pkill -f "cmd_vel_udp_forwarder.py" || true
 pkill -f "vision_nav_debug.launch.py" || true
 pkill -f "real_line_tracker_node" || true
 pkill -f "line_follower_node" || true
+pkill -f "line_course_mission_node" || true
 pkill -f "realsense2_camera" || true
 pkill -f "rqt_image_view" || true
 pkill -f "image_view" || true
