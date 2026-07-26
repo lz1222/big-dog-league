@@ -335,7 +335,7 @@ LINE_TRACK_TOPIC = '/perception/line_track'
 
 
 def forward(steps, speed_mps=DEFAULT_FORWARD_SPEED_MPS):
-    """避障区：直走多少步。"""
+    """避障区：直走多少步."""
     return {
         'type': 'forward',
         'steps': int(steps),
@@ -345,7 +345,7 @@ def forward(steps, speed_mps=DEFAULT_FORWARD_SPEED_MPS):
 
 def left(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
          wz_radps=DEFAULT_TURN_SPEED_RADPS):
-    """避障区：边走边左转多少度。"""
+    """避障区：边走边左转多少度."""
     return {
         'type': 'turn',
         'direction': 'left',
@@ -357,7 +357,7 @@ def left(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
 
 def right(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
           wz_radps=DEFAULT_TURN_SPEED_RADPS):
-    """避障区：边走边右转多少度。"""
+    """避障区：边走边右转多少度."""
     return {
         'type': 'turn',
         'direction': 'right',
