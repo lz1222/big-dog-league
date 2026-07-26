@@ -918,14 +918,14 @@ class LineCourseMissionNode(Node):
             self._on_line_course_timer
         )
         self.get_logger().info(
-            'Line course mission ready: final_cmd_vel='
+            'Line course mission ready: mission_cmd='
             f'{self.cmd_vel_topic}, suggested_cmd={self.suggested_cmd_topic}, '
             f'sdk_action={self.red_circle_sdk_action or "disabled"}'
         )
 
     def _declare_line_course_parameters(self):
         topics = {
-            'cmd_vel_topic': '/navigation/cmd_vel',
+            'cmd_vel_topic': '/control/mission_cmd',
             'suggested_cmd_topic': '/navigation/line_follow_cmd_suggested',
             'mission_state_topic': '/mission/line_course_state',
             'line_track_topic': '/perception/line_track',

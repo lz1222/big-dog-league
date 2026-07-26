@@ -254,9 +254,28 @@ def generate_launch_description():
             parameters=[
                 line_nav_config,
                 {
+                    'cmd_vel_topic': '/control/mission_cmd',
                     'sdk_network_interface': sdk_interface,
                 },
             ],
+        ),
+        Node(
+            package='rk_safety',
+            executable='command_mux_node',
+            name='command_mux_node',
+            output='screen',
+            parameters=[{
+                'line_cmd_topic': '/control/line_cmd',
+                'mission_cmd_topic': '/control/mission_cmd',
+                'locomotion_cmd_topic': '/control/locomotion_cmd',
+                'estop_topic': '/safety/estop',
+                'enable_estop_service': True,
+                'estop_service_name': '/safety/estop',
+                'gait_lock_topic': '/gait/control_lock',
+                'arm_lock_topic': '/arm/control_lock',
+                'output_cmd_topic': '/navigation/cmd_vel',
+                'status_topic': '/control/cmd_mux_status',
+            }],
         ),
         ExecuteProcess(
             cmd=[sdk_server],

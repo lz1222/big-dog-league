@@ -2,7 +2,9 @@
 
 ## 判定原则
 
-本文依据 `master` 提交 `1046004` 的仓库源码静态审计及本轮 VM 基础检查。没有机器人端日志、视频、SDK ACK 或可追溯测试记录的功能，一律不标为硬件已验证。
+本文依据 `codex/national-control-architecture` 分支、基线提交 `ded2631` 之上的
+仓库源码静态审计及本轮 VM 基础检查。没有机器人端日志、视频、SDK ACK 或
+可追溯测试记录的功能，一律不标为硬件已验证。
 
 严重度：
 
@@ -110,30 +112,52 @@
 
 ### 1.7 是否存在多个节点同时发布最终 `cmd_vel`
 
-结论：**现有单个 launch 多数没有并发；计划中的真实完整组合会冲突，P0。**
+结论：**真实巡线 launch 已建立唯一发布者基础；完整比赛和误启 standalone 的
+风险仍未完成硬件验证，P1。**
 
-默认最终发布者包括：
+当前 `competition_line_nav.launch.py` 和 `start_line_system.sh` 的真实数据流是：
 
-- `line_course_mission_node`
-- `gait_control_node`
+```text
+line_follower suggested
+-> line_course_mission
+-> /control/mission_cmd
+-> command_mux
+-> /navigation/cmd_vel
+-> UDP forwarder
+```
+
+该组合中 `command_mux_node` 是唯一预期的最终 publisher；启动/检查脚本会验证
+`Publisher count: 1`。line-course 默认输出已改为 `/control/mission_cmd`，
+gait 默认输出已改为 `/control/locomotion_cmd`。
+
+正常停机也保持该所有权：`stop_line_system.sh` 通过 mux 的
+`/safety/estop` `SetBool` service 置位急停，要求返回成功并观测到 mux 发布零速
+后才终止节点。只有 service 不存在、类型不符或调用失败时，
+`EMERGENCY FALLBACK` 才直发一次零 Twist；该异常路径会绕过正常唯一发布者
+架构，不能计为所有权验收通过。
+
+以下 standalone/tool 路径仍显式保留直接发布最终 topic：
+
+- mock/vision debug launch 中的 `line_course_mission_node`
+- obstacle/sign debug launch 中的 `gait_control_node`
 - `obstacle_direct_route_node`
 - `keyboard_route_node`
 - `cmd_vel_speed_sweep_node`
 - `two_step_walk_test_node`
-- `stop_line_system.sh` 的一次性零 Twist CLI publisher
+- `stop_line_system.sh` 的 `EMERGENCY FALLBACK` 一次性零 Twist CLI publisher
+  （仅 service 缺失/失败时）
 
-`line_follower_node` 默认发布 suggested topic，但可通过参数/remap 变成最终发布者。
+`line_follower_node` 默认发布 suggested topic；`/control/line_cmd` 当前只是 mux
+预留输入。任何参数/remap 仍可能绕过上述契约。
 
-关键冲突是：
+影响：真实巡线的静态控制权冲突已收敛，但同时启动任一 standalone/helper
+仍会出现多个 DDS publisher；完整 mission/gait/arm 又尚未进入真实比赛 launch，
+所以不能推断全赛程接管已经验证。
 
-- line-course publisher：`mission_state_machine_node.py:852-856,1471-1488`
-- gait publisher：`gait_control_node.py:56-63,395-400`
-- `/gait/control_lock` 只被 line follower 订阅；line-course 的订阅列表没有该 lock。
-- line-course 在 `WAIT_START` 仍周期发布零：`mission_state_machine_node.py:1161-1167`。
-
-影响：手工组合完整 mission、gait 和 line-course 后，固定动作速度可能被 line-course 的零或巡线速度交错覆盖。DDS 多发布者不是安全仲裁器。
-
-验收门槛：正式 launch 启动前 `ros2 topic info -v /navigation/cmd_vel` 必须显示唯一预期 publisher；测试/helper 节点不得存在；动作接管要由最终速度唯一所有者明确实现。
+验收门槛：机器人 Foxy 上启动正式组合后，
+`ros2 topic info -v /navigation/cmd_vel` 必须显示唯一
+`command_mux_node` publisher；测试/helper 不得存在；分别验证 gait lock、
+arm lock、estop、超时和解锁后新命令恢复。
 
 ## 2. 其他关键阻塞项
 
@@ -147,16 +171,32 @@
 ### P1
 
 5. **两个状态机职责重叠但没有正式组合契约。** 完整 mission 控制 `/mission/start/stop`，line-course 独立处理红圈、白横线、角点和蓝区；评分路线和 line-course 事件如何对应没有 action/result 接口。
-6. **Go2 UDP 路径无 ACK。** forwarder 只发送 UDP，外部 `go2_sdk_udp_server` 不在仓库，无法从本仓库证明解析、SDK 执行或硬件状态。
+6. **Go2 UDP 路径无 ACK。** mux status 和停机脚本的 ROS 零速抽样只记录软件链；forwarder 仍会第二次限幅并只发送 UDP，外部 `go2_sdk_udp_server` 不在仓库，无法从本仓库证明最终 payload、解析、SDK 执行、实体停止或硬件状态。
 7. **SDK direct tools 是条件构建。** `unitree_sdk2` 未找到时 CMake 只 warning，不生成 `go2_sdk_motion_action` 等可执行文件；多个 launch 又依赖这些工具或机器人绝对路径。
 8. **多个替代 bridge/arm/locomotion server 可争抢同一接口。** setup 和 launch 没有统一互斥选择机制，错误组合时 action server 或机器人后端不唯一。
-9. **全仓 pytest 仍不是单一全绿入口。** 裸 `pytest` 当前不在 PATH，返回 127；原始根级 `python3 -m pytest` 的 22 个 collection errors 已分类为 18 个同名测试模块冲突、3 个 `PYTHONPATH` 问题、1 个 D1 动态库问题，原收集阶段没有断言失败。D1 测试在 import 阶段可能直接驱动机械臂，不能自动收集。当前安全逐包执行共 37 项，结果为 28 passed、9 skipped、0 failed；此前唯一真实失败 `rk_tools` pep257 已修复。`colcon test` 的 17 项全部来自 perception，覆盖仍不完整。统一安全入口和正确命令见 `docs/TEST_BASELINE.md`。
+9. **全仓 pytest 仍不是单一全绿入口。** 裸 `pytest` 当前不在 PATH，返回 127；原始根级 `python3 -m pytest` 的 22 个 collection errors 已分类为 18 个同名测试模块冲突、3 个 `PYTHONPATH` 问题、1 个 D1 动态库问题，原收集阶段没有断言失败。D1 测试在 import 阶段可能直接驱动机械臂，不能自动收集。最新 `rk_safety` 定向结果为 37 passed；安全 `src/` 收集共 74 项，逐包为 65 passed、9 skipped、0 failed；干净 colcon 为 54 tests、0 errors、0 failures、1 skipped。统一安全入口和正确命令见 `docs/TEST_BASELINE.md`。
 
 ### P2
 
 10. **三个配置 YAML 为空。** `rk_config/config/arm/d1_presets.yaml`、`camera/d435i.yaml`、`robot_profiles/go2.yaml` 可语法解析但不提供配置内容。
 11. **package 元数据仍称多个混合包为 mock。** 不影响运行，但会误导启动与验收判断。
 12. **VM 测试结果不能替代机器人端硬件验证。** 当前只有源码层面的 Foxy/Humble 静态兼容性审计和 VM/Humble 构建测试结果，缺少机器人 Foxy 构建与运行记录。`colcon test` 通过只证明当前环境中已注册测试的结果；不能替代机器人端 topic/action 联调、Unitree SDK/UDP 实际执行、机械臂硬件 ACK、真实相机输入及实物动作验收。
+
+### 已处理的控制权基础
+
+- 真实 `competition_line_nav` 与 `start_line_system.sh` 已将 line-course 候选输出
+  接到 `/control/mission_cmd`，再由 mux 独占最终 `/navigation/cmd_vel`。
+- mux 已实现 estop、arm lock、gait lock、mission、line 的固定优先级；默认超时
+  0.5/0.5/0.3 秒，20 Hz 输出，0.60/0.15/1.30 限值。
+- 解锁会清旧候选，时间倒退输出零，NaN/Inf 拒绝，合法超限 clamp，并发布
+  JSON 状态。
+- mux 同时处理同名 `SetBool` service 与 `Bool` topic，两种入口统一调用 estop
+  转换；状态真实变化时清空三个候选的命令、时间戳和有效性，重复置位不反复
+  清缓存。
+- 正常停机通过 service 置位、mux 零速确认、再停进程；软件闭环已在
+  VM/Humble 验证。
+- 这些结论只说明控制权软件基础存在。机器人/Foxy 的 UDP/SDK 与实体停止、
+  完整真实 launch、跳跃、台阶、机械臂 ACK、白横线、170 分任务均未验收。
 
 ### 已处理的仓库卫生项
 
@@ -168,14 +208,14 @@
 
 | 排名 | 风险 | 直接后果 |
 | ---: | --- | --- |
-| 1 | 最终 `/navigation/cmd_vel` 在完整硬件组合中无唯一所有者 | 动作速度与巡线/零速度互相覆盖，可能失控或无法移动 |
+| 1 | 急停只完成 VM 软件闭环，机器人 UDP/SDK 与实体停止未验证 | ROS 零速不能证明 Go2 已收到命令或在安全距离内停止 |
 | 2 | new arm 无 subscriber/ACK 却可返回成功 | 70 分机械臂相关流程可能全部假成功 |
 | 3 | `stairs_up_down` 真实 server 不支持 | 台阶 30 分必然在 action 层失败 |
 | 4 | 起终点 jump 不调用真实跳跃 SDK | 可能低速撞障碍，同时日志显示 completed |
 | 5 | 所有 `follow_to_*` 仅固定 3 秒 | 在错误位置切换危险动作或机械臂 |
 | 6 | 默认平台 1/default stretch 自动兜底 | 识别失败时主动执行错误评分动作 |
 | 7 | `white_bar_action_done` 无发布者 | 白横线流程必然依赖仓外注入或超时急停 |
-| 8 | 没有真实完整比赛 launch | 各调试岛无法证明全流程接口、顺序和控制权正确 |
+| 8 | 没有真实完整比赛 launch；standalone 仍可直发最终速度 | 各调试岛无法证明全流程接口、顺序和唯一控制权正确 |
 | 9 | 真实物资感知缺失且 tag 失败被忽略 | 机械臂可能在无目标时盲抓 |
 | 10 | 缺少机器人 Foxy 端到端/硬件证据 | VM 静态或构建成功可能被误当成国赛可用 |
 
@@ -184,10 +224,15 @@
 1. **已完成：** 精确处理 Git 索引中的 5092 个生成物和 5 个根 `.venv` 条目；保留并记录 9 个 SDK `log` 源码头文件及必要预编译库。
 2. **部分完成：** 已建立安全统一测试入口和 22 个收集错误分类，`rk_tools` pep257 失败已修复；仍需决定如何把其他包测试正式注册进 colcon。
 3. 受控归档官方赛题规则和评分表，记录版本、哈希与获取日期，并冻结评分矩阵。
-4. 先确定唯一最终速度所有者和完整真实 launch 的组合契约。
+4. **控制权基础已完成、硬件验证未完成：** 真实巡线 launch 由 mux 独占最终
+   topic，SetBool service 与 Bool topic 已统一接入 mux；下一步先在机器人
+   Foxy 验证正常停机、UDP/SDK 与实体停止，再把完整 mission/gait/arm 按同一
+   契约纳入真实 launch。任何 `EMERGENCY FALLBACK` 都不得计为正常路径通过。
 5. 为 `stairs_up_down`、起终点跳跃和三类警示动作分别确定真实 SDK 调用与 action result 语义。
 6. 为 new arm 增加真实 bridge readiness 与 ACK，再标定平台 1/2 独立点位。
 7. 给每个 `follow_to_*` 定义可观测到达条件，禁止统一固定等待。
 8. 明确白横线动作执行者和 done 发布者。
 9. 补真实 item/object producer，并让检测失败阻止盲抓。
-10. 在机器人 Foxy 环境按“分项 -> 子链 -> 全链”保存可复现测试证据；不得用 VM `colcon test` 结果替代硬件验收。
+10. 在机器人 Foxy 环境验证 mux 唯一发布者、急停、lock、超时、解锁新命令和
+    UDP 二次限幅，再按“分项 -> 子链 -> 全链”保存可复现测试证据；不得用 VM
+    核心测试、ROS smoke 或 `colcon test` 结果替代硬件验收。

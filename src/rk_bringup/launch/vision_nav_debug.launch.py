@@ -84,6 +84,12 @@ def generate_launch_description():
             executable='line_course_mission_node',
             name='line_course_mission_node',
             output='screen',
-            parameters=[navigation_config]
+            parameters=[
+                navigation_config,
+                {
+                    # Standalone debug launch; never combine with competition.
+                    'cmd_vel_topic': '/navigation/cmd_vel',
+                },
+            ]
         ),
     ])

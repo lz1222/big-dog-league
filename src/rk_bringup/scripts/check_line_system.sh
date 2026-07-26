@@ -52,6 +52,13 @@ topic_has_subscription() {
         | grep -Eq "Subscription count: [1-9][0-9]*"
 }
 
+topic_has_single_publisher() {
+    local topic_name="$1"
+
+    ros2 topic info "$topic_name" 2>/dev/null \
+        | grep -Eq "Publisher count: 1$"
+}
+
 validate_line_system() {
     local failed=0
 
@@ -80,8 +87,23 @@ validate_line_system() {
         failed=1
     fi
 
-    if ! topic_has_publisher "/navigation/cmd_vel"; then
-        echo "ERROR: /navigation/cmd_vel has no publisher." >&2
+    if ! topic_has_publisher "/control/mission_cmd"; then
+        echo "ERROR: line-course mission has no candidate command publisher." >&2
+        failed=1
+    fi
+
+    if ! topic_has_subscription "/control/mission_cmd"; then
+        echo "ERROR: command mux is not subscribed to mission commands." >&2
+        failed=1
+    fi
+
+    if ! topic_has_publisher "/control/cmd_mux_status"; then
+        echo "ERROR: command mux has no status publisher." >&2
+        failed=1
+    fi
+
+    if ! topic_has_single_publisher "/navigation/cmd_vel"; then
+        echo "ERROR: /navigation/cmd_vel must have exactly one publisher." >&2
         failed=1
     fi
 
@@ -291,7 +313,9 @@ print_topic_info "/perception/stop_zone_detection"
 print_topic_info "/perception/white_bar_detection"
 print_topic_info "/perception/corner_candidate"
 print_topic_info "/navigation/line_follow_cmd_suggested"
+print_topic_info "/control/mission_cmd"
 print_topic_info "/navigation/cmd_vel"
+print_topic_info "/control/cmd_mux_status"
 print_topic_info "/mission/line_course_state"
 print_topic_info "/mission/start"
 print_topic_info "/mission/stop"
@@ -313,9 +337,13 @@ cat <<'EOF'
   Publisher: line_follower_node
   Subscriber: line_course_mission_node
 
+/control/mission_cmd:
+  Publisher: line_course_mission_node
+  Subscriber: command_mux_node
+
 /navigation/cmd_vel:
   Publisher count: 1
-  Publisher node: line_course_mission_node
+  Publisher node: command_mux_node
   Subscriber: cmd_vel_udp_forwarder
 
 /mission/start:
