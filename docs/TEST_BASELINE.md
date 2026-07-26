@@ -19,7 +19,7 @@ VM 上的语法检查、pytest、colcon build/test 不能证明：
 | Git、Python、Shell、YAML、launch 静态检查 | 可执行 | 可复核 | preflight 可执行 |
 | 无硬件 Python 感知测试 | 可执行 | 可执行但非必要 | 14 项通过 |
 | ROS Python bridge 测试 | source Humble 后可执行 | source Foxy 后应复核 | 2 项通过 |
-| 各 ROS 包 pytest | source ROS 后逐包执行 | 可复核 | 27 通过、9 跳过、1 失败 |
+| 各 ROS 包 pytest | source ROS 后逐包执行 | 可复核 | 28 通过、9 跳过、0 失败 |
 | `colcon build/test` | 临时目录干净构建 | 必须再次执行 | VM 构建和已注册测试通过 |
 | Go2 SDK/UDP、D1、相机和实物动作 | 不作为硬件验证 | 必须现场执行 | SKIP |
 
@@ -73,12 +73,12 @@ python3 -m pytest -q -p no:cacheprovider \
 
 ```text
 37 tests total
-27 passed
+28 passed
 9 skipped
-1 failed
+0 failed
 ```
 
-唯一真实失败是 `rk_tools/test/test_pep257.py`。`obstacle_direct_route_node.py` 三个 docstring 使用中文句号，产生 6 条 D400/D415。根据本轮禁改 `src` 的约束，该问题只记录，不修改源码、断言或 skip 规则。
+此前唯一真实失败是 `rk_tools/test/test_pep257.py`：`obstacle_direct_route_node.py` 三个 docstring 使用中文句号，共产生 6 条 D400/D415。现已仅将这三个 docstring 的句末改为 PEP257 接受的 ASCII 句号，包作用域测试通过；未修改测试断言或忽略规则。
 
 ### colcon
 
@@ -124,10 +124,10 @@ bash scripts/test_workspace.sh
 本轮统一脚本实际结果：
 
 ```text
-PASS=19 WARN=1 FAIL=1 SKIP=4
+PASS=20 WARN=1 FAIL=0 SKIP=4
 ```
 
-唯一 FAIL 是上述 `rk_tools` pep257；WARN 是当前审计分支本来就有索引清理和文档变更。四个 SKIP 为危险的全仓 D1 收集，以及 Go2/Foxy、D1、相机/实物硬件验证。
+上述 `rk_tools` pep257 失败已消除；WARN 是运行前工作区已有本轮源码和文档变更。四个 SKIP 为危险的全仓 D1 收集，以及 Go2/Foxy、D1、相机/实物硬件验证。
 
 ## 当前不可在 VM 完成
 

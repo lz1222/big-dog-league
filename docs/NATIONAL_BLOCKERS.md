@@ -150,7 +150,7 @@
 6. **Go2 UDP 路径无 ACK。** forwarder 只发送 UDP，外部 `go2_sdk_udp_server` 不在仓库，无法从本仓库证明解析、SDK 执行或硬件状态。
 7. **SDK direct tools 是条件构建。** `unitree_sdk2` 未找到时 CMake 只 warning，不生成 `go2_sdk_motion_action` 等可执行文件；多个 launch 又依赖这些工具或机器人绝对路径。
 8. **多个替代 bridge/arm/locomotion server 可争抢同一接口。** setup 和 launch 没有统一互斥选择机制，错误组合时 action server 或机器人后端不唯一。
-9. **全仓 pytest 仍不是单一全绿入口。** 裸 `pytest` 当前不在 PATH，返回 127；原始根级 `python3 -m pytest` 的 22 个 collection errors 已分类为 18 个同名测试模块冲突、3 个 `PYTHONPATH` 问题、1 个 D1 动态库问题，原收集阶段没有断言失败。D1 测试在 import 阶段可能直接驱动机械臂，不能自动收集。当前安全逐包执行共 37 项，结果为 27 passed、9 skipped、1 failed；唯一真实失败是 `rk_tools` pep257。`colcon test` 的 17 项全部来自 perception，覆盖仍不完整。统一安全入口和正确命令见 `docs/TEST_BASELINE.md`。
+9. **全仓 pytest 仍不是单一全绿入口。** 裸 `pytest` 当前不在 PATH，返回 127；原始根级 `python3 -m pytest` 的 22 个 collection errors 已分类为 18 个同名测试模块冲突、3 个 `PYTHONPATH` 问题、1 个 D1 动态库问题，原收集阶段没有断言失败。D1 测试在 import 阶段可能直接驱动机械臂，不能自动收集。当前安全逐包执行共 37 项，结果为 28 passed、9 skipped、0 failed；此前唯一真实失败 `rk_tools` pep257 已修复。`colcon test` 的 17 项全部来自 perception，覆盖仍不完整。统一安全入口和正确命令见 `docs/TEST_BASELINE.md`。
 
 ### P2
 
@@ -182,7 +182,7 @@
 ## 4. 下一轮进入实现前的最小退出条件
 
 1. **已完成：** 精确处理 Git 索引中的 5092 个生成物和 5 个根 `.venv` 条目；保留并记录 9 个 SDK `log` 源码头文件及必要预编译库。
-2. **部分完成：** 已建立安全统一测试入口和 22 个收集错误分类；仍需处理 `rk_tools` pep257 失败，并决定如何把其他包测试正式注册进 colcon。
+2. **部分完成：** 已建立安全统一测试入口和 22 个收集错误分类，`rk_tools` pep257 失败已修复；仍需决定如何把其他包测试正式注册进 colcon。
 3. 受控归档官方赛题规则和评分表，记录版本、哈希与获取日期，并冻结评分矩阵。
 4. 先确定唯一最终速度所有者和完整真实 launch 的组合契约。
 5. 为 `stairs_up_down`、起终点跳跃和三类警示动作分别确定真实 SDK 调用与 action result 语义。
