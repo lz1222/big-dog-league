@@ -150,14 +150,19 @@
 6. **Go2 UDP 路径无 ACK。** forwarder 只发送 UDP，外部 `go2_sdk_udp_server` 不在仓库，无法从本仓库证明解析、SDK 执行或硬件状态。
 7. **SDK direct tools 是条件构建。** `unitree_sdk2` 未找到时 CMake 只 warning，不生成 `go2_sdk_motion_action` 等可执行文件；多个 launch 又依赖这些工具或机器人绝对路径。
 8. **多个替代 bridge/arm/locomotion server 可争抢同一接口。** setup 和 launch 没有统一互斥选择机制，错误组合时 action server 或机器人后端不唯一。
-9. **测试基础设施不能提供全仓 pytest 基线。** 现有真实功能测试集中在 line tracker、sign detector 和 cmd_vel bridge；裸 `pytest` 命令当前不在 PATH，返回 127；改用 `python3 -m pytest` 后在 collection 阶段出现 22 个错误，未进入有效测试执行。错误包括重复模板测试模块名、项目包未加入 `PYTHONPATH`，以及 D1 测试硬编码缺失动态库。因此本轮结果必须记录为 `FAIL (collection)`，不能表述为 pytest 已通过。
-10. **Git 索引中的生成物必须在下一轮实现前处理。** preflight 统计当前 Git 索引中有 5101 个已跟踪路径命中 `build/install/log` 规则，另有 54 个路径命中 cache/venv 规则；`.gitignore` 不会自动取消已跟踪状态。该数字是路径分类结果，不代表所有 vendor 文件都能安全批量删除，必须先区分生成物、第三方依赖和确需保留的例外，再用独立清理提交收口。
+9. **全仓 pytest 仍不是单一全绿入口。** 裸 `pytest` 当前不在 PATH，返回 127；原始根级 `python3 -m pytest` 的 22 个 collection errors 已分类为 18 个同名测试模块冲突、3 个 `PYTHONPATH` 问题、1 个 D1 动态库问题，原收集阶段没有断言失败。D1 测试在 import 阶段可能直接驱动机械臂，不能自动收集。当前安全逐包执行共 37 项，结果为 27 passed、9 skipped、1 failed；唯一真实失败是 `rk_tools` pep257。`colcon test` 的 17 项全部来自 perception，覆盖仍不完整。统一安全入口和正确命令见 `docs/TEST_BASELINE.md`。
 
 ### P2
 
-11. **三个配置 YAML 为空。** `rk_config/config/arm/d1_presets.yaml`、`camera/d435i.yaml`、`robot_profiles/go2.yaml` 可语法解析但不提供配置内容。
-12. **package 元数据仍称多个混合包为 mock。** 不影响运行，但会误导启动与验收判断。
-13. **VM 测试结果不能替代机器人端硬件验证。** 当前只有源码层面的 Foxy/Humble 静态兼容性审计和 VM/Humble 构建测试结果，缺少机器人 Foxy 构建与运行记录。`colcon test` 通过只证明当前环境中已注册测试的结果；不能替代机器人端 topic/action 联调、Unitree SDK/UDP 实际执行、机械臂硬件 ACK、真实相机输入及实物动作验收。
+10. **三个配置 YAML 为空。** `rk_config/config/arm/d1_presets.yaml`、`camera/d435i.yaml`、`robot_profiles/go2.yaml` 可语法解析但不提供配置内容。
+11. **package 元数据仍称多个混合包为 mock。** 不影响运行，但会误导启动与验收判断。
+12. **VM 测试结果不能替代机器人端硬件验证。** 当前只有源码层面的 Foxy/Humble 静态兼容性审计和 VM/Humble 构建测试结果，缺少机器人 Foxy 构建与运行记录。`colcon test` 通过只证明当前环境中已注册测试的结果；不能替代机器人端 topic/action 联调、Unitree SDK/UDP 实际执行、机械臂硬件 ACK、真实相机输入及实物动作验收。
+
+### 已处理的仓库卫生项
+
+- **Git 索引生成物已处理。** 原宽泛统计的 5101 个 `build/install/log` 路径中，有 9 个是必须保留的 Unitree SDK `common/log/*.hpp` 源码头文件；实际生成树为 5092 项。缓存/环境命中 54 项，其中 49 项与 install 树重叠，另 5 项属于根 `.venv`。本轮用精确路径从索引移除的唯一文件总数为 5097，本地文件未删除，9 个源码头文件和必要 SDK 库继续追踪。
+- `.gitignore` 和 `national_preflight.sh` 已改为精确识别根构建输出及已知第三方生成树，不再把 SDK 源码 `log` 目录误判为日志。
+- 这是仓库卫生修复，不代表机械臂 ACK、跳跃、台阶、状态机、感知或 `cmd_vel` 控制权等比赛功能已经完成。
 
 ## 3. 风险最高的 10 个问题
 
@@ -176,8 +181,8 @@
 
 ## 4. 下一轮进入实现前的最小退出条件
 
-1. 在独立清理提交中审查并处理 Git 已跟踪的 5101 个 `build/install/log` 路径和 54 个 cache/venv 路径，使预检生成物检查通过；确需保留的第三方例外必须精确列出并说明理由。
-2. 修复全仓 pytest 收集基础设施，使标准测试入口可执行且 collection 为零错误，再区分单元、集成和硬件测试结果。
+1. **已完成：** 精确处理 Git 索引中的 5092 个生成物和 5 个根 `.venv` 条目；保留并记录 9 个 SDK `log` 源码头文件及必要预编译库。
+2. **部分完成：** 已建立安全统一测试入口和 22 个收集错误分类；仍需处理 `rk_tools` pep257 失败，并决定如何把其他包测试正式注册进 colcon。
 3. 受控归档官方赛题规则和评分表，记录版本、哈希与获取日期，并冻结评分矩阵。
 4. 先确定唯一最终速度所有者和完整真实 launch 的组合契约。
 5. 为 `stairs_up_down`、起终点跳跃和三类警示动作分别确定真实 SDK 调用与 action result 语义。

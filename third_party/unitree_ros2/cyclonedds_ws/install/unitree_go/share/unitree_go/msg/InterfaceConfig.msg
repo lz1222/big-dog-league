@@ -1,1 +1,0 @@
-/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/src/unitree/unitree_go/msg/InterfaceConfig.msg

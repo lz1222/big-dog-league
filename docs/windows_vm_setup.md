@@ -8,7 +8,7 @@ Recommended workflow:
 1. Install ROS2 Humble in Ubuntu 22.04.
 2. Enable SSH in Ubuntu.
 3. Connect from Windows VS Code through Remote SSH.
-4. Open `/home/lzbb/rk_inspection_ws` in the remote VS Code window.
+4. Open `~/rk_inspection_ws` in the remote VS Code window.
 5. Edit only source files under `src/`, plus project docs and scripts.
 
 Avoid placing the colcon workspace in a Windows shared folder. Shared folders

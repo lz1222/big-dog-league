@@ -1,1 +1,0 @@
-/home/lzbb/rk_inspection_ws/third_party/unitree_ros2/cyclonedds_ws/build/unitree_api/rosidl_generator_rs/unitree_api/rust/src/msg.rs

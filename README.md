@@ -7,6 +7,8 @@
 - [170 分评分矩阵](docs/NATIONAL_SCORE_MATRIX.md)
 - [当前实际架构](docs/ARCHITECTURE_CURRENT.md)
 - [国赛阻塞项](docs/NATIONAL_BLOCKERS.md)
+- [测试基线](docs/TEST_BASELINE.md)
+- [第三方资产审计](docs/REPOSITORY_ASSET_AUDIT.md)
 
 当前没有任何一个 170 分场地项具备本仓库内可追溯的硬件验收证据，也没有真实 170 分完整比赛 launch。
 
@@ -130,14 +132,25 @@ src/rk_bringup/scripts/stop_line_system.sh
 
 - 本次改动是否包含 `build/install/log`、cache、录制媒体或大调试图片
 - 历史已跟踪生成物
+- `.gitignore` 是否覆盖关键生成物且没有吞掉源码/SDK 库
+- 已跟踪大文件和第三方二进制
 - `package.xml` / `setup.py` 基本一致性和 console target
-- launch 中的内部 executable
+- launch 中的内部、外部和条件编译 executable
 - YAML 解析和空配置
-- Python 语法
+- Python 与 Shell 语法
+- 文档、本地目录和机器人端绝对路径
 - 关键 ROS message/action
 - 合并冲突标记
 
-当前基线预期会因历史已跟踪的 `third_party` build/install/log 与 cache/venv 文件返回 FAIL；这是真实审计结果，不能通过忽略输出伪装成 PASS。清理 vendor/generated 历史应另开范围清晰的变更，避免误删 SDK 必需文件。
+`Repository Hygiene and Test Baseline` 已从 Git 索引精确移除 5092 个第三方构建输出和 5 个根 `.venv` 条目，本地目录没有被删除。原宽泛统计还包含 9 个路径名带 `log` 的真实 SDK 头文件，这些文件和六个必要的预编译库继续保留。完整分类见 `docs/REPOSITORY_ASSET_AUDIT.md`。
+
+统一测试入口：
+
+```bash
+bash scripts/test_workspace.sh
+```
+
+该脚本自动识别/source 可用 ROS，把 build/install/log 和 cache 写入独立 `/tmp`，并在单项失败后继续收集结果。它会明确跳过可能在 import 阶段驱动 D1 机械臂的危险全仓 pytest 收集，以及没有硬件条件的 Go2、D1、相机和实物任务。VM 结果仍不能替代机器人 Foxy 验证。
 
 正式机器人启动后还必须做运行时所有权检查：
 
@@ -166,15 +179,16 @@ ros2 action list
 
 ## 基础验证
 
-推荐在干净环境中执行并保留完整输出：
+推荐使用统一脚本执行并保留完整输出：
 
 ```bash
-python3 -m compileall src
-pytest
-colcon build --symlink-install
+bash scripts/national_preflight.sh
+bash scripts/test_workspace.sh
 ```
 
-注意：`compileall` 和 `pytest` 可能生成已忽略的 cache；提交前仍要运行 preflight 和 `git status --short`。Humble 构建建议使用 `/tmp` build/install/log base，机器人端必须再用 Foxy 构建和运行验证。无法运行的检查应在 PR 中写明原因，不得填成成功。
+不要从仓库根直接运行未限定范围的 pytest：`third_party/unitree_d1_sdk/src/test_grasp.py` 在 import/collection 阶段存在硬件副作用。正确的安全收集、定向测试和逐包测试命令见 `docs/TEST_BASELINE.md`。
+
+注意：`compileall` 和 pytest 可能生成 cache；统一脚本已把这些输出定向到 `/tmp`。机器人端仍必须用 Foxy 重新构建和运行验证。无法运行的检查必须记录为 WARN/SKIP/FAIL，不得填成成功。
 
 ## 文档新旧状态
 
@@ -185,6 +199,8 @@ colcon build --symlink-install
 - `docs/NATIONAL_SCORE_MATRIX.md`
 - `docs/ARCHITECTURE_CURRENT.md`
 - `docs/NATIONAL_BLOCKERS.md`
+- `docs/TEST_BASELINE.md`
+- `docs/REPOSITORY_ASSET_AUDIT.md`
 - `src/rk_bringup/README_line_system.md`（当前 line-course 子系统操作说明；仍需以源码和机器人参数为准）
 
 ### 规划文档：不能作为实现证明
@@ -218,4 +234,4 @@ colcon build --symlink-install
 - rosbag、数据库和录制视频
 - 大体积 debug 图片或临时抓图
 
-仓库历史中已经存在部分已跟踪 vendor build/install/log 和 cache 文件；本轮审计不做高风险批量删除，也不新增这些产物。
+历史 vendor build/install/log、字节码和根 `.venv` 已按精确路径从 Git 索引移除，本地文件仍在。Unitree SDK 源码、`common/log` 头文件、双架构静态库和 CycloneDDS 动态库均继续保留；不要对整个 `third_party/`、vendor 或 SDK 目录应用忽略或批量删除。
