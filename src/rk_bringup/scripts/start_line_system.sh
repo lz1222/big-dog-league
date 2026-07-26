@@ -72,6 +72,7 @@ workspace_packages_ready() {
         && ros2 pkg prefix rk_perception >/dev/null 2>&1 \
         && ros2 pkg prefix rk_navigation >/dev/null 2>&1 \
         && ros2 pkg prefix rk_mission >/dev/null 2>&1 \
+        && ros2 pkg prefix rk_safety >/dev/null 2>&1 \
         && ros2 pkg prefix rk_go2_sdk_bridge >/dev/null 2>&1 \
         && ros2 pkg prefix rk_tools >/dev/null 2>&1
 }
@@ -163,6 +164,7 @@ stop_existing_processes() {
     pkill -f "competition_line_nav.launch.py" || true
     pkill -f "go2_sdk_udp_server" || true
     pkill -f "cmd_vel_udp_forwarder.py" || true
+    pkill -f "command_mux_node" || true
     pkill -f "real_line_tracker_node" || true
     pkill -f "line_follower_node" || true
     pkill -f "line_course_mission_node" || true
@@ -216,6 +218,13 @@ topic_has_subscription() {
 
     ros2 topic info "$topic_name" 2>/dev/null \
         | grep -Eq "Subscription count: [1-9][0-9]*"
+}
+
+topic_has_single_publisher() {
+    local topic_name="$1"
+
+    ros2 topic info "$topic_name" 2>/dev/null \
+        | grep -Eq "Publisher count: 1$"
 }
 
 wait_for_topic_publisher() {
@@ -294,6 +303,9 @@ wait_for_topic_subscription "/navigation/cmd_vel" 10 || {
     exit 1
 }
 
+start_background "command_mux" \
+    "exec ros2 run rk_safety command_mux_node --ros-args -p mission_cmd_topic:=/control/mission_cmd -p estop_topic:=/safety/estop -p enable_estop_service:=true -p estop_service_name:=/safety/estop -p output_cmd_topic:=/navigation/cmd_vel"
+
 start_background "realsense_camera" \
     "exec ros2 launch rk_bringup realsense_low_bandwidth.launch.py enable_color:=true enable_depth:=${ENABLE_DEPTH} rgb_camera.profile:=${RGB_PROFILE} depth_module.profile:=${DEPTH_PROFILE}"
 
@@ -306,11 +318,17 @@ start_background "line_follower" \
     "exec ros2 run rk_navigation line_follower_node --ros-args --params-file \"${LINE_CONFIG}\" -p debug_log:=${LINE_DEBUG_LOG} -p min_driving_speed:=${LINE_MIN_SPEED} -p base_speed:=${LINE_BASE_SPEED} -p mid_speed:=${LINE_MID_SPEED} -p slow_speed:=${LINE_SLOW_SPEED} -p short_lost_linear_speed:=${SHORT_LOST_LINEAR_SPEED} -p search_linear_speed:=${SEARCH_LINEAR_SPEED}"
 
 start_background "line_course_mission" \
-    "exec ros2 run rk_mission line_course_mission_node --ros-args --params-file \"${LINE_CONFIG}\" -p sdk_network_interface:=${SDK_INTERFACE}"
+    "exec ros2 run rk_mission line_course_mission_node --ros-args --params-file \"${LINE_CONFIG}\" -p cmd_vel_topic:=/control/mission_cmd -p sdk_network_interface:=${SDK_INTERFACE}"
 
 wait_for_topic_publisher "/perception/line_track" 15 || true
 wait_for_topic_publisher "/navigation/line_follow_cmd_suggested" 10 || true
+wait_for_topic_publisher "/control/mission_cmd" 10 || true
 wait_for_topic_publisher "/navigation/cmd_vel" 10 || true
+if ! topic_has_single_publisher "/navigation/cmd_vel"; then
+    echo "ERROR: /navigation/cmd_vel must have exactly one publisher." >&2
+    ros2 topic info -v "/navigation/cmd_vel" >&2 || true
+    exit 1
+fi
 wait_for_topic_subscription "/navigation/cmd_vel" 5 || {
     echo "ERROR: /navigation/cmd_vel subscriber disappeared after startup." >&2
     tail -n 40 "${LOG_DIR}/cmd_vel_udp_forwarder.log" >&2 || true
@@ -335,6 +353,7 @@ Logs:
   tail -f ${LOG_DIR}/real_line_tracker.log
   tail -f ${LOG_DIR}/line_follower.log
   tail -f ${LOG_DIR}/line_course_mission.log
+  tail -f ${LOG_DIR}/command_mux.log
   tail -f ${LOG_DIR}/cmd_vel_udp_forwarder.log
 
 Motion is NOT started yet.

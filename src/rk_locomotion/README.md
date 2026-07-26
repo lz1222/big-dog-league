@@ -1,8 +1,8 @@
 # rk_locomotion
 
-Basic gait control layer for the first locomotion phase. It exposes a single
-JSON command topic while reusing the existing `/navigation/cmd_vel` to Unitree
-bridge.
+Basic gait control layer for the first locomotion phase. It exposes a JSON
+command topic and publishes velocity candidates to `/control/locomotion_cmd`.
+The competition control mux owns the final `/navigation/cmd_vel` output.
 
 ## Interfaces
 
@@ -11,6 +11,7 @@ bridge.
 - Control lock: `/gait/control_lock` (`std_msgs/Bool`)
 - Debug: `/gait/debug` (`std_msgs/String`)
 - Current mode: `/gait/current_mode` (`std_msgs/String`)
+- Velocity candidate: `/control/locomotion_cmd` (`geometry_msgs/Twist`)
 
 Supported commands:
 
@@ -40,7 +41,9 @@ They return `FAILED` with a warning instead of modifying existing driver code.
 
 `LOW_SPEED_MOVE` accepts `vx`, `vy`, and `wz` fields in the JSON command. The
 gait layer validates and clamps all three values before publishing a
-`geometry_msgs/Twist` command to `/navigation/cmd_vel`.
+`geometry_msgs/Twist` command to `/control/locomotion_cmd`. When
+`/gait/control_lock` is true, `command_mux_node` may select that fresh command
+and publish it to `/navigation/cmd_vel`.
 
 The current lower-level cmd_vel bridge has only been confirmed to map
 `linear.x` and `angular.z` into Unitree Sport Move. `linear.y` / `vy` lateral
@@ -97,7 +100,8 @@ ros2 launch rk_bringup obstacle_practical.launch.py \
   require_safety_data:=true
 ```
 
-This uses the same SDK UDP bridge as the working line-following stack:
+This standalone hardware-debug launch explicitly preserves the legacy direct
+gait output and uses the same SDK UDP bridge as the working line-following stack:
 `/navigation/cmd_vel -> cmd_vel_udp_forwarder.py -> go2_sdk_udp_server ->
 Unitree SportClient.Move()`. If the SDK server is already running in another
 terminal, add `start_sdk_server:=false`.
@@ -172,8 +176,9 @@ ros2 topic pub --once /gait/command_json std_msgs/String \
 
 The obstacle commands are conservative framework sequences, not aggressive
 jumps. They stop first, run two short low-speed forward phases, and recover with
-zero velocity. Keep watching `/navigation/cmd_vel` and `/gait/control_lock`
-during bench testing.
+zero velocity. Keep watching `/control/locomotion_cmd`,
+`/navigation/cmd_vel`, and `/gait/control_lock` during mux-integrated bench
+testing.
 
 Watch the control lock:
 
@@ -184,6 +189,7 @@ ros2 topic echo /gait/control_lock std_msgs/msg/Bool
 Watch the velocity sent to the existing bridge:
 
 ```bash
+ros2 topic echo /control/locomotion_cmd geometry_msgs/msg/Twist
 ros2 topic echo /navigation/cmd_vel geometry_msgs/msg/Twist
 ```
 

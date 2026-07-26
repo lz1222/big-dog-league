@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -610,6 +611,626 @@ def check_launch_executables():
         )
 
 
+def static_launch_entries(tree):
+    entries = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = call_name(node)
+        keywords = keyword_map(node)
+        package = None
+        executable = None
+        if name == 'Node':
+            package = eval_static(keywords.get('package'), {})
+            executable = eval_static(keywords.get('executable'), {})
+        elif name == 'ExecuteProcess':
+            cmd_node = keywords.get('cmd')
+            if isinstance(cmd_node, (ast.List, ast.Tuple)) and len(cmd_node.elts) >= 4:
+                prefix = [eval_static(item, {}) for item in cmd_node.elts[:4]]
+                if (
+                    prefix[:2] == ['ros2', 'run']
+                    and all(isinstance(item, str) for item in prefix[2:])
+                ):
+                    package, executable = prefix[2], prefix[3]
+        if isinstance(package, str) and isinstance(executable, str):
+            entries.append((package, executable, node))
+    return entries
+
+
+def static_parameter_values(call):
+    parameters = keyword_map(call).get('parameters')
+    values = {}
+    if parameters is None:
+        return values
+    for node in ast.walk(parameters):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key_node, value_node in zip(node.keys, node.values):
+            key = eval_static(key_node, {})
+            value = eval_static(value_node, {})
+            if isinstance(key, str) and value is not None:
+                values.setdefault(key, []).append(value)
+    return values
+
+
+def check_competition_control_authority():
+    required_paths = [
+        ROOT / 'src' / 'rk_safety' / 'rk_safety' / 'command_mux_core.py',
+        ROOT / 'src' / 'rk_safety' / 'rk_safety' / 'command_mux_node.py',
+        ROOT / 'src' / 'rk_safety' / 'test' / 'test_command_mux_core.py',
+    ]
+    missing = [
+        path.relative_to(ROOT)
+        for path in required_paths
+        if not path.is_file()
+    ]
+    if missing:
+        REPORT.fail(
+            'Competition control authority files',
+            f'missing: {sample(missing)}',
+        )
+    else:
+        REPORT.pass_(
+            'Competition control authority files',
+            'command mux core, ROS node, and pure-core test are present',
+        )
+
+    launch_path = (
+        ROOT / 'src' / 'rk_bringup' / 'launch'
+        / 'competition_line_nav.launch.py'
+    )
+    try:
+        tree = ast.parse(
+            launch_path.read_text(encoding='utf-8'),
+            str(launch_path),
+        )
+    except (OSError, SyntaxError) as error:
+        REPORT.fail('Competition control authority launch wiring', str(error))
+        REPORT.fail(
+            'Competition launch excludes alternate cmd_vel publishers',
+            'competition launch could not be inspected',
+        )
+        return
+
+    entries = static_launch_entries(tree)
+
+    def matching_calls(package, executable):
+        return [
+            call for entry_package, entry_executable, call in entries
+            if entry_package == package and entry_executable == executable
+        ]
+
+    wiring_errors = []
+    mux_calls = matching_calls('rk_safety', 'command_mux_node')
+    mission_calls = matching_calls(
+        'rk_mission',
+        'line_course_mission_node',
+    )
+    forwarder_calls = matching_calls(
+        'rk_go2_sdk_bridge',
+        'cmd_vel_udp_forwarder.py',
+    )
+    expected_counts = (
+        ('rk_safety/command_mux_node', mux_calls),
+        ('rk_mission/line_course_mission_node', mission_calls),
+        ('rk_go2_sdk_bridge/cmd_vel_udp_forwarder.py', forwarder_calls),
+    )
+    for label, calls in expected_counts:
+        if len(calls) != 1:
+            wiring_errors.append(f'{label} launch count={len(calls)}')
+
+    parameter_checks = (
+        (
+            'line_course_mission cmd_vel_topic',
+            mission_calls,
+            'cmd_vel_topic',
+            '/control/mission_cmd',
+        ),
+        (
+            'command_mux output_cmd_topic',
+            mux_calls,
+            'output_cmd_topic',
+            '/navigation/cmd_vel',
+        ),
+        (
+            'command_mux enable_estop_service',
+            mux_calls,
+            'enable_estop_service',
+            True,
+        ),
+        (
+            'command_mux estop_service_name',
+            mux_calls,
+            'estop_service_name',
+            '/safety/estop',
+        ),
+        (
+            'UDP forwarder cmd_vel_topic',
+            forwarder_calls,
+            'cmd_vel_topic',
+            '/navigation/cmd_vel',
+        ),
+    )
+    for label, calls, parameter, expected in parameter_checks:
+        if len(calls) != 1:
+            continue
+        values = static_parameter_values(calls[0]).get(parameter, [])
+        if expected not in values:
+            wiring_errors.append(
+                f'{label} must be statically set to {expected}'
+            )
+
+    if wiring_errors:
+        REPORT.fail(
+            'Competition control authority launch wiring',
+            '; '.join(wiring_errors),
+        )
+    else:
+        REPORT.pass_(
+            'Competition control authority launch wiring',
+            'mission -> /control/mission_cmd -> command_mux -> '
+            '/navigation/cmd_vel -> UDP forwarder',
+        )
+
+    background_script = (
+        ROOT / 'src' / 'rk_bringup' / 'scripts' / 'start_line_system.sh'
+    )
+    background_requirements = {
+        'ros2 run rk_safety command_mux_node':
+            'command mux process',
+        'cmd_vel_topic:=/control/mission_cmd':
+            'line-course mission candidate output',
+        'mission_cmd_topic:=/control/mission_cmd':
+            'command mux mission input',
+        'enable_estop_service:=true':
+            'command mux SetBool estop service',
+        'estop_service_name:=/safety/estop':
+            'command mux estop service name',
+        'output_cmd_topic:=/navigation/cmd_vel':
+            'command mux final output',
+    }
+    try:
+        background_text = background_script.read_text(encoding='utf-8')
+    except OSError as error:
+        REPORT.fail('Background line-system control wiring', str(error))
+    else:
+        missing_background = [
+            label
+            for snippet, label in background_requirements.items()
+            if snippet not in background_text
+        ]
+        if missing_background:
+            REPORT.fail(
+                'Background line-system control wiring',
+                'missing: {}'.format(', '.join(missing_background)),
+            )
+        else:
+            REPORT.pass_(
+                'Background line-system control wiring',
+                'start_line_system uses the same mission -> mux -> final path',
+            )
+
+    forbidden_exact = {
+        'cmd_vel_speed_sweep_node',
+        'gait_basic_test_node',
+        'gait_control_node',
+        'keyboard_route_node',
+        'mission_state_machine_node',
+        'obstacle_direct_route_node',
+        'safety_node',
+        'two_step_walk_test_node',
+    }
+    forbidden = []
+    unexpected_final_topic = []
+    allowed_final_topic = {
+        ('rk_safety', 'command_mux_node'),
+        ('rk_go2_sdk_bridge', 'cmd_vel_udp_forwarder.py'),
+    }
+    for package, executable, call in entries:
+        lowered = executable.lower()
+        if (
+            executable in forbidden_exact
+            or 'keyboard' in lowered
+            or 'mock' in lowered
+            or 'obstacle_direct' in lowered
+        ):
+            forbidden.append(f'{package}/{executable}')
+        parameter_values = static_parameter_values(call)
+        final_topic_parameters = [
+            name
+            for name, values in parameter_values.items()
+            if (
+                name in {'cmd_vel_topic', 'output_cmd_topic'}
+                and '/navigation/cmd_vel' in values
+            )
+        ]
+        if (
+            final_topic_parameters
+            and (package, executable) not in allowed_final_topic
+        ):
+            unexpected_final_topic.append(
+                f'{package}/{executable} '
+                f'({", ".join(final_topic_parameters)})'
+            )
+
+    if forbidden or unexpected_final_topic:
+        details = []
+        if forbidden:
+            details.append(
+                f'forbidden nodes: {sample(set(forbidden), limit=8)}'
+            )
+        if unexpected_final_topic:
+            details.append(
+                'other final-topic wiring: '
+                f'{sample(set(unexpected_final_topic), limit=8)}'
+            )
+        REPORT.fail(
+            'Competition launch excludes alternate cmd_vel publishers',
+            '; '.join(details),
+        )
+    else:
+        REPORT.pass_(
+            'Competition launch excludes alternate cmd_vel publishers',
+            'no legacy safety/keyboard/mock/obstacle-direct/gait/test '
+            'publisher is started; final topic appears only on mux output '
+            'and UDP input',
+        )
+
+    test_path = (
+        ROOT / 'src' / 'rk_safety' / 'test'
+        / 'test_command_mux_core.py'
+    )
+    if not test_path.is_file():
+        REPORT.fail(
+            'Command mux pure-core tests',
+            f'missing: {test_path.relative_to(ROOT)}',
+        )
+        return
+
+    environment = os.environ.copy()
+    safety_source = str(ROOT / 'src' / 'rk_safety')
+    existing_pythonpath = environment.get('PYTHONPATH')
+    environment['PYTHONPATH'] = (
+        safety_source
+        if not existing_pythonpath
+        else safety_source + os.pathsep + existing_pythonpath
+    )
+    environment['PYTHONDONTWRITEBYTECODE'] = '1'
+    environment['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] = '1'
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix='rk-command-mux-preflight-',
+        ) as temporary_directory:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    '-m',
+                    'pytest',
+                    str(test_path),
+                    '-q',
+                    '-p',
+                    'no:cacheprovider',
+                ],
+                check=False,
+                cwd=temporary_directory,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120,
+            )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        REPORT.fail('Command mux pure-core tests', str(error))
+        return
+
+    output_lines = [
+        line.strip()
+        for line in (result.stdout + '\n' + result.stderr).splitlines()
+        if line.strip()
+    ]
+    detail = ' | '.join(output_lines[-4:]) or f'exit={result.returncode}'
+    if result.returncode == 0:
+        REPORT.pass_('Command mux pure-core tests', detail)
+    else:
+        REPORT.fail('Command mux pure-core tests', detail)
+
+
+def check_competition_estop_contract():
+    errors = []
+    package_path = ROOT / 'src' / 'rk_safety' / 'package.xml'
+    try:
+        package_root = ET.parse(package_path).getroot()
+    except (ET.ParseError, OSError) as error:
+        errors.append(f'{package_path.relative_to(ROOT)}: {error}')
+    else:
+        exec_dependencies = {
+            (node.text or '').strip()
+            for node in package_root.findall('exec_depend')
+        }
+        if 'std_srvs' not in exec_dependencies:
+            errors.append('rk_safety/package.xml lacks exec_depend std_srvs')
+
+    node_path = (
+        ROOT / 'src' / 'rk_safety' / 'rk_safety'
+        / 'command_mux_node.py'
+    )
+    try:
+        node_tree = ast.parse(
+            node_path.read_text(encoding='utf-8'),
+            str(node_path),
+        )
+    except (OSError, SyntaxError) as error:
+        errors.append(f'{node_path.relative_to(ROOT)}: {error}')
+        node_tree = None
+
+    if node_tree is not None:
+        imports_set_bool = any(
+            isinstance(node, ast.ImportFrom)
+            and node.module == 'std_srvs.srv'
+            and any(alias.name == 'SetBool' for alias in node.names)
+            for node in ast.walk(node_tree)
+        )
+        if not imports_set_bool:
+            errors.append('command_mux_node does not import std_srvs/SetBool')
+
+        command_mux_class = next(
+            (
+                node for node in node_tree.body
+                if isinstance(node, ast.ClassDef)
+                and node.name == 'CommandMuxNode'
+            ),
+            None,
+        )
+        if command_mux_class is None:
+            errors.append('CommandMuxNode class is missing')
+        else:
+            methods = {
+                node.name: node
+                for node in command_mux_class.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+
+            parameter_defaults = {}
+            for call in (
+                node for node in ast.walk(command_mux_class)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == 'declare_parameter'
+                and len(node.args) >= 2
+            ):
+                name = eval_static(call.args[0], {})
+                value = eval_static(call.args[1], {})
+                if isinstance(name, str):
+                    parameter_defaults[name] = value
+            expected_defaults = {
+                'enable_estop_service': True,
+                'estop_service_name': '/safety/estop',
+            }
+            for name, expected in expected_defaults.items():
+                if parameter_defaults.get(name) != expected:
+                    errors.append(
+                        'command_mux_node default {} must be {!r}'.format(
+                            name,
+                            expected,
+                        )
+                    )
+
+            service_calls = [
+                call for call in ast.walk(command_mux_class)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == 'create_service'
+            ]
+            has_set_bool_service = any(
+                len(call.args) >= 3
+                and isinstance(call.args[0], ast.Name)
+                and call.args[0].id == 'SetBool'
+                and isinstance(call.args[2], ast.Attribute)
+                and call.args[2].attr == '_on_estop_service'
+                for call in service_calls
+            )
+            if not has_set_bool_service:
+                errors.append(
+                    'command_mux_node lacks SetBool/_on_estop_service'
+                )
+
+            subscription_calls = [
+                call for call in ast.walk(command_mux_class)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == 'create_subscription'
+            ]
+            has_estop_subscription = any(
+                len(call.args) >= 3
+                and isinstance(call.args[0], ast.Name)
+                and call.args[0].id == 'Bool'
+                and isinstance(call.args[2], ast.Attribute)
+                and call.args[2].attr == '_on_estop'
+                for call in subscription_calls
+            )
+            if not has_estop_subscription:
+                errors.append(
+                    'command_mux_node lacks Bool/_on_estop subscription'
+                )
+
+            def method_calls(method_name, called_name):
+                method = methods.get(method_name)
+                if method is None:
+                    return False
+                return any(
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and call.func.attr == called_name
+                    for call in ast.walk(method)
+                )
+
+            for callback in ('_on_estop', '_on_estop_service'):
+                if not method_calls(callback, '_transition_estop'):
+                    errors.append(
+                        '{} must call shared _transition_estop'.format(
+                            callback
+                        )
+                    )
+            if not method_calls('_transition_estop', 'set_estop'):
+                errors.append(
+                    '_transition_estop must update CommandMuxCore.set_estop'
+                )
+
+    if errors:
+        REPORT.fail(
+            'Competition SetBool estop contract',
+            '; '.join(errors[:10]),
+        )
+    else:
+        REPORT.pass_(
+            'Competition SetBool estop contract',
+            'std_srvs dependency and shared topic/service transition checked',
+        )
+
+    stop_path = (
+        ROOT / 'src' / 'rk_bringup' / 'scripts'
+        / 'stop_line_system.sh'
+    )
+    try:
+        stop_text = stop_path.read_text(encoding='utf-8')
+    except OSError as error:
+        REPORT.fail('Line-system shutdown authority', str(error))
+    else:
+        shutdown_errors = []
+        fallback_match = re.search(
+            r'(?ms)^emergency_cmd_vel_fallback\(\)\s*\{\s*\n'
+            r'(?P<body>.*?)^\}',
+            stop_text,
+        )
+        direct_publish = re.compile(
+            r'\bros2[ \t]+topic[ \t]+pub(?:[ \t]+--once)?'
+            r'[ \t]+/navigation/cmd_vel\b'
+        )
+        all_direct_count = len(direct_publish.findall(stop_text))
+        normal_path_text = stop_text
+        if fallback_match is None:
+            shutdown_errors.append(
+                'emergency_cmd_vel_fallback function is missing'
+            )
+        else:
+            fallback_body = fallback_match.group('body')
+            outside_fallback = (
+                stop_text[:fallback_match.start()]
+                + stop_text[fallback_match.end():]
+            )
+            normal_path_text = outside_fallback
+            fallback_direct_count = len(
+                direct_publish.findall(fallback_body)
+            )
+            outside_direct_count = len(
+                direct_publish.findall(outside_fallback)
+            )
+            if 'EMERGENCY FALLBACK' not in fallback_body:
+                shutdown_errors.append(
+                    'direct fallback lacks EMERGENCY FALLBACK warning'
+                )
+            if fallback_direct_count != 1:
+                shutdown_errors.append(
+                    'fallback direct cmd_vel publish count={}'.format(
+                        fallback_direct_count
+                    )
+                )
+            if outside_direct_count:
+                shutdown_errors.append(
+                    'direct cmd_vel publish exists outside emergency fallback'
+                )
+
+        normal_requirements = {
+            '/safety/estop': 'SetBool service name',
+            'std_srvs/srv/SetBool': 'SetBool service type',
+            'ros2 service call': 'normal estop service call',
+            '{data: true}': 'estop=true request',
+        }
+        missing_normal = [
+            label
+            for snippet, label in normal_requirements.items()
+            if snippet not in normal_path_text
+        ]
+        if missing_normal:
+            shutdown_errors.append(
+                'missing normal path: {}'.format(
+                    ', '.join(missing_normal)
+                )
+            )
+        if all_direct_count != 1:
+            shutdown_errors.append(
+                'shutdown direct cmd_vel publish total={}'.format(
+                    all_direct_count
+                )
+            )
+
+        if shutdown_errors:
+            REPORT.fail(
+                'Line-system shutdown authority',
+                '; '.join(shutdown_errors),
+            )
+        else:
+            REPORT.pass_(
+                'Line-system shutdown authority',
+                'normal path calls SetBool; one direct zero publish is '
+                'isolated in the marked EMERGENCY FALLBACK',
+            )
+
+    authority_docs = [
+        ROOT / 'docs' / 'CONTROL_AUTHORITY.md',
+        ROOT / 'src' / 'rk_bringup' / 'README_line_system.md',
+    ]
+    documentation_errors = []
+    unique_publisher = re.compile(
+        r'(唯一.{0,80}发布者|only.{0,80}publisher|'
+        r'unique.{0,80}(?:publisher|output))',
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for path in authority_docs:
+        try:
+            text = path.read_text(encoding='utf-8')
+        except OSError as error:
+            documentation_errors.append(
+                f'{path.relative_to(ROOT)}: {error}'
+            )
+            continue
+        relative = path.relative_to(ROOT)
+        required = {
+            'command_mux_node': 'normal mux owner',
+            '/navigation/cmd_vel': 'final velocity topic',
+            'std_srvs/srv/SetBool': 'normal SetBool stop path',
+            'stop_line_system.sh': 'shutdown entry point',
+            'EMERGENCY FALLBACK': 'explicit fallback marker',
+        }
+        missing = [
+            label for snippet, label in required.items()
+            if snippet not in text
+        ]
+        if not unique_publisher.search(text):
+            missing.append('normal unique-publisher statement')
+        lowered = text.lower()
+        if '正常' not in text and 'normal' not in lowered:
+            missing.append('normal-path label')
+        if '直接' not in text and 'direct' not in lowered:
+            missing.append('direct-fallback explanation')
+        if missing:
+            documentation_errors.append(
+                '{} missing: {}'.format(relative, ', '.join(missing))
+            )
+
+    if documentation_errors:
+        REPORT.fail(
+            'Control authority fallback documentation',
+            '; '.join(documentation_errors),
+        )
+    else:
+        REPORT.pass_(
+            'Control authority fallback documentation',
+            'authoritative docs distinguish normal mux ownership from the '
+            'marked direct-publish emergency fallback',
+        )
+
+
 def check_yaml():
     yaml_paths = sorted((ROOT / 'src').glob('**/*.yaml'))
     yaml_paths.extend(sorted((ROOT / 'src').glob('**/*.yml')))
@@ -828,6 +1449,8 @@ check_gitignore()
 check_packages()
 check_console_targets()
 check_launch_executables()
+check_competition_control_authority()
+check_competition_estop_contract()
 check_yaml()
 check_python_syntax()
 check_shell_syntax()

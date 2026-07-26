@@ -16,6 +16,7 @@
   <exec_depend>rk_unitree_driver</exec_depend>
   <exec_depend>rk_tools</exec_depend>
   <exec_depend>rk_mission</exec_depend>
+  <exec_depend>rk_safety</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>

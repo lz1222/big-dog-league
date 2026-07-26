@@ -117,6 +117,8 @@ def generate_launch_description():
             parameters=[
                 gait_config,
                 {
+                    # Standalone action debug keeps the existing direct path.
+                    'cmd_vel_topic': '/navigation/cmd_vel',
                     'obstacle_safety.enable_depth': False,
                     'enable_motion_action': True,
                 },

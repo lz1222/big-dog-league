@@ -469,7 +469,7 @@ class GaitControlNode(Node):
 
     def _declare_parameters(self):
         parameters = {
-            'cmd_vel_topic': '/navigation/cmd_vel',
+            'cmd_vel_topic': '/control/locomotion_cmd',
             'status_topic': '/gait/status',
             'control_lock_topic': '/gait/control_lock',
             'debug_topic': '/gait/debug',

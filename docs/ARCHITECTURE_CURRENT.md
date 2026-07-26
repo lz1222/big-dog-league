@@ -2,14 +2,20 @@
 
 ## 审计范围与结论
 
-本文记录 `master` 提交 `1046004` 的实际源码和 launch 组合。它描述“现在有什么、实际怎样连”，不把规划文档、mock 成功或尚未接线的 adapter 当成已实现功能。
+本文记录 `codex/national-control-architecture` 分支、基线提交 `ded2631` 之上的
+当前源码和 launch 组合。它描述“现在有什么、实际怎样连”，不把规划文档、
+mock 成功或尚未接线的 adapter 当成已实现功能。
 
 当前最重要的架构事实是：
 
 - 仓库已有一条真实 D435i 巡线到 Go2 SDK UDP 的子系统链。
+- 该真实巡线链已经加入 `command_mux_node`；比赛子系统中只有 mux 发布最终
+  `/navigation/cmd_vel`。
 - 完整比赛状态机只有 mock launch 把 perception、locomotion、arm 和 mission 组合起来。
-- 仓库没有把完整 mission、真实 gait action、真实 arm、真实 sign/item perception 和单一最终速度 bridge 组合起来的真实全赛程 launch。
-- 当前每个已有 launch 通常保持一个最终 `/navigation/cmd_vel` 发布者；如果手工拼装完整硬件栈，`line_course_mission_node` 与 `gait_control_node` 会同时发布该 topic，现有 control lock 不能仲裁二者。
+- 仓库仍没有把完整 mission、真实 gait action、真实 arm、真实 sign/item
+  perception 和 mux 组合起来的真实全赛程 launch。
+- standalone mock/debug/tool launch 显式保留直发最终速度；它们不得与真实比赛
+  控制栈并行。
 
 ## 1. 当前可启动的数据流
 
@@ -27,19 +33,36 @@ flowchart LR
     Follower[line_follower_node]
     Suggested[/navigation/line_follow_cmd_suggested]
     Course[line_course_mission_node]
+    Mission[/control/mission_cmd]
+    Mux[command_mux_node]
+    EstopService[/safety/estop SetBool service]
+    EstopTopic[/safety/estop Bool topic]
     Final[/navigation/cmd_vel]
+    Status[/control/cmd_mux_status JSON]
     Forwarder[cmd_vel_udp_forwarder]
     UDP[UDP 127.0.0.1:15001]
     Server[external go2_sdk_udp_server]
     Go2[Unitree Go2 SportClient]
 
     D435i --> RGB --> Tracker
-    Tracker --> Line --> Follower --> Suggested --> Course --> Final
+    Tracker --> Line --> Follower --> Suggested --> Course --> Mission --> Mux --> Final
     Tracker --> Special --> Course
+    EstopService --> Mux
+    EstopTopic --> Mux
+    Mux --> Status
     Final --> Forwarder --> UDP --> Server --> Go2
 ```
 
-该 launch 还通过 `go2_sdk_motion_action` 执行一次 `economic_gait`。它不包含完整 `mission_state_machine_node`、真实 locomotion action server、任何 arm server、`real_sign_detector_node`、真实 item-tag producer 或白横线动作执行者。因此名称中的 `competition` 不能理解为“170 分完整比赛启动”。
+真实 launch 和 `start_line_system.sh` 都把 line-course 输出配置为
+`/control/mission_cmd`，并让 mux 输出 `/navigation/cmd_vel`。mux 还订阅预留的
+`/control/line_cmd` 和 `/control/locomotion_cmd`，但当前这条 launch 不启动
+gait，line follower 仍走 suggested -> line-course，不直接发布 line input。
+
+该 launch 还通过 `go2_sdk_motion_action` 执行一次 `economic_gait`。它不包含完整
+`mission_state_machine_node`、真实 locomotion action server、任何 arm server、
+`real_sign_detector_node`、真实 item-tag producer 或白横线动作执行者。因此名称
+中的 `competition` 不能理解为“170 分完整比赛启动”。mux 只建立控制权基础，
+不能证明跳跃、台阶、机械臂或场内 170 分任务完成。
 
 ### 1.2 Mock 全流程
 
@@ -67,7 +90,10 @@ flowchart LR
     Safety -. mock safety service .-> FSM
 ```
 
-mock locomotion 和 mock arm 对任意目标固定等待后返回成功。该链只能验证 ROS 接口与基本时序，不驱动真实硬件。
+mock launch 显式把 line-course 保持为直接发布 `/navigation/cmd_vel`，没有接入
+competition mux。mock locomotion 和 mock arm 对任意目标固定等待后返回成功。
+该链只能验证 ROS 接口与基本时序，不驱动真实硬件，也不得与真实比赛控制栈
+并行。
 
 ### 1.3 分离的硬件调试岛
 
@@ -84,19 +110,21 @@ mock locomotion 和 mock arm 对任意目标固定等待后返回成功。该链
 
 | 发布者 | 默认是否发布最终 topic | 用途与风险 |
 | --- | --- | --- |
-| `line_course_mission_node` | 是 | 主巡线链的最终速度所有者；在 `WAIT_START`/stop 状态仍周期发布零 Twist |
-| `gait_control_node` 的 `RobotMotionAdapter` | 是 | locomotion 固定动作和避障层；若与 line-course 同时运行会成为第二发布者 |
+| `command_mux_node` | 是 | 默认输出最终 topic；真实 `competition_line_nav` 和 `start_line_system.sh` 中的唯一预期发布者 |
+| `line_course_mission_node` | 条件性 | 默认输出 `/control/mission_cmd`；mock 与 vision debug launch 显式覆盖为最终 topic |
+| `gait_control_node` 的 `RobotMotionAdapter` | 条件性 | 默认输出 `/control/locomotion_cmd`；obstacle/sign standalone launch 显式覆盖为最终 topic |
 | `obstacle_direct_route_node` | 是 | 独立硬件路线/避障测试工具，绕过主状态机所有权 |
 | `keyboard_route_node` | 是 | 键盘记录/回放工具；不能与主比赛控制同时运行 |
 | `cmd_vel_speed_sweep_node` | 是 | 速度标定工具；不能与主比赛控制同时运行 |
 | `two_step_walk_test_node` | 是 | 两段行走测试；不能与主比赛控制同时运行 |
-| `stop_line_system.sh` 中的一次性 `ros2 topic pub` | 是（短时） | 停机时发布一次零 Twist |
+| `stop_line_system.sh` 的 `EMERGENCY FALLBACK` | 条件性、短时 | 仅 estop service 缺失/失败时直发一次零 Twist；正常停机不直发 |
 | `line_follower_node` | 默认否 | 默认发 `/navigation/line_follow_cmd_suggested`；若参数或 remap 指向最终 topic，会变成额外发布者 |
 
 相关源码位置：
 
 - line-course：`mission_state_machine_node.py:852-856,926-939,1471-1488`
 - gait：`gait_control_node.py:56-63,395-400,470-479`
+- command mux：`command_mux_node.py:23-40,67-100,168-184`
 - direct route：`obstacle_direct_route_node.py:542-548,755-756`
 - keyboard route：`keyboard_route_node.py:55-66,252-254`
 - speed sweep：`cmd_vel_speed_sweep_node.py:17-43`
@@ -105,9 +133,43 @@ mock locomotion 和 mock arm 对任意目标固定等待后返回成功。该链
 
 `cmd_vel_udp_forwarder` 和 `cmd_vel_bridge_node` 是订阅者/bridge，不是该 topic 的发布者。
 
-### 当前控制权缺口
+### 当前控制权基础与剩余缺口
 
-`gait_control_node` 会发布 `/gait/control_lock`，但只有 `line_follower_node` 订阅它。`line_course_mission_node` 不订阅该 lock，而且持续发布最终速度。因此未来若把完整 mission + gait + line-course 直接放进一个 launch，动作期间会出现两个最终速度发布者，DDS 不提供“最后写入者即唯一控制者”的安全保证。
+真实巡线比赛子系统的控制路径现为：
+
+```text
+line_follower suggested
+-> line_course_mission
+-> /control/mission_cmd
+-> command_mux
+-> /navigation/cmd_vel
+-> UDP forwarder
+```
+
+mux 固定优先级为：`estop` > `arm_lock` > gait lock 下的新鲜 locomotion >
+新鲜 mission > 新鲜 line > zero。默认 control rate 为 20 Hz，line/mission/
+locomotion 超时分别为 0.5/0.5/0.3 秒；限值为 0.60/0.15/1.30。解锁会让旧缓存
+失效，ROS 时间倒退时输出零，NaN/Inf 整条拒绝，合法超限命令 clamp；诊断以
+紧凑 JSON 发布到 `/control/cmd_mux_status`。完整规则见
+[`CONTROL_AUTHORITY.md`](CONTROL_AUTHORITY.md)。
+
+急停软件闭环已收敛到 mux：真实 launch 显式启用
+`/safety/estop` `std_srvs/srv/SetBool` service，同时保留同名
+`std_msgs/msg/Bool` topic 输入。两种入口在 mux 内进入同一状态转换；置位后
+mux 作为唯一最终发布者持续输出零。estop 置位和解除两种真实转换都会清除
+候选命令、接收时间和有效性；解除后等待新命令。重复相同 true/false 保持幂等，
+不会再次清除状态变化后新收到的缓存。
+
+正常 `stop_line_system.sh` 调用该 service，要求 `success=true`，并确认 mux 的
+最终输出为零后才终止节点。只有 service 不存在、类型不符或调用失败时才使用
+明确标记的 `EMERGENCY FALLBACK` 直发一次零 Twist；fallback 绕过正常唯一
+发布者架构，不属于所有权保证。若 service 成功但零速未观测到，脚本会保留
+节点并失败退出。
+
+上述闭环已在 VM/Humble 的软件测试范围内验证，但机器人/Foxy 的 DDS 行为、
+UDP forwarder 二次限幅后的 payload、SDK 接收和实体停止尚未验收。完整
+mission/gait/arm 也尚未进入真实比赛 launch；standalone 直发入口和工具仍可能
+在误启动时形成第二个最终 publisher。
 
 ## 3. 完整比赛状态机
 
@@ -269,9 +331,13 @@ adapter 发布 JSON 后只按 `duration_sec` 等待并返回成功；没有 ACK 
 
 ### SDK UDP 路径（当前真实巡线使用）
 
-- `cmd_vel_udp_forwarder.py` 订阅最终 Twist，限幅并发送文本 UDP。
+- `command_mux_node` 以 20 Hz 发布最终 Twist 和 JSON 仲裁状态。
+- `cmd_vel_udp_forwarder.py` 订阅最终 Twist，再执行 finite 检查、deadband 和
+  第二次限幅，然后发送文本 UDP。
 - 外部 `go2_sdk_udp_server` 不在仓库中，默认绝对路径为 `/home/unitree/unitree_go2_sdk_test/build/go2_sdk_udp_server`。
 - forwarder 只 `sendto`，不接收 server 或硬件 ACK。
+- `/control/cmd_mux_status` 记录 mux 的软件决定，不是 forwarder 实际 UDP
+  payload、SDK 返回值或硬件 ACK。
 - `go2_sdk_motion_action`、`go2_sdk_velocity_action`、`go2_sdk_speed_sweep` 和 `go2_sdk_capture_image` 是 SDK2 直接 C++ 工具；只有构建时找到 `unitree_sdk2` 才生成。
 
 ### `unitree_ros2` Request 路径（替代实现）
@@ -329,7 +395,8 @@ adapter 发布 JSON 后只按 `duration_sec` 等待并返回成功；没有 ACK 
 - Go2 速度 bridge：SDK UDP 与 `unitree_ros2` Request 两套
 - 避障：gait practical sequence 与 standalone direct route 两套
 - 警示动作：完整 mission、`sign_action_executor_node`、line-course 红圈 SDK 三条路径
-- 最终 Twist：line-course、gait 及多个硬件工具均可发布
+- 最终 Twist：真实巡线使用 mux；standalone launch 仍可让 line-course/gait
+  直发，多个硬件工具也保留直发能力
 
 ### 已废弃/遗留但仍引用
 
@@ -342,12 +409,22 @@ adapter 发布 JSON 后只按 `duration_sec` 等待并返回成功；没有 ACK 
 
 ## 11. 启动时的所有权约束
 
-在形成正式全赛程 launch 前，至少应满足：
+真实巡线子系统已建立 mux 唯一发布者基础。在形成正式全赛程 launch 前，仍
+至少应满足：
 
-1. `/navigation/cmd_vel` 正常运行时只有一个最终发布者。
+1. `/navigation/cmd_vel` 正常运行时只有一个最终发布者
+   `command_mux_node`；standalone/test/helper 不得并行。
 2. SDK UDP 与 `unitree_ros2` bridge 只选一个。
 3. `/locomotion/execute_motion` 只启动一个 server。
 4. `/arm/execute_task` 只启动一个 server，且 success 必须来自硬件 ACK。
 5. mock perception 与对应 real perception 不得同时发布同一 topic。
 6. `/mission/start` 是明确的上场边界，不能由节点启动隐式替代。
 7. helper/test node 在正式比赛启动前应由 preflight 和运行时 topic 检查排除。
+8. 真实组合由 mux 同时处理 `SetBool` estop service 和 `Bool` estop topic；
+   禁止同时启动 mock `safety_node` 提供同名 service。
+9. 解除 estop/lock 后必须等待新命令，不能恢复旧缓存。
+10. 正常停机必须走 mux service 和 mux 零速确认；出现
+    `EMERGENCY FALLBACK` 时必须记录为绕过所有权架构，而非正常验收通过。
+
+`command_mux` 完成不改变完整状态机、巡线参数或动作实现，也不证明跳跃、台阶、
+机械臂、白横线、UDP 硬件执行或 170 分任务已经验证。

@@ -181,6 +181,8 @@ def generate_launch_description():
             parameters=[
                 gait_config,
                 {
+                    # Standalone hardware test keeps the existing direct path.
+                    'cmd_vel_topic': '/navigation/cmd_vel',
                     'enable_motion_action': False,
                     'obstacle_safety.depth_image_topic': depth_image_topic,
                     'obstacle_safety.scan_topic': scan_topic,

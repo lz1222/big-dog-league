@@ -6,6 +6,7 @@
 
 - [170 分评分矩阵](docs/NATIONAL_SCORE_MATRIX.md)
 - [当前实际架构](docs/ARCHITECTURE_CURRENT.md)
+- [比赛控制权与速度仲裁](docs/CONTROL_AUTHORITY.md)
 - [国赛阻塞项](docs/NATIONAL_BLOCKERS.md)
 - [测试基线](docs/TEST_BASELINE.md)
 - [第三方资产审计](docs/REPOSITORY_ASSET_AUDIT.md)
@@ -80,7 +81,24 @@ source install/setup.bash
 ros2 launch rk_bringup competition_line_nav.launch.py
 ```
 
-它实际启动 D435i、真实 line tracker、line follower、line-course final controller、SDK UDP forwarder 和仓库外 `go2_sdk_udp_server`，并可切换 EconomicGait。机器人等待独立 `/mission/start`：
+它实际启动 D435i、真实 line tracker、line follower、line-course controller、
+`command_mux_node`、SDK UDP forwarder 和仓库外 `go2_sdk_udp_server`，并可切换
+EconomicGait。真实控制流是：
+
+```text
+line_follower suggested command
+-> line_course_mission_node
+-> /control/mission_cmd
+-> command_mux_node
+-> /navigation/cmd_vel
+-> cmd_vel_udp_forwarder
+-> UDP / Unitree SDK
+```
+
+该组合中 `command_mux_node` 应是 `/navigation/cmd_vel` 的唯一发布者。
+`/control/line_cmd` 是预留输入，当前 line follower 仍发布
+`/navigation/line_follow_cmd_suggested`，避免改变既有巡线行为。机器人等待独立
+`/mission/start`：
 
 ```bash
 ros2 topic pub --once /mission/start std_msgs/msg/Bool '{data: true}'
@@ -120,7 +138,9 @@ src/rk_bringup/scripts/stop_line_system.sh
 - `d1_pick.launch.py`：默认 DryRun 的 D1 topic-only 路径。
 - `new_arm_task.launch.py`：只把 JSON 发到尚无仓内订阅者/ACK 的 new-arm bridge topic。
 
-这些入口必须单独运行。不要与主巡线、keyboard route、speed sweep 或 two-step test 同时发布 `/navigation/cmd_vel`。
+这些 standalone 入口显式保留直接发布 `/navigation/cmd_vel` 的旧行为，必须
+单独运行。不要把 mock、vision debug、obstacle/sign debug、keyboard route、
+speed sweep 或 two-step test 与真实比赛控制栈并行启动。
 
 ## 运行前检查
 
@@ -156,26 +176,50 @@ bash scripts/test_workspace.sh
 
 ```bash
 ros2 topic info -v /navigation/cmd_vel
+ros2 topic info -v /control/mission_cmd
+ros2 topic echo /control/cmd_mux_status std_msgs/msg/String
 ros2 topic info -v /perception/line_track
 ros2 topic hz /perception/line_track
 ros2 action list
 ```
 
-正常比赛组合中，最终 `/navigation/cmd_vel` 必须只有一个预期 publisher。
+正常比赛组合中，最终 `/navigation/cmd_vel` 必须只有一个 publisher，节点名应为
+`command_mux_node`。完整控制权、调试方法和故障定位见
+[比赛控制权与速度仲裁](docs/CONTROL_AUTHORITY.md)。
+
+真实巡线组合中的 `command_mux_node` 同时提供
+`/safety/estop` `std_srvs/srv/SetBool` service，并订阅同名
+`std_msgs/msg/Bool` topic。两种入口共用同一 estop 状态转换；解除会清除旧候选
+命令缓存，必须等新命令才能恢复。estop 置位和解除两种真实转换都会清空命令
+及接收时间；重复相同值保持幂等，不反复清除缓存。该软件闭环已在 VM/Humble
+隔离测试验证，
+机器人/Foxy、UDP server、SDK 接收和实体停止仍未验收。
+
+`stop_line_system.sh` 正常通过 SetBool service 让 mux 保持唯一最终发布者，并在
+杀进程前确认 `/navigation/cmd_vel` 为零。只有 service 缺失或调用失败时才显示
+`EMERGENCY FALLBACK` 并直发一次零 Twist；该 fallback 会绕过正常唯一发布者
+架构，不能算正常路径通过。
 
 ## 关键接口（冻结）
 
 - `/perception/line_track`: `rk_interfaces/msg/LineTrack`
 - `/perception/sign_detections`: `rk_interfaces/msg/SignDetectionArray`
 - `/perception/item_tags`: `rk_interfaces/msg/ItemTagArray`
+- `/control/line_cmd`: `geometry_msgs/msg/Twist`（mux 预留输入）
+- `/control/mission_cmd`: `geometry_msgs/msg/Twist`
+- `/control/locomotion_cmd`: `geometry_msgs/msg/Twist`
+- `/control/cmd_mux_status`: `std_msgs/msg/String`（JSON；不是硬件 ACK）
 - `/navigation/cmd_vel`: `geometry_msgs/msg/Twist`
 - `/gait/control_lock`: `std_msgs/msg/Bool`
+- `/arm/control_lock`: `std_msgs/msg/Bool`
 - `/locomotion/execute_motion`: `rk_interfaces/action/ExecuteMotion`
 - `/arm/execute_task`: `rk_interfaces/action/ExecuteArmTask`
 - `/mission/run`: `rk_interfaces/action/RunMission`
-- `/safety/estop`: `std_srvs/srv/SetBool`
+- `/safety/estop` service：`std_srvs/srv/SetBool`（真实组合由 mux 提供）
+- `/safety/estop` topic：`std_msgs/msg/Bool`（mux 的持续/自动输入）
 
-本轮审计没有重命名或修改上述 topic、message、service、action 或 console entry point。
+不要把 mux 状态当作 UDP server、SDK 或机器人硬件 ACK。下游 UDP forwarder
+仍会做 finite 检查、deadband 和第二次限幅。
 
 ## 基础验证
 
@@ -198,6 +242,7 @@ bash scripts/test_workspace.sh
 
 - `docs/NATIONAL_SCORE_MATRIX.md`
 - `docs/ARCHITECTURE_CURRENT.md`
+- `docs/CONTROL_AUTHORITY.md`
 - `docs/NATIONAL_BLOCKERS.md`
 - `docs/TEST_BASELINE.md`
 - `docs/REPOSITORY_ASSET_AUDIT.md`

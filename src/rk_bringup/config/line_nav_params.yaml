@@ -194,8 +194,8 @@ line_follower_node:
 
 line_course_mission_node:
   ros__parameters:
-    # 最终速度控制权只属于 mission；SDK forwarder 只订阅并执行。
-    cmd_vel_topic: /navigation/cmd_vel
+    # Mission 只发布候选命令；command_mux 是最终速度唯一发布者。
+    cmd_vel_topic: /control/mission_cmd
     suggested_cmd_topic: /navigation/line_follow_cmd_suggested
     mission_state_topic: /mission/line_course_state
     line_track_topic: /perception/line_track

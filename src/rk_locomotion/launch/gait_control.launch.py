@@ -18,8 +18,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'cmd_vel_topic',
-            default_value='/navigation/cmd_vel',
-            description='Twist topic consumed by the existing Unitree bridge.'
+            default_value='/control/locomotion_cmd',
+            description='Locomotion Twist input consumed by command_mux_node.'
         ),
         Node(
             package='rk_locomotion',
