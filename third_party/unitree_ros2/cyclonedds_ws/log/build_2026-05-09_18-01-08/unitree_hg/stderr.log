@@ -1,8 +1,0 @@
-Traceback (most recent call last):
-  File "/tmp/rk_rosidl_generator_dds_idl/opt/ros/humble/lib/rosidl_generator_dds_idl/rosidl_generator_dds_idl", line 6, in <module>
-    from rosidl_generator_dds_idl import generate_dds_idl
-ModuleNotFoundError: No module named 'rosidl_generator_dds_idl'
-gmake[2]: *** [CMakeFiles/unitree_hg__dds_connext_idl.dir/build.make:161：rosidl_generator_dds_idl/unitree_hg/msg/dds_connext/BmsCmd_.idl] 错误 1
-gmake[1]: *** [CMakeFiles/Makefile2:611：CMakeFiles/unitree_hg__dds_connext_idl.dir/all] 错误 2
-gmake[1]: *** 正在等待未完成的任务....
-gmake: *** [Makefile:146：all] 错误 2

@@ -1,20 +1,42 @@
-build/
-build
-install/
-log/
-__pycache__/
-*.pyc
+# ROS 2 / colcon workspace outputs
+/build/
+/install/
+/log/
+
+# Known generated workspaces inside third-party dependencies
+/third_party/unitree_ros2/cyclonedds_ws/build/
+/third_party/unitree_ros2/cyclonedds_ws/install/
+/third_party/unitree_ros2/cyclonedds_ws/log/
+/third_party/unitree_sdk2/build/
+/third_party/unitree_sdk2/install/
+
+# Python bytecode, test caches, and coverage output
+**/__pycache__/
+*.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local Python environments
+.venv/
+venv/
+env/
+
+# ROS recordings, databases, and runtime logs
 *.bag
 *.db3
 *.mcap
 rosbag2_*/
-.vscode/
-!.vscode/extensions.json
 *.log
+
+# Editor and operating-system metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local temporary files
 *.tmp
-third_party/unitree_ros2/
-third_party/unitree_sdk2/
-third_party/**/build/
-third_party/**/install/
-third_party/**/log/
