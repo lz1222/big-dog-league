@@ -1,0 +1,88 @@
+maze_navigation_dry_run:
+  ros__parameters:
+    # B2 只消费 B1 JSON，并将诊断策略发布为另一个 JSON String。
+    perception_status_topic: /maze/perception/dry_run_status
+    navigation_status_topic: /maze/navigation/dry_run_status
+    input_stale_timeout_sec: 0.80
+    evaluation_rate: 20.0
+    print_rate: 2.0
+
+    # 固定拓扑只约束大方向，实际转角和居中仍由雷达与 Odom 闭环。
+    route_directions: [LEFT, LEFT, RIGHT, RIGHT, LEFT]
+
+    # 已测场地和机器人外形；默认假设 base_link 位于机身几何中心。
+    robot_length_m: 0.70
+    robot_width_m: 0.31
+    robot_height_m: 0.40
+    wall_height_m: 0.45
+    corridor_width_m: 0.57
+    footprint_safety_margin_m: 0.03
+
+    # B1 有效量程和新鲜度上限。
+    front_max_range_m: 3.00
+    side_max_range_m: 2.00
+    max_cloud_age_sec: 0.50
+    max_odom_age_sec: 0.20
+
+    # 每项状态转换所需连续 B1 帧数。
+    sensor_confirm_frames: 3
+    corner_confirm_frames: 3
+    turn_confirm_frames: 3
+    reacquire_confirm_frames: 5
+    recovery_confirm_frames: 3
+    exit_confirm_frames: 5
+
+    # 这些速度只写入 JSON 诊断，不发布 Twist，也不会控制 Go2。
+    corridor_vx: 0.20
+    approach_vx: 0.08
+    turn_forward_vx: 0.08
+    fine_align_vx: 0.04
+    reacquire_vx: 0.08
+    reverse_vx: 0.05
+    max_center_wz: 0.25
+    max_turn_wz: 0.55
+    min_turn_wz: 0.16
+    max_fine_wz: 0.22
+
+    # 57cm 通道中心对应左右墙各约 0.285m。
+    center_kp: 1.20
+    turn_kp: 1.10
+    fine_turn_kp: 0.90
+    side_target_m: 0.285
+    center_tolerance_m: 0.07
+
+    # 前方接近、开始移动转向、紧急余量和出口开放判断。
+    front_slow_distance_m: 1.00
+    corner_approach_distance_m: 0.85
+    turn_start_distance_m: 0.62
+    front_emergency_distance_m: 0.43
+    recovery_front_clear_m: 0.72
+    turn_open_distance_m: 0.50
+    exit_front_clear_m: 1.00
+    exit_side_open_m: 0.50
+
+    # 连续 turn_rad 用于跨正负 pi 的 90 度闭环，不使用固定时间猜角。
+    turn_angle_deg: 90.0
+    fine_align_enter_deg: 12.0
+    fine_align_exit_deg: 18.0
+    turn_tolerance_deg: 4.0
+    reacquire_yaw_tolerance_deg: 7.0
+
+    # 超时一律进入 FAULT_STOP；反向因无后扇区只能保留为诊断候选。
+    corner_timeout_sec: 6.0
+    turn_timeout_sec: 8.0
+    reacquire_timeout_sec: 5.0
+    reverse_timeout_sec: 1.0
+
+maze_navigation_simulator:
+  ros__parameters:
+    # 模拟器发布 B1 格式 JSON，不发布点云、Odom 或运动命令。
+    perception_status_topic: /maze/perception/dry_run_status
+    sim_publish_rate: 15.0
+    sim_scenario: nominal
+    sim_warmup_sec: 0.6
+    sim_corridor_sec: 1.2
+    sim_approach_sec: 1.0
+    sim_turn_sec: 2.0
+    sim_reacquire_sec: 1.2
+    sim_fault_after_sec: 2.0
