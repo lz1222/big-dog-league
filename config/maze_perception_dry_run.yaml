@@ -1,0 +1,48 @@
+maze_perception_dry_run:
+  ros__parameters:
+    cloud_topic: /utlidar/cloud_base
+    odom_topic: /utlidar/robot_odom
+    status_topic: /maze/perception/dry_run_status
+
+    # base_link coordinates: x forward, y left, z up.
+    z_min: -0.15
+    z_max: 0.50
+    body_x_min: -0.45
+    body_x_max: 0.45
+    body_y_min: -0.25
+    body_y_max: 0.25
+
+    front_angle: 45.0
+    min_range: 0.05
+    front_max_range: 3.00
+    side_max_range: 2.00
+    distance_percentile: 10.0
+
+    # Enter thresholds are smaller than exit thresholds to add hysteresis.
+    front_block_enter: 0.65
+    front_block_exit: 0.80
+    diagonal_block_enter: 0.45
+    diagonal_block_exit: 0.60
+    blocked_confirm_frames: 3
+    clear_confirm_frames: 5
+
+    turn_min_clearance: 0.55
+    turn_switch_margin: 0.15
+    preferred_turn: left
+
+    cloud_stale_timeout: 0.50
+    odom_stale_timeout: 0.20
+    min_cloud_points: 1
+    min_finite_points: 1
+    evaluation_rate: 20.0
+    print_rate: 2.0
+
+maze_perception_simulator:
+  ros__parameters:
+    cloud_topic: /maze_sim/cloud
+    odom_topic: /maze_sim/odom
+    publish_rate: 15.0
+    scenario_duration: 4.0
+    cloud_frame: base_link
+    odom_frame: odom
+    child_frame: base_link
