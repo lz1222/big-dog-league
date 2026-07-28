@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""B1 迷宫感知干跑节点：只读取传感器并发布诊断，不控制机器人。"""
+
 import json
 import math
 import threading
@@ -31,9 +33,12 @@ from maze_perception_core import (
 
 
 class MazePerceptionDryRun(Node):
+    """融合五扇区距离、里程计 Yaw 和新鲜度，输出抽象避障建议。"""
+
     def __init__(self):
         super().__init__('maze_perception_dry_run')
 
+        # 输入 Topic 与只读诊断 Topic 均可通过 ROS 参数覆盖。
         self.cloud_topic = self._string_parameter(
             'cloud_topic', '/utlidar/cloud_base'
         )
@@ -44,6 +49,7 @@ class MazePerceptionDryRun(Node):
             'status_topic', '/maze/perception/dry_run_status'
         )
 
+        # 点云提取参数决定参与迷宫判断的空间范围。
         front_max_range = self._positive_float_parameter(
             'front_max_range', 3.0
         )
@@ -77,6 +83,8 @@ class MazePerceptionDryRun(Node):
                 'distance_percentile', 10.0
             ),
         )
+
+        # 决策引擎只产生建议字符串，持续帧和滞回参数在此注入。
         self.engine = DryRunDecisionEngine(
             front_max_range=front_max_range,
             side_max_range=side_max_range,
@@ -109,6 +117,7 @@ class MazePerceptionDryRun(Node):
             ),
         )
 
+        # 点云与里程计均为必需输入，任一路超时都会进入 STALE/STOP。
         self.cloud_stale_timeout = self._positive_float_parameter(
             'cloud_stale_timeout', 0.50
         )
@@ -128,6 +137,7 @@ class MazePerceptionDryRun(Node):
             'min_finite_points', 1
         )
 
+        # 回调和定时器可能并发访问以下快照，统一由锁保护。
         self._lock = threading.Lock()
         self._last_cloud_time = None
         self._last_odom_time = None
@@ -152,6 +162,7 @@ class MazePerceptionDryRun(Node):
         self._accumulated_yaw = 0.0
         self._last_emitted_signature = None
 
+        # 雷达和里程计是高频传感器，使用 BEST_EFFORT 避免可靠传输积压。
         sensor_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=10,
@@ -170,6 +181,8 @@ class MazePerceptionDryRun(Node):
             self._on_odom,
             sensor_qos,
         )
+
+        # 唯一输出是 JSON 诊断 String，不创建 Twist 或 Unitree API 发布器。
         self.status_publisher = self.create_publisher(
             String,
             self.status_topic,
@@ -193,6 +206,7 @@ class MazePerceptionDryRun(Node):
         )
 
     def _on_cloud(self, msg):
+        """解析 PointCloud2 并在每个有效点云帧上推进持续帧判断。"""
         receive_time = time.monotonic()
         field_names = {field.name for field in msg.fields}
         missing_fields = {'x', 'y', 'z'} - field_names
@@ -208,6 +222,7 @@ class MazePerceptionDryRun(Node):
             self._emit_status(force=False)
             return
 
+        # 真机和 rosbag 数据可能损坏；解析异常必须转为失效保护状态。
         try:
             points = point_cloud2.read_points(
                 msg,
@@ -248,6 +263,7 @@ class MazePerceptionDryRun(Node):
         self._emit_status(force=False)
 
     def _on_odom(self, msg):
+        """读取姿态四元数，并累计经过正负 pi 边界后的连续转角。"""
         receive_time = time.monotonic()
         orientation = msg.pose.pose.orientation
         try:
@@ -267,9 +283,11 @@ class MazePerceptionDryRun(Node):
 
         with self._lock:
             if self._previous_yaw is None:
+                # 首帧只建立零点，不把初始绝对朝向计入累计转角。
                 self._previous_yaw = yaw
                 self._accumulated_yaw = 0.0
             else:
+                # 归一化相邻角差，避免 +pi 到 -pi 时出现约 2pi 跳变。
                 self._accumulated_yaw += normalize_angle(
                     yaw - self._previous_yaw
                 )
@@ -283,6 +301,7 @@ class MazePerceptionDryRun(Node):
         self._emit_status(force=False)
 
     def _on_watchdog(self):
+        # 即使传感器停止发布，也由看门狗主动触发 STALE/STOP。
         now = time.monotonic()
         with self._lock:
             self._evaluate_locked(now, update_decision=False)
@@ -295,6 +314,7 @@ class MazePerceptionDryRun(Node):
         self._emit_status(force=True)
 
     def _evaluate_locked(self, now, update_decision):
+        """先检查两路输入新鲜度，再决定是否允许推进障碍状态机。"""
         cloud_fresh, cloud_reason = self._sensor_freshness(
             now,
             self._last_cloud_time,
@@ -316,10 +336,12 @@ class MazePerceptionDryRun(Node):
             self.engine.mark_stale(odom_reason)
             return
         if update_decision:
+            # 持续“帧”确认只由新点云推进，定时器和 odom 不重复计数。
             self.engine.update(self._distances)
 
     @staticmethod
     def _sensor_freshness(now, last_time, timeout, error, name):
+        """将未收到、内容无效和接收超时统一转换为失效原因。"""
         if last_time is None:
             return False, f'{name}_missing'
         if error:
@@ -330,6 +352,7 @@ class MazePerceptionDryRun(Node):
         return True, f'{name}_fresh'
 
     def _emit_status(self, force):
+        """状态变化时立即输出，并按 print_rate 周期输出完整快照。"""
         now = time.monotonic()
         with self._lock:
             cloud_age = self._age(now, self._last_cloud_time)
@@ -369,6 +392,7 @@ class MazePerceptionDryRun(Node):
                 'clear_streak': self.engine.clear_streak,
             }
 
+        # dry_run=true 供录包分析或下游工具明确识别“非控制输出”。
         message = String()
         message.data = json.dumps(
             payload,
@@ -422,12 +446,14 @@ class MazePerceptionDryRun(Node):
         return f'{distance:.3f}m'
 
     def _string_parameter(self, name, default):
+        """声明并读取非空字符串参数。"""
         value = str(self.declare_parameter(name, default).value)
         if not value:
             raise ValueError(f'{name} must not be empty')
         return value
 
     def _finite_float_parameter(self, name, default):
+        """声明并读取有限浮点参数，拒绝 NaN 和 Inf。"""
         value = float(self.declare_parameter(name, default).value)
         if not math.isfinite(value):
             raise ValueError(f'{name} must be finite')
@@ -446,6 +472,7 @@ class MazePerceptionDryRun(Node):
         return value
 
     def _positive_int_parameter(self, name, default):
+        """声明并读取正整数参数。"""
         value = int(self.declare_parameter(name, default).value)
         if value <= 0:
             raise ValueError(f'{name} must be positive')

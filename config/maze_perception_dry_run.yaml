@@ -1,10 +1,12 @@
 maze_perception_dry_run:
   ros__parameters:
+    # 真机输入与只读诊断输出；status_topic 不承载运动命令。
     cloud_topic: /utlidar/cloud_base
     odom_topic: /utlidar/robot_odom
     status_topic: /maze/perception/dry_run_status
 
-    # base_link coordinates: x forward, y left, z up.
+    # base_link 坐标系：x 向前、y 向左、z 向上。
+    # z 范围用于过滤地面和高处点，body 矩形用于过滤机器狗自身点云。
     z_min: -0.15
     z_max: 0.50
     body_x_min: -0.45
@@ -12,24 +14,29 @@ maze_perception_dry_run:
     body_y_min: -0.25
     body_y_max: 0.25
 
+    # 扇区几何、有效量程及距离百分位；百分位可抑制单个飞点。
     front_angle: 45.0
     min_range: 0.05
     front_max_range: 3.00
     side_max_range: 2.00
     distance_percentile: 10.0
 
-    # Enter thresholds are smaller than exit thresholds to add hysteresis.
+    # 进入阈值小于退出阈值，形成滞回并减少临界距离附近的抖动。
     front_block_enter: 0.65
     front_block_exit: 0.80
     diagonal_block_enter: 0.45
     diagonal_block_exit: 0.60
+
+    # 障碍和清障都必须连续达到指定点云帧数后才确认。
     blocked_confirm_frames: 3
     clear_confirm_frames: 5
 
+    # 转向通道的最低净空、切换方向所需优势和左右相同时的偏好。
     turn_min_clearance: 0.55
     turn_switch_margin: 0.15
     preferred_turn: left
 
+    # 任一路必需传感器超时或内容无效时，输出 STALE/STOP。
     cloud_stale_timeout: 0.50
     odom_stale_timeout: 0.20
     min_cloud_points: 1
@@ -39,6 +46,7 @@ maze_perception_dry_run:
 
 maze_perception_simulator:
   ros__parameters:
+    # 模拟器使用独立 Topic，只生成传感器消息。
     cloud_topic: /maze_sim/cloud
     odom_topic: /maze_sim/odom
     publish_rate: 15.0

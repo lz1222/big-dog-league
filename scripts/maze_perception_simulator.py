@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""B1 传感器模拟器：只发布合成点云和里程计，不发布运动命令。"""
+
 import math
 import time
 
@@ -18,6 +20,8 @@ from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Header
 
 
+# 每项依次为：场景名、五扇区距离、是否发布点云、是否发布里程计。
+# 场景覆盖左右绕行、狭窄停止、滞回区间以及两类传感器超时。
 SCENARIOS = (
     (
         'clear',
@@ -121,9 +125,12 @@ SECTOR_ANGLES_DEG = {
 
 
 class MazePerceptionSimulator(Node):
+    """循环发布可复现的传感器场景，用于无真机的 B1 干跑验证。"""
+
     def __init__(self):
         super().__init__('maze_perception_simulator')
 
+        # 默认使用独立模拟 Topic，避免与真机传感器数据混流。
         self.cloud_topic = self._string_parameter(
             'cloud_topic', '/maze_sim/cloud'
         )
@@ -146,6 +153,7 @@ class MazePerceptionSimulator(Node):
             'child_frame', 'base_link'
         )
 
+        # QoS 与真机传感器订阅保持一致，覆盖真实通信路径。
         sensor_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=10,
@@ -176,6 +184,7 @@ class MazePerceptionSimulator(Node):
         )
 
     def _on_timer(self):
+        # 按固定时长循环场景，使状态机能完成持续帧确认和滞回恢复。
         elapsed = time.monotonic() - self._start_time
         scenario_index = int(
             elapsed / self.scenario_duration
@@ -197,6 +206,7 @@ class MazePerceptionSimulator(Node):
             self.cloud_publisher.publish(cloud)
 
         if publish_odom:
+            # 模拟器保持零姿态和静止里程计，仅验证数据链路与新鲜度。
             odom = Odometry()
             odom.header.stamp = stamp
             odom.header.frame_id = self.odom_frame
@@ -206,6 +216,7 @@ class MazePerceptionSimulator(Node):
 
     @staticmethod
     def _scenario_points(distances):
+        """为每个扇区生成一簇点，避免测试退化为单点最小值判断。"""
         points = []
         angle_offsets_deg = (-2.0, -1.0, 0.0, 1.0, 2.0)
         distance_scales = (1.01, 1.005, 1.0, 0.995, 0.99)
@@ -227,12 +238,14 @@ class MazePerceptionSimulator(Node):
         return points
 
     def _string_parameter(self, name, default):
+        """声明并读取非空字符串参数。"""
         value = str(self.declare_parameter(name, default).value)
         if not value:
             raise ValueError(f'{name} must not be empty')
         return value
 
     def _positive_float_parameter(self, name, default):
+        """声明并读取正的有限浮点参数。"""
         value = float(self.declare_parameter(name, default).value)
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError(f'{name} must be positive and finite')

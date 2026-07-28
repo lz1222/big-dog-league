@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
+"""B1 迷宫感知的纯计算核心，可脱离 ROS 进行录包或模拟测试。"""
+
 import math
 
 
+# 五扇区基于 base_link 坐标系：x 向前、y 向左、z 向上。
 SECTOR_NAMES = (
     'front',
     'left_front',
@@ -11,6 +14,7 @@ SECTOR_NAMES = (
     'right',
 )
 
+# 状态和建议只是感知层输出，不是机器人运动命令。
 STATE_CLEAR = 'CLEAR'
 STATE_BLOCKED = 'BLOCKED'
 STATE_STALE = 'STALE'
@@ -22,6 +26,8 @@ ADVICE_STOP = 'STOP'
 
 
 class SectorExtractor:
+    """过滤三维点并计算五扇区的稳健距离。"""
+
     def __init__(
         self,
         z_min,
@@ -51,6 +57,7 @@ class SectorExtractor:
         self._front_angle_rad = math.radians(self.front_angle_deg)
 
     def extract(self, points):
+        """返回各扇区距离、点数以及点云基本质量统计。"""
         sector_values = {
             name: []
             for name in SECTOR_NAMES
@@ -59,6 +66,7 @@ class SectorExtractor:
         finite_points = 0
 
         for point in points:
+            # total/finite 统计用于区分空点云与含 NaN/Inf 的损坏点云。
             total_points += 1
             x = float(point[0])
             y = float(point[1])
@@ -67,6 +75,8 @@ class SectorExtractor:
             if not all(math.isfinite(value) for value in (x, y, z)):
                 continue
             finite_points += 1
+
+            # 依次移除地面/高处点、自身机体点和过近噪声。
             if z < self.z_min or z > self.z_max:
                 continue
             if self._inside_body_filter(x, y):
@@ -89,6 +99,7 @@ class SectorExtractor:
                 continue
             sector_values[sector].append(distance)
 
+        # 使用百分位距离，避免单个飞点像“最小值”一样触发误报。
         distances = {
             name: self._percentile(
                 sector_values[name],
@@ -115,6 +126,7 @@ class SectorExtractor:
         )
 
     def _classify_sector(self, angle):
+        """按水平角将点分配到前、斜前和侧方，后方点不参与判断。"""
         half_width = 0.5 * self._front_angle_rad
         front_side_boundary = 1.5 * self._front_angle_rad
         side_rear_boundary = 2.5 * self._front_angle_rad
@@ -133,6 +145,7 @@ class SectorExtractor:
 
     @staticmethod
     def _percentile(values, percentile):
+        """采用线性插值计算百分位数，兼容扇区内点数较少的情况。"""
         if not values:
             return None
         ordered = sorted(values)
@@ -148,6 +161,7 @@ class SectorExtractor:
         )
 
     def _validate(self):
+        # 启动时尽早拒绝不合理参数，避免运行中产生不可预测判断。
         values = (
             self.z_min,
             self.z_max,
@@ -186,6 +200,8 @@ class SectorExtractor:
 
 
 class DryRunDecisionEngine:
+    """通过持续帧、距离滞回和转向锁定生成只读避障建议。"""
+
     def __init__(
         self,
         front_max_range,
@@ -213,6 +229,7 @@ class DryRunDecisionEngine:
         self.preferred_turn = str(preferred_turn).lower()
         self._validate()
 
+        # 启动时尚未确认传感器有效，因此默认 STALE/STOP。
         self.state = STATE_STALE
         self.advice = ADVICE_STOP
         self.reason = 'startup'
@@ -221,6 +238,7 @@ class DryRunDecisionEngine:
         self._latched_turn = None
 
     def mark_stale(self, reason):
+        """任一必需传感器失效时立即回到保守状态并清空历史确认。"""
         self.state = STATE_STALE
         self.advice = ADVICE_STOP
         self.reason = str(reason)
@@ -237,6 +255,7 @@ class DryRunDecisionEngine:
         return self.state, self.advice, self.reason
 
     def _update_blocked(self, distances):
+        # 障碍必须连续出现指定帧数；确认期间只给 STOP 建议。
         self.blocked_streak += 1
         self.clear_streak = 0
 
@@ -258,6 +277,7 @@ class DryRunDecisionEngine:
         self.reason = 'blocked_confirmed'
 
     def _update_clear(self):
+        # 清障也要连续确认，防止阈值附近的点云抖动导致状态反复。
         self.clear_streak += 1
         self.blocked_streak = 0
 
@@ -267,6 +287,7 @@ class DryRunDecisionEngine:
             return
 
         if self.clear_streak < self.clear_confirm_frames:
+            # 从 BLOCKED 恢复期间保持原转向建议，不提前给 FORWARD。
             if self.state == STATE_BLOCKED:
                 self.advice = self._latched_turn or ADVICE_STOP
             else:
@@ -283,6 +304,7 @@ class DryRunDecisionEngine:
         self._latched_turn = None
 
     def _blocked_candidate(self, distances):
+        # 已进入 BLOCKED 后改用更大的退出阈值，形成距离滞回区间。
         if self.state == STATE_BLOCKED:
             front_threshold = self.front_block_exit
             diagonal_threshold = self.diagonal_block_exit
@@ -309,6 +331,7 @@ class DryRunDecisionEngine:
         )
 
     def _choose_turn(self, distances):
+        # 每侧取“斜前与正侧”的较小值，保证整条转向通道都有余量。
         left_score = min(
             self._effective_distance(
                 distances.get('left_front'),
@@ -330,6 +353,7 @@ class DryRunDecisionEngine:
             ),
         )
 
+        # 左右均过窄时不猜测方向，直接输出最保守的 STOP 建议。
         if (
             left_score < self.turn_min_clearance
             and right_score < self.turn_min_clearance
@@ -337,6 +361,7 @@ class DryRunDecisionEngine:
             self._latched_turn = ADVICE_STOP
             return ADVICE_STOP
 
+        # 已选方向会被锁定；另一侧必须明显更优才允许切换。
         if (
             self._latched_turn == ADVICE_TURN_LEFT
             and left_score >= self.turn_min_clearance
@@ -373,6 +398,7 @@ class DryRunDecisionEngine:
 
     @staticmethod
     def _effective_distance(distance, max_range):
+        # 扇区无回波不等同于整帧失效，此处按可探测最大距离处理。
         if distance is None:
             return float(max_range)
         value = float(distance)
@@ -381,6 +407,7 @@ class DryRunDecisionEngine:
         return value
 
     def _validate(self):
+        # 进入阈值必须小于退出阈值，才能形成有效滞回。
         values = (
             self.front_max_range,
             self.side_max_range,
@@ -426,6 +453,7 @@ class DryRunDecisionEngine:
 
 
 def quaternion_to_rpy(x, y, z, w):
+    """归一化里程计四元数并转换为 roll、pitch、yaw。"""
     values = (float(x), float(y), float(z), float(w))
     if not all(math.isfinite(value) for value in values):
         raise ValueError('odometry quaternion contains NaN or Inf')
@@ -435,6 +463,7 @@ def quaternion_to_rpy(x, y, z, w):
     if norm <= 1.0e-12:
         raise ValueError('odometry quaternion has zero norm')
 
+    # 先归一化，避免非单位四元数放大姿态转换误差。
     x /= norm
     y /= norm
     z /= norm
@@ -445,6 +474,7 @@ def quaternion_to_rpy(x, y, z, w):
     roll = math.atan2(sin_roll_cos_pitch, cos_roll_cos_pitch)
 
     sin_pitch = 2.0 * (w * y - z * x)
+    # 浮点舍入可能略微越过 [-1, 1]，限幅后再调用 asin。
     sin_pitch = max(-1.0, min(1.0, sin_pitch))
     pitch = math.asin(sin_pitch)
 
@@ -455,4 +485,5 @@ def quaternion_to_rpy(x, y, z, w):
 
 
 def normalize_angle(angle):
+    """将角差归一化到 [-pi, pi]，用于消除正负 pi 跳变。"""
     return math.atan2(math.sin(angle), math.cos(angle))
