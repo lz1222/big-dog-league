@@ -2,16 +2,30 @@
 
 import json
 import math
+import time
 
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy
+from rclpy.qos import QoSHistoryPolicy
+from rclpy.qos import QoSProfile
+from rclpy.qos import QoSReliabilityPolicy
 from std_msgs.msg import Bool
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
 from rk_safety.command_mux_core import CommandMuxCore
 from rk_safety.command_mux_core import VelocityCommand
+
+
+ESTOP_STATE_PUBLISH_ERROR_LOG_INTERVAL_SEC = 5.0
+ESTOP_STATE_QOS = QoSProfile(
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+)
 
 
 class CommandMuxNode(Node):
@@ -31,6 +45,7 @@ class CommandMuxNode(Node):
         self.declare_parameter('arm_lock_topic', '/arm/control_lock')
         self.declare_parameter('output_cmd_topic', '/navigation/cmd_vel')
         self.declare_parameter('status_topic', '/control/cmd_mux_status')
+        self.declare_parameter('estop_state_topic', '/safety/estop_state')
         self.declare_parameter('enable_estop_service', True)
         self.declare_parameter('estop_service_name', '/safety/estop')
 
@@ -66,13 +81,21 @@ class CommandMuxNode(Node):
         arm_lock_topic = self._topic_parameter('arm_lock_topic')
         output_cmd_topic = self._topic_parameter('output_cmd_topic')
         status_topic = self._topic_parameter('status_topic')
+        estop_state_topic = self._topic_parameter('estop_state_topic')
         enable_estop_service = self._bool_parameter('enable_estop_service')
         estop_service_name = self._name_parameter('estop_service_name')
 
         self._command_publisher = self.create_publisher(
             Twist, output_cmd_topic, 10
         )
-        self._status_publisher = self.create_publisher(String, status_topic, 10)
+        self._status_publisher = self.create_publisher(
+            String, status_topic, 10
+        )
+        self._last_estop_state_publish_error_log_time = None
+        self._estop_state_publisher = self.create_publisher(
+            Bool, estop_state_topic, ESTOP_STATE_QOS
+        )
+        self._publish_estop_state()
         self._subscriptions = [
             self.create_subscription(
                 Twist,
@@ -200,7 +223,35 @@ class CommandMuxNode(Node):
         return response
 
     def _transition_estop(self, enabled):
-        return self._core.set_estop(bool(enabled), self._now_sec())
+        changed = self._core.set_estop(bool(enabled), self._now_sec())
+        self._publish_estop_state()
+        return changed
+
+    def _publish_estop_state(self):
+        state = Bool()
+        state.data = bool(self._core.estop)
+        try:
+            self._estop_state_publisher.publish(state)
+        except Exception as error:
+            now = time.monotonic()
+            last_log_time = self._last_estop_state_publish_error_log_time
+            if (
+                last_log_time is None
+                or now - last_log_time
+                >= ESTOP_STATE_PUBLISH_ERROR_LOG_INTERVAL_SEC
+            ):
+                self._last_estop_state_publish_error_log_time = now
+                try:
+                    self.get_logger().error(
+                        'Failed to publish typed estop state; '
+                        'core state remains {}: {}'.format(
+                            bool(self._core.estop), error
+                        )
+                    )
+                except Exception:
+                    pass
+            return
+        self._last_estop_state_publish_error_log_time = None
 
     def _on_gait_lock(self, message):
         self._core.set_gait_lock(message.data, self._now_sec())
@@ -225,6 +276,7 @@ class CommandMuxNode(Node):
             allow_nan=False,
         )
         self._status_publisher.publish(status)
+        self._publish_estop_state()
 
 
 def main(args=None):
