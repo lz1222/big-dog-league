@@ -39,7 +39,7 @@
 | Go2 运动 | `/locomotion/execute_motion` (`ExecuteMotion`) | 部分实现 | `rk_interfaces/action/ExecuteMotion.action`；`gait_control_node.py` | 部分 motion name 未实现；无真实动作完成反馈 |
 | Go2 适配器 | `RobotMotionAdapter` -> `/navigation/cmd_vel` | 已实现 | `rk_locomotion/rk_locomotion/gait_control_node.py:56` | `vy`、body height、recovery stand 未接到底层 |
 | Go2 ROS 2 驱动 | `/navigation/cmd_vel` -> `/api/sport/request` | 部分实现 | `cmd_vel_bridge_node.py`；`go2_motion_client.py` | 默认 backend 是 mock；仅支持 `vx`、`vyaw`；无状态订阅 |
-| Go2 UDP 驱动 | `/navigation/cmd_vel` -> UDP `15001` | 外部依赖 | `cmd_vel_udp_forwarder.py` | `go2_sdk_udp_server` 源码不在仓库内 |
+| Go2 UDP 驱动 | `/navigation/cmd_vel` -> UDP `15001` | 已纳入仓库，待真机复验 | `cmd_vel_udp_forwarder.py`、`go2_sdk_udp_server.cpp` | B1.5 服务端含固定频率输出、输入校验和双层 watchdog |
 | Go2 直接 SDK2 | `SportClient`、`VuiClient`、`VideoClient` | 已实现 | `rk_go2_sdk_bridge/src/*.cpp` | 主要是命令行工具；未统一接入 `ExecuteMotion` |
 | `start_jump` | ROS 2 motion name | 部分实现 | `gait_control_node.py:732,1274` | 只是开环前进序列；未调用 `FrontJump()` |
 | `finish_jump` | ROS 2 motion name | 部分实现 | `gait_control_node.py:734,1274` | 与 `start_jump` 使用相同参数和执行逻辑 |
@@ -84,7 +84,9 @@
 
 - `src/rk_go2_sdk_bridge/CMakeLists.txt` 仅在找到 `unitree_sdk2` 时构建四个直接 SDK 工具。
 - 审计时本地 `install/rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/` 中四个工具均存在且可执行；这只能证明已构建，不能证明真机可用。
-- `cmd_vel_udp_forwarder.py` 依赖外部 `go2_sdk_udp_server`。默认路径指向 `/home/unitree/unitree_go2_sdk_test/build/go2_sdk_udp_server`，仓库内没有该 server 源码，因此该路径不可独立复现。
+- B1.5 已将 `go2_sdk_udp_server` 源码和构建目标纳入
+  `rk_go2_sdk_bridge`；新 launch 默认使用包安装目录中的服务端。部分旧
+  `rk_bringup` 巡线脚本仍保留外部路径，本阶段按范围要求未修改。
 - ROS 2 Request 路径依赖 vendored `unitree_ros2` 的 `unitree_api/msg/Request`、CycloneDDS 配置、正确网卡和兼容 RMW。
 
 ### 4.3 D1 Unitree SDK2 调用
@@ -288,7 +290,7 @@ obstacle_direct_route_node / keyboard_route_node / sign_action_executor_node
 
 ### P1：联调阶段完成
 
-- [ ] 将外部 `go2_sdk_udp_server` 纳入版本管理，或移除该不可复现依赖。
+- [x] 将 B1.5 `go2_sdk_udp_server` 纳入版本管理并改用包内默认路径。
 - [ ] 补齐 `vy` 在所有 Go2 backend 中的一致语义和限速。
 - [ ] 为 jump、stairs、avoid 建立统一的前置状态、执行状态、完成状态和恢复状态。
 - [ ] 接入 `/utlidar/cloud`；若算法继续消费 `/scan`，增加受控的
