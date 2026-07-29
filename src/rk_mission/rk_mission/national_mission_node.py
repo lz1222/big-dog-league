@@ -50,6 +50,8 @@ class NationalMissionNode(Node, MissionAdapter):
         self.simulation_mode = bool(self.params['simulation_mode'])
         self._mission_command_released = True
         self._active_goal_handle = None
+        self._action_future_lock = threading.Lock()
+        self._pending_action_futures = set()
         self._fsm_lock = threading.RLock()
 
         self.mission_cmd_pub = self.create_publisher(
@@ -264,6 +266,32 @@ class NationalMissionNode(Node, MissionAdapter):
     def execute_maze_placeholder(self, request):
         self._send_action(self.locomotion_client, request, ExecuteMotion.Goal())
 
+    def _track_action_future(self, future, callback):
+        """Keep internal Action Futures alive until callbacks finish."""
+        with self._action_future_lock:
+            self._pending_action_futures.add(future)
+
+        def completed(done_future):
+            try:
+                callback(done_future)
+            except Exception as exc:
+                self.get_logger().error(
+                    '[MISSION] ACTION_FUTURE_CALLBACK_ERROR {}'.format(exc)
+                )
+            finally:
+                with self._action_future_lock:
+                    self._pending_action_futures.discard(done_future)
+
+        future.add_done_callback(completed)
+        return future
+
+    def pending_action_future_count(self):
+        with self._action_future_lock:
+            return len(self._pending_action_futures)
+
+    def run_goal_active(self):
+        return self._active_goal_handle is not None
+
     def _send_action(self, client, request, goal):
         if request.adapter in ('locomotion', 'maze'):
             goal.motion_name = request.task_name
@@ -280,8 +308,11 @@ class NationalMissionNode(Node, MissionAdapter):
                     ), self._now())
                 return
         future = client.send_goal_async(goal)
-        future.add_done_callback(
-            lambda done, req=request: self._on_action_goal_response(done, req)
+        self._track_action_future(
+            future,
+            lambda done, req=request: self._on_action_goal_response(
+                done, req
+            ),
         )
 
     def _on_action_goal_response(self, future, request):
@@ -302,8 +333,9 @@ class NationalMissionNode(Node, MissionAdapter):
             return
         self._publish_action('accepted', request)
         result_future = handle.get_result_async()
-        result_future.add_done_callback(
-            lambda done, req=request: self._on_action_result(done, req)
+        self._track_action_future(
+            result_future,
+            lambda done, req=request: self._on_action_result(done, req),
         )
 
     def _on_action_result(self, future, request):
