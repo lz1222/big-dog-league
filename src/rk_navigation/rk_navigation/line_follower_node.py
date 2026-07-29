@@ -41,8 +41,11 @@ VALID_STATES = {
 class LineFollowerNode(Node):
     """Competition line navigation state machine."""
 
-    def __init__(self):
-        super().__init__('line_follower_node')
+    def __init__(self, parameter_overrides=None):
+        """Create the follower, optionally with launch/test parameter overrides."""
+        super().__init__(
+            'line_follower_node', parameter_overrides=parameter_overrides
+        )
 
         self.declare_parameter(
             'suggested_cmd_topic',
