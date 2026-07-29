@@ -37,6 +37,8 @@ setup(
             'mock_sign_detector_node = '
             'rk_perception.mock_sign_detector_node:main',
             'mock_item_tag_node = rk_perception.mock_item_tag_node:main',
+            'route_marker_detector_node = '
+            'rk_perception.route_marker_detector_node:main',
         ],
     },
 )
