@@ -9,6 +9,7 @@ camera, robot bridge, SportClient, or SDK action executable is launched.
 import argparse
 import json
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.utilities import remove_ros_args
 from std_msgs.msg import Bool, Float32, String
 
 from rk_interfaces.action import RunMission
@@ -141,8 +143,13 @@ class NationalScenarioDriver(Node):
         self.failure_code = ''
         self.failure_reason = ''
         self.goal_result = None
+        self._future_lock = threading.Lock()
+        self._pending_futures = set()
         self.run_index = 0
         self.second_start_at = None
+        self.first_run_mission_id = ''
+        self.second_run_mission_id = ''
+        self.second_run_started = False
         self.white_noise_sent = False
         self.red_noise_sent = False
         self.estop_sent = False
@@ -195,16 +202,47 @@ class NationalScenarioDriver(Node):
         self._publish_sign()
         self._inject_faults()
 
+    def _track_future(self, future, callback):
+        with self._future_lock:
+            self._pending_futures.add(future)
+
+        def completed(done_future):
+            try:
+                callback(done_future)
+            except Exception as exc:
+                self.goal_result = (
+                    False,
+                    'future callback exception: {}'.format(exc),
+                )
+            finally:
+                with self._future_lock:
+                    self._pending_futures.discard(done_future)
+
+        future.add_done_callback(completed)
+        return future
+
+    def pending_future_count(self):
+        with self._future_lock:
+            return len(self._pending_futures)
+
     def _send_goal(self):
+        if (
+            self.scenario.fault == 'second_context_reset'
+            and self.run_index == 1
+        ):
+            self.second_run_started = True
         goal = RunMission.Goal()
         goal.start = True
         self.started = True
         future = self.run_client.send_goal_async(goal)
-        future.add_done_callback(self._on_goal_response)
+        self._track_future(future, self._on_goal_response)
         if self.scenario.fault == 'action_and_json_repeat_start' and not self.repeated_start_sent:
             self.repeated_start_sent = True
             duplicate = self.run_client.send_goal_async(goal)
-            duplicate.add_done_callback(lambda completed: completed.result())
+            self._track_future(
+                duplicate,
+                lambda completed: completed.result(),
+            )
             message = Bool()
             message.data = True
             self.legacy_start_pub.publish(message)
@@ -217,7 +255,7 @@ class NationalScenarioDriver(Node):
         if handle is None or not handle.accepted:
             return
         result_future = handle.get_result_async()
-        result_future.add_done_callback(self._on_goal_result)
+        self._track_future(result_future, self._on_goal_result)
 
     def _on_goal_result(self, future):
         try:
@@ -231,24 +269,52 @@ class NationalScenarioDriver(Node):
             payload = json.loads(message.data)
         except (TypeError, ValueError, json.JSONDecodeError):
             return
+
         state = str(payload.get('state', ''))
+        mission_id = str(payload.get('mission_id', ''))
         now = time.monotonic()
+
+        # During the second run, ignore queued state messages belonging to
+        # the first mission.  Bind completion only to the new mission_id.
+        if (
+            self.scenario.fault == 'second_context_reset'
+            and self.run_index == 1
+        ):
+            if not self.second_run_started:
+                return
+
+            if mission_id == self.first_run_mission_id:
+                return
+
+            if not self.second_run_mission_id:
+                if not mission_id or state in TERMINAL_STATES:
+                    return
+                self.second_run_mission_id = mission_id
+            elif mission_id != self.second_run_mission_id:
+                return
+
         if state != self.state:
             self.state = state
             self.state_enter_time = now
+
         self.state_payload = payload
+
         if state in TERMINAL_STATES:
             if (
                 self.scenario.fault == 'second_context_reset'
                 and self.run_index == 0
                 and state == 'MISSION_COMPLETE'
             ):
+                self.first_run_mission_id = mission_id
+                self.second_run_mission_id = ''
+                self.second_run_started = False
                 self.run_index = 1
-                reset = String()
-                reset.data = 'reset'
-                self.control_pub.publish(reset)
-                self.second_start_at = now + 0.15
+
+                # Sending the second RunMission goal performs the context
+                # reset itself.  Do not issue an additional reset command.
+                self.second_start_at = now + 0.25
                 return
+
             self.terminal_state = state
             self.failure_code = str(payload.get('failure_code', ''))
             self.failure_reason = str(payload.get('failure_reason', ''))
@@ -417,6 +483,106 @@ def _timeline_name(scenario):
     return '{}_timeline.csv'.format(scenario.name) if scenario.fault else 'nominal_{}_timeline.csv'.format(scenario.name)
 
 
+
+def _destroy_action_entity(owner, attribute):
+    """Destroy one Foxy Action entity before its owning node."""
+    if owner is None:
+        return
+    entity = getattr(owner, attribute, None)
+    if entity is None:
+        return
+    try:
+        entity.destroy()
+    except Exception:
+        pass
+    try:
+        setattr(owner, attribute, None)
+    except Exception:
+        pass
+
+
+def _wait_for_async_drain(
+    driver,
+    mission,
+    fake_servers,
+    timeout_sec=3.0,
+    stable_sec=0.35,
+):
+    """Wait until every Action callback and Future is stably idle."""
+    deadline = time.monotonic() + float(timeout_sec)
+    stable_since = None
+
+    while time.monotonic() < deadline:
+        fake_active = (
+            fake_servers.active_callback_count()
+            if fake_servers is not None
+            else 0
+        )
+        driver_pending = (
+            driver.pending_future_count()
+            if driver is not None
+            else 0
+        )
+        mission_pending = (
+            mission.pending_action_future_count()
+            if mission is not None
+            else 0
+        )
+        run_goal_active = (
+            mission.run_goal_active()
+            if mission is not None
+            else False
+        )
+
+        idle = (
+            fake_active == 0
+            and driver_pending == 0
+            and mission_pending == 0
+            and not run_goal_active
+        )
+
+        if idle:
+            if stable_since is None:
+                stable_since = time.monotonic()
+            elif time.monotonic() - stable_since >= stable_sec:
+                return True
+        else:
+            stable_since = None
+
+        time.sleep(0.01)
+
+    return False
+
+
+def _cancel_node_timers(node):
+    """Prevent new periodic callbacks during scenario teardown."""
+    if node is None:
+        return
+
+    try:
+        timers = list(node.timers)
+    except Exception:
+        timers = []
+
+    for timer in timers:
+        try:
+            timer.cancel()
+        except Exception:
+            pass
+
+
+def _shutdown_executor_workers(executor):
+    """Wait for Foxy MultiThreadedExecutor worker callbacks to finish."""
+    worker_pool = getattr(executor, '_executor', None)
+    if worker_pool is None:
+        return
+
+    try:
+        worker_pool.shutdown(wait=True)
+    except Exception:
+        pass
+
+
 def run_scenario(scenario_name, output_dir, timeout_sec=None):
     """Create and tear down one complete no-hardware ROS graph."""
     scenario = get_scenario(scenario_name)
@@ -425,6 +591,9 @@ def run_scenario(scenario_name, output_dir, timeout_sec=None):
     executor = MultiThreadedExecutor(num_threads=10)
     spin_thread = None
     recorder = None
+    mission = None
+    fake_servers = None
+    driver = None
     nodes = []
     started = time.monotonic()
     try:
@@ -483,7 +652,25 @@ def run_scenario(scenario_name, output_dir, timeout_sec=None):
             driver.terminal_state = 'TIMEOUT'
             driver.failure_code = 'SIMULATION_TIMEOUT'
             driver.failure_reason = 'scenario wall timeout'
-        time.sleep(0.15)
+
+        drained = _wait_for_async_drain(
+            driver,
+            mission,
+            fake_servers,
+            timeout_sec=3.0,
+        )
+        if not drained:
+            print(
+                '[SIM] asynchronous drain timeout: '
+                'fake_callbacks={} driver_futures={} '
+                'mission_futures={} run_goal_active={}'.format(
+                    fake_servers.active_callback_count(),
+                    driver.pending_future_count(),
+                    mission.pending_action_future_count(),
+                    mission.run_goal_active(),
+                )
+            )
+
         terminal = driver.terminal_state or 'TIMEOUT'
         conflict = _authority_conflict(recorder)
         return ScenarioResult(
@@ -492,14 +679,48 @@ def run_scenario(scenario_name, output_dir, timeout_sec=None):
             driver.failure_code, driver.failure_reason, driver.action_count, conflict,
         )
     finally:
-        executor.shutdown()
-        if spin_thread is not None:
-            spin_thread.join(timeout=1.0)
-        if recorder is not None:
-            recorder.close()
+        # Stop periodic callbacks before detaching nodes from the executor.
+        for node in nodes:
+            _cancel_node_timers(node)
+
+        # Remove nodes while all ROS handles are still valid. This wakes the
+        # executor and prevents a rebuilt wait set from retaining Action
+        # entities that are about to be destroyed.
         for node in reversed(nodes):
             try:
                 executor.remove_node(node)
+            except Exception:
+                pass
+
+        executor.shutdown()
+
+        if spin_thread is not None:
+            spin_thread.join(timeout=2.0)
+
+        # Foxy MultiThreadedExecutor.shutdown() may leave worker threads
+        # finishing callbacks. Join that private pool before any Action
+        # handle is destroyed.
+        _shutdown_executor_workers(executor)
+
+        if recorder is not None:
+            recorder.close()
+
+        # Foxy does not reliably destroy Action entities as part of
+        # Node.destroy_node().  Destroy them while their node handles are
+        # still valid, otherwise their later __del__ methods raise
+        # InvalidHandle.
+        for owner, attribute in (
+            (driver, 'run_client'),
+            (mission, 'locomotion_client'),
+            (mission, 'arm_client'),
+            (mission, 'run_server'),
+            (fake_servers, 'motion_server'),
+            (fake_servers, 'arm_server'),
+        ):
+            _destroy_action_entity(owner, attribute)
+
+        for node in reversed(nodes):
+            try:
                 node.destroy_node()
             except Exception:
                 pass
@@ -581,7 +802,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scenario', default='marker1_radiation', choices=sorted(ALL_SCENARIOS))
     parser.add_argument('--output-dir', default='')
-    args = parser.parse_args(argv)
+    raw_args = (
+        sys.argv
+        if argv is None
+        else ['national_route_simulator'] + list(argv)
+    )
+    args = parser.parse_args(remove_ros_args(args=raw_args)[1:])
     output_dir = args.output_dir or default_output_dir()
     write_static_artifacts(output_dir)
     result = run_scenario(args.scenario, output_dir)

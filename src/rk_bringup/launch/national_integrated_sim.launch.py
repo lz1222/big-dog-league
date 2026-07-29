@@ -21,7 +21,6 @@ def generate_launch_description():
         Node(
             package='rk_tools',
             executable='national_route_simulator',
-            name='national_route_simulator',
             output='screen',
             arguments=['--scenario', scenario, '--output-dir', output_dir],
         ),

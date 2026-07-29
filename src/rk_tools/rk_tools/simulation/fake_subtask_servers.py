@@ -1,6 +1,7 @@
 """Simulation-only Action servers; they never import or call a real SDK."""
 
 import json
+import threading
 import time
 
 from rclpy.action import ActionServer
@@ -18,6 +19,8 @@ class FakeSubtaskServers(Node):
         super().__init__('national_fake_subtask_servers')
         self.scenario = scenario
         self.callback_group = ReentrantCallbackGroup()
+        self._activity_lock = threading.Lock()
+        self._active_callbacks = 0
         self.action_pub = self.create_publisher(
             String, '/simulation/national/fake_action_calls', 10
         )
@@ -33,37 +36,59 @@ class FakeSubtaskServers(Node):
         )
 
     def _execute_motion(self, goal_handle):
-        task = str(goal_handle.request.motion_name)
-        self._record('locomotion', task, '')
-        self._publish_lock(self.gait_lock_pub, True)
-        success, message = self._outcome(task)
-        self._delay(task)
-        self._publish_lock(self.gait_lock_pub, False)
-        result = ExecuteMotion.Result()
-        result.success = success
-        result.message = message
-        if success:
-            goal_handle.succeed()
-        else:
-            goal_handle.abort()
-        return result
+        self._begin_callback()
+        try:
+            task = str(goal_handle.request.motion_name)
+            self._record('locomotion', task, '')
+            self._publish_lock(self.gait_lock_pub, True)
+            success, message = self._outcome(task)
+            self._delay(task)
+            self._publish_lock(self.gait_lock_pub, False)
+            result = ExecuteMotion.Result()
+            result.success = success
+            result.message = message
+            if success:
+                goal_handle.succeed()
+            else:
+                goal_handle.abort()
+            return result
+        finally:
+            self._end_callback()
 
     def _execute_arm(self, goal_handle):
-        task = str(goal_handle.request.task_name)
-        target = str(goal_handle.request.target)
-        self._record('arm', task, target)
-        self._publish_lock(self.arm_lock_pub, True)
-        success, message = self._outcome(task)
-        self._delay(task)
-        self._publish_lock(self.arm_lock_pub, False)
-        result = ExecuteArmTask.Result()
-        result.success = success
-        result.message = message
-        if success:
-            goal_handle.succeed()
-        else:
-            goal_handle.abort()
-        return result
+        self._begin_callback()
+        try:
+            task = str(goal_handle.request.task_name)
+            target = str(goal_handle.request.target)
+            self._record('arm', task, target)
+            self._publish_lock(self.arm_lock_pub, True)
+            success, message = self._outcome(task)
+            self._delay(task)
+            self._publish_lock(self.arm_lock_pub, False)
+            result = ExecuteArmTask.Result()
+            result.success = success
+            result.message = message
+            if success:
+                goal_handle.succeed()
+            else:
+                goal_handle.abort()
+            return result
+        finally:
+            self._end_callback()
+
+    def _begin_callback(self):
+        with self._activity_lock:
+            self._active_callbacks += 1
+
+    def _end_callback(self):
+        with self._activity_lock:
+            self._active_callbacks = max(
+                0, self._active_callbacks - 1
+            )
+
+    def active_callback_count(self):
+        with self._activity_lock:
+            return self._active_callbacks
 
     def _outcome(self, task):
         failures = {
