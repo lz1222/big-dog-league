@@ -120,11 +120,16 @@ if(unitree_sdk2_FOUND)
     src/go2_sdk_velocity_action.cpp
   )
   rk_configure_unitree_sdk_target(go2_sdk_velocity_action)
+  add_executable(go2_sdk_sport_state_monitor
+    src/go2_sdk_sport_state_monitor.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_sport_state_monitor)
   install(TARGETS
     go2_sdk_capture_image
     go2_sdk_speed_sweep
     go2_sdk_motion_action
     go2_sdk_velocity_action
+    go2_sdk_sport_state_monitor
     DESTINATION lib/${PROJECT_NAME}
   )
 else()
