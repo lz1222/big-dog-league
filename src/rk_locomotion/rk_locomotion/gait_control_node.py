@@ -5,18 +5,30 @@ import math
 import struct
 import threading
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.action import ActionServer
 from rclpy.action.server import CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.context import Context
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy
+from rclpy.qos import QoSHistoryPolicy
+from rclpy.qos import QoSProfile
+from rclpy.qos import QoSReliabilityPolicy
 from sensor_msgs.msg import Image, LaserScan
 from std_msgs.msg import Bool, String
 
+from rk_locomotion.front_jump_supervisor import FrontJumpConfig
+from rk_locomotion.front_jump_supervisor import FrontJumpOutcome
+from rk_locomotion.front_jump_supervisor import FrontJumpProfile
+from rk_locomotion.front_jump_supervisor import FrontJumpSupervisor
+from rk_locomotion.front_jump_supervisor import CleanupGuardError
+from rk_locomotion.front_jump_supervisor import PersistentCleanupGuard
 from rk_interfaces.action import ExecuteMotion
 
 
@@ -28,12 +40,207 @@ STATUS_TIMEOUT = 'TIMEOUT'
 STATUS_UNSTABLE = 'UNSTABLE'
 STATUS_EMERGENCY_STOP = 'EMERGENCY_STOP'
 
+_MOTION_SLOT_TRANSITIONS = {
+    'RESERVED': {'ACCEPTED', 'STOPPING', 'FINALIZING', 'FAULTED'},
+    'ACCEPTED': {'EXECUTING', 'STOPPING', 'FINALIZING', 'FAULTED'},
+    'EXECUTING': {'STOPPING', 'FINALIZING', 'FAULTED'},
+    'STOPPING': {'FINALIZING', 'FAULTED'},
+    'FINALIZING': {'DONE', 'FAULTED'},
+    'DONE': set(),
+    'FAULTED': {'FINALIZING'},
+}
+
+
+def _sanitize_fault_text(value, limit=512):
+    text = ' '.join(str(value).split())
+    if not text:
+        text = 'unspecified fault'
+    return text[:int(limit)]
+
+
+FINAL_CMD_QOS = QoSProfile(
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=10,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.VOLATILE,
+)
+ESTOP_STATE_QOS = QoSProfile(
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+)
+
 
 @dataclass(frozen=True)
 class CommandResult:
     success: bool
     status: str
     message: str
+
+
+@dataclass(frozen=True)
+class LockPublishResult:
+    """One serialized request to publish the desired gait-lock state."""
+
+    requested_state: bool
+    previous_state: bool
+    generation: int
+    publish_succeeded: bool
+    error_message: str
+
+
+class _SerializedControlLockPublisher:
+    """Order lock transitions and periodic republishes through one mutex."""
+
+    def __init__(
+        self,
+        publisher,
+        state_lock,
+        state_update_callback,
+        *,
+        initial_state=False,
+    ):
+        self._publisher = publisher
+        self._state_lock = state_lock
+        self._state_update_callback = state_update_callback
+        self._publish_mutex = threading.Lock()
+        self._desired_state = bool(initial_state)
+        self._generation = 0
+        self._lock_publish_fault = False
+        self._last_result = None
+
+    @property
+    def desired_state(self):
+        with self._state_lock:
+            return self._desired_state
+
+    @property
+    def generation(self):
+        with self._state_lock:
+            return self._generation
+
+    @property
+    def lock_publish_fault(self):
+        with self._state_lock:
+            return self._lock_publish_fault
+
+    @property
+    def last_result(self):
+        with self._state_lock:
+            return self._last_result
+
+    def set_locked(self, locked):
+        requested = bool(locked)
+        with self._publish_mutex:
+            with self._state_lock:
+                previous = self._desired_state
+                self._generation += 1
+                generation = self._generation
+                self._desired_state = requested
+                self._state_update_callback(
+                    self._desired_state,
+                    self._lock_publish_fault,
+                )
+
+            error_message = ''
+            try:
+                msg = Bool()
+                msg.data = requested
+                self._publisher.publish(msg)
+                publish_succeeded = True
+            except Exception as error:
+                publish_succeeded = False
+                error_message = '{}: {}'.format(
+                    type(error).__name__,
+                    str(error),
+                )
+                with self._state_lock:
+                    self._lock_publish_fault = True
+                    if not requested:
+                        self._desired_state = True
+                    self._state_update_callback(
+                        self._desired_state,
+                        self._lock_publish_fault,
+                    )
+
+            result = LockPublishResult(
+                requested_state=requested,
+                previous_state=previous,
+                generation=generation,
+                publish_succeeded=publish_succeeded,
+                error_message=error_message,
+            )
+            with self._state_lock:
+                self._last_result = result
+            return result
+
+    def republish(self):
+        with self._publish_mutex:
+            with self._state_lock:
+                requested = self._desired_state
+                previous = self._desired_state
+                generation = self._generation
+
+            error_message = ''
+            try:
+                msg = Bool()
+                msg.data = requested
+                self._publisher.publish(msg)
+                publish_succeeded = True
+            except Exception as error:
+                publish_succeeded = False
+                error_message = '{}: {}'.format(
+                    type(error).__name__,
+                    str(error),
+                )
+                with self._state_lock:
+                    self._lock_publish_fault = True
+                    if not requested:
+                        self._desired_state = True
+                    self._state_update_callback(
+                        self._desired_state,
+                        self._lock_publish_fault,
+                    )
+
+            result = LockPublishResult(
+                requested_state=requested,
+                previous_state=previous,
+                generation=generation,
+                publish_succeeded=publish_succeeded,
+                error_message=error_message,
+            )
+            with self._state_lock:
+                self._last_result = result
+            return result
+
+
+@dataclass
+class _MotionExecutionSlot:
+    """One reservation shared by every non-STOP Action or JSON motion."""
+
+    reservation_token: str
+    entry_type: str
+    motion_name: str
+    command: str
+    identity: str
+    state: str = 'RESERVED'
+    goal_handle: object = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    completion_event: threading.Event = field(default_factory=threading.Event)
+    worker_started_event: threading.Event = field(
+        default_factory=threading.Event
+    )
+    worker_done_event: threading.Event = field(default_factory=threading.Event)
+    cancel_accepted: bool = False
+    first_abort_reason: str = ''
+    terminal_claimed: bool = False
+    expected_terminal: str = ''
+    terminal_delivery_succeeded: object = None
+    fault_type: str = ''
+    fault_reason: str = ''
+    transitions: list = field(default_factory=lambda: ['RESERVED'])
 
 
 @dataclass(frozen=True)
@@ -142,6 +349,7 @@ class GaitControlNode(Node):
         'WAIT_NAVIGATION_SEGMENT',
         'JUMP_START_OBSTACLE',
         'JUMP_END_OBSTACLE',
+        'FRONT_JUMP_RECOVER',
         'PRACTICAL_OBSTACLE_ZONE',
         'AVOID_ZONE',
         'OBSTACLE_OPEN_LOOP_TEST',
@@ -153,9 +361,20 @@ class GaitControlNode(Node):
         'EXIT_OBSTACLE_ZONE',
     }
 
-    def __init__(self):
-        super().__init__('gait_control_node')
+    def __init__(
+        self,
+        *,
+        node_name='gait_control_node',
+        front_jump_supervisor_factory=FrontJumpSupervisor,
+        process_runner=None,
+        network_interface_validator=None,
+        executable_resolver=None,
+        **node_kwargs,
+    ):
+        super().__init__(node_name, **node_kwargs)
         self.callback_group = ReentrantCallbackGroup()
+        self.motion_action_callback_group = ReentrantCallbackGroup()
+        self.front_jump_callback_group = ReentrantCallbackGroup()
 
         self._declare_parameters()
         self.cmd_vel_topic = self._string_parameter('cmd_vel_topic')
@@ -192,32 +411,81 @@ class GaitControlNode(Node):
         self.roll_pitch_limit_deg = self._positive_float_parameter(
             'roll_pitch_limit_deg'
         )
-        self.jump_timeout_sec = self._positive_float_parameter(
-            'jump_obstacle.timeout_sec'
+        self.front_jump_profiles = {
+            profile_name: FrontJumpProfile(
+                name=profile_name,
+                pre_stop_duration=self._front_jump_nonnegative_float_parameter(
+                    'front_jump.{}.pre_stop_duration'.format(profile_name)
+                ),
+                final_zero_epsilon=self._front_jump_positive_float_parameter(
+                    'front_jump.{}.final_zero_epsilon'.format(profile_name)
+                ),
+                final_zero_confirm_samples=(
+                    self._front_jump_positive_int_parameter(
+                        'front_jump.{}.final_zero_confirm_samples'.format(
+                            profile_name
+                        )
+                    )
+                ),
+                final_zero_timeout=self._front_jump_positive_float_parameter(
+                    'front_jump.{}.final_zero_timeout'.format(profile_name)
+                ),
+                sdk_timeout=self._front_jump_positive_float_parameter(
+                    'front_jump.{}.sdk_timeout'.format(profile_name)
+                ),
+                post_settle_duration=(
+                    self._front_jump_nonnegative_float_parameter(
+                        'front_jump.{}.post_settle_duration'.format(
+                            profile_name
+                        )
+                    )
+                ),
+            )
+            for profile_name in ('start', 'finish')
+        }
+        self.front_jump_config = FrontJumpConfig(
+            sdk_action_executable=self._front_jump_string_parameter(
+                'front_jump.sdk_action_executable'
+            ),
+            sdk_network_interface=self._front_jump_string_parameter(
+                'front_jump.sdk_network_interface'
+            ),
+            zero_publish_rate_hz=self._front_jump_positive_float_parameter(
+                'front_jump.zero_publish_rate_hz'
+            ),
+            final_cmd_stale_timeout=(
+                self._front_jump_positive_float_parameter(
+                    'front_jump.final_cmd_stale_timeout'
+                )
+            ),
+            estop_state_stale_timeout=(
+                self._front_jump_positive_float_parameter(
+                    'front_jump.estop_state_stale_timeout'
+                )
+            ),
         )
-        self.jump_pre_stop_sec = self._nonnegative_float_parameter(
-            'jump_obstacle.pre_stop_sec'
+        self.front_jump_final_cmd_topic = self._front_jump_string_parameter(
+            'front_jump.final_cmd_topic'
         )
-        self.jump_prepare_sec = self._nonnegative_float_parameter(
-            'jump_obstacle.prepare_sec'
+        self.front_jump_cmd_mux_status_topic = (
+            self._front_jump_string_parameter(
+                'front_jump.cmd_mux_status_topic'
+            )
         )
-        self.jump_phase1_vx = self._nonnegative_float_parameter(
-            'jump_obstacle.phase1_vx'
+        self.front_jump_estop_state_topic = (
+            self._front_jump_string_parameter(
+                'front_jump.estop_state_topic'
+            )
         )
-        self.jump_phase1_duration = self._nonnegative_float_parameter(
-            'jump_obstacle.phase1_duration'
+        self.front_jump_cleanup_guard_path = (
+            self._front_jump_string_parameter(
+                'front_jump.cleanup_guard_path'
+            )
         )
-        self.jump_pause_duration = self._nonnegative_float_parameter(
-            'jump_obstacle.pause_duration'
-        )
-        self.jump_phase2_vx = self._nonnegative_float_parameter(
-            'jump_obstacle.phase2_vx'
-        )
-        self.jump_phase2_duration = self._nonnegative_float_parameter(
-            'jump_obstacle.phase2_duration'
-        )
-        self.jump_recover_sec = self._nonnegative_float_parameter(
-            'jump_obstacle.recover_sec'
+        self.front_jump_shutdown_drain_timeout_sec = (
+            self._front_jump_positive_float_parameter(
+                'front_jump.shutdown_drain_timeout_sec'
+            )
         )
         self.enable_depth_safety = self._bool_parameter(
             'obstacle_safety.enable_depth'
@@ -354,10 +622,42 @@ class GaitControlNode(Node):
         self._status = STATUS_IDLE
         self._current_mode = 'IDLE'
         self._control_locked = False
+        self._lock_publish_fault = False
+        self._accept_new_motion = True
+        self._motion_slot = None
+        self._json_command_sequence = 0
+        self._stop_sequence = 0
+        self._safety_faults = {}
+        self._terminal_claims_without_slot = {}
+        self._active_action_worker_count = 0
+        self._action_workers_done_event = threading.Event()
+        self._action_workers_done_event.set()
+        self._shutdown_requested = threading.Event()
+        self._ros_cleanup_allowed = threading.Event()
+        self._ros_cleanup_allowed.set()
+        self._shutdown_prepared = False
+        self._shutdown_prepare_clean = False
+        self._shutdown_commit_called = False
+        self._fatal_shutdown_fault = False
+        self._cleanup_guard = PersistentCleanupGuard(
+            self.front_jump_cleanup_guard_path
+        )
+        self._cleanup_guard_record = None
+        self._full_boot_recovery_guard_id = ''
+        self._full_boot_recovery_baseline = None
+        self._full_boot_recovery_fault_types = set()
+        self._full_boot_recovery_fault_ids = set()
+        self._full_boot_recovery_stop_sequence = 0
+        self._full_boot_recovery_in_progress = False
         self._action_active = False
         self._emergency_stop = False
         self._active_goal_handle = None
         self._active_feedback_callback = None
+        self._front_jump_goal_handle = None
+        self._front_jump_action_goal_handle = None
+        self._front_jump_cancel_event = None
+        self._front_jump_stop_event = None
+        self._initialize_cleanup_guard_state()
 
         self._sensor_lock = threading.RLock()
         self._depth_front_m = None
@@ -381,6 +681,12 @@ class GaitControlNode(Node):
             self._string_parameter('control_lock_topic'),
             10
         )
+        self._control_lock_publisher = _SerializedControlLockPublisher(
+            self.lock_pub,
+            self._state_lock,
+            self._update_control_lock_state_locked,
+            initial_state=False,
+        )
         self.debug_pub = self.create_publisher(
             String,
             self._string_parameter('debug_topic'),
@@ -398,6 +704,35 @@ class GaitControlNode(Node):
             stop_count,
             stop_period_sec
         )
+        supervisor_kwargs = {
+            'profiles': self.front_jump_profiles,
+            'config': self.front_jump_config,
+            'publish_lock': self.publish_lock,
+            'publish_zero': self._publish_front_jump_zero,
+            'event_logger': self._log_front_jump_event,
+            'cleanup_guard': self._cleanup_guard,
+            'ros_cleanup_allowed': (
+                lambda: self._ros_cleanup_allowed.is_set()
+            ),
+        }
+        if process_runner is not None:
+            supervisor_kwargs['process_runner'] = process_runner
+        if network_interface_validator is not None:
+            supervisor_kwargs['interface_index_resolver'] = (
+                network_interface_validator
+            )
+        if executable_resolver is not None:
+            supervisor_kwargs['executable_resolver'] = executable_resolver
+        self.front_jump_supervisor = front_jump_supervisor_factory(
+            **supervisor_kwargs
+        )
+        if self._full_boot_recovery_guard_id:
+            self._full_boot_recovery_baseline = (
+                self.front_jump_supervisor.begin_recovery_window()
+            )
+            self._full_boot_recovery_stop_sequence = (
+                self._stop_sequence
+            )
 
         self.command_json_sub = self.create_subscription(
             String,
@@ -405,6 +740,27 @@ class GaitControlNode(Node):
             self._on_command_json,
             10,
             callback_group=self.callback_group
+        )
+        self.front_jump_final_cmd_sub = self.create_subscription(
+            Twist,
+            self.front_jump_final_cmd_topic,
+            self._on_front_jump_final_cmd,
+            FINAL_CMD_QOS,
+            callback_group=self.front_jump_callback_group,
+        )
+        self.front_jump_estop_state_sub = self.create_subscription(
+            Bool,
+            self.front_jump_estop_state_topic,
+            self._on_front_jump_estop_state,
+            ESTOP_STATE_QOS,
+            callback_group=self.front_jump_callback_group,
+        )
+        self.front_jump_cmd_mux_status_sub = self.create_subscription(
+            String,
+            self.front_jump_cmd_mux_status_topic,
+            self._on_front_jump_cmd_mux_status,
+            10,
+            callback_group=self.front_jump_callback_group,
         )
         self.depth_subscription = None
         if self.enable_depth_safety:
@@ -434,8 +790,11 @@ class GaitControlNode(Node):
                 self.motion_action_name,
                 self._execute_motion_action,
                 goal_callback=self._motion_goal_callback,
+                handle_accepted_callback=(
+                    self._motion_handle_accepted_callback
+                ),
                 cancel_callback=self._motion_cancel_callback,
-                callback_group=self.callback_group
+                callback_group=self.motion_action_callback_group
             )
         else:
             self.get_logger().warn(
@@ -451,8 +810,40 @@ class GaitControlNode(Node):
             callback_group=self.callback_group
         )
 
-        self.publish_status(STATUS_IDLE, 'gait control ready')
-        self.publish_lock(False)
+        initial_lock_required = bool(self._safety_faults)
+        initial_lock_result = self.publish_lock(initial_lock_required)
+        if (
+            initial_lock_required
+            and initial_lock_result.publish_succeeded
+            and self._cleanup_guard.current_record is not None
+        ):
+            try:
+                def mark_initial_lock(guard_record):
+                    guard_record['lock'][
+                        'lock_acquire_command_published'
+                    ] = True
+                    guard_record['lock']['generation'] = (
+                        initial_lock_result.generation
+                    )
+
+                self._cleanup_guard.update(mark_initial_lock)
+            except Exception as error:
+                self._fault_current_motion_slot(
+                    'cleanup_guard_fault',
+                    'initial lock evidence update failed: {}: {}'.format(
+                        type(error).__name__,
+                        str(error),
+                    ),
+                )
+        if self._safety_faults:
+            self.publish_status(
+                STATUS_FAILED,
+                'gait control started with latched safety fault: {}'.format(
+                    ','.join(sorted(self._safety_faults))
+                ),
+            )
+        else:
+            self.publish_status(STATUS_IDLE, 'gait control ready')
         self.publish_mode('IDLE')
         self.get_logger().info(
             'Gait control node ready: json_topic='
@@ -493,15 +884,30 @@ class GaitControlNode(Node):
             'stop_publish_count': 3,
             'stop_publish_period_sec': 0.05,
             'roll_pitch_limit_deg': 25.0,
-            'jump_obstacle.timeout_sec': 5.0,
-            'jump_obstacle.pre_stop_sec': 0.5,
-            'jump_obstacle.prepare_sec': 0.3,
-            'jump_obstacle.phase1_vx': 0.10,
-            'jump_obstacle.phase1_duration': 0.8,
-            'jump_obstacle.pause_duration': 0.2,
-            'jump_obstacle.phase2_vx': 0.08,
-            'jump_obstacle.phase2_duration': 0.5,
-            'jump_obstacle.recover_sec': 0.5,
+            'front_jump.start.pre_stop_duration': 0.5,
+            'front_jump.start.final_zero_epsilon': 0.001,
+            'front_jump.start.final_zero_confirm_samples': 3,
+            'front_jump.start.final_zero_timeout': 2.0,
+            'front_jump.start.sdk_timeout': 12.0,
+            'front_jump.start.post_settle_duration': 2.5,
+            'front_jump.finish.pre_stop_duration': 0.5,
+            'front_jump.finish.final_zero_epsilon': 0.001,
+            'front_jump.finish.final_zero_confirm_samples': 3,
+            'front_jump.finish.final_zero_timeout': 2.0,
+            'front_jump.finish.sdk_timeout': 12.0,
+            'front_jump.finish.post_settle_duration': 2.5,
+            'front_jump.sdk_action_executable': 'go2_sdk_motion_action',
+            'front_jump.sdk_network_interface': 'eth0',
+            'front_jump.zero_publish_rate_hz': 10.0,
+            'front_jump.final_cmd_topic': '/navigation/cmd_vel',
+            'front_jump.final_cmd_stale_timeout': 0.20,
+            'front_jump.cmd_mux_status_topic': '/control/cmd_mux_status',
+            'front_jump.estop_state_topic': '/safety/estop_state',
+            'front_jump.estop_state_stale_timeout': 0.20,
+            'front_jump.cleanup_guard_path': (
+                '~/rk_line_runtime/front_jump_cleanup_guard.json'
+            ),
+            'front_jump.shutdown_drain_timeout_sec': 5.0,
             'obstacle_safety.enable_depth': True,
             'obstacle_safety.enable_scan': False,
             'obstacle_safety.require_fresh_data': False,
@@ -636,24 +1042,79 @@ class GaitControlNode(Node):
         for name, value in parameters.items():
             self.declare_parameter(name, value)
 
+    def _initialize_cleanup_guard_state(self):
+        try:
+            record = self._cleanup_guard.load()
+        except CleanupGuardError as error:
+            self._safety_faults['cleanup_guard_fault'] = str(error)
+            self._accept_new_motion = False
+            return
+        if record is None:
+            return
+
+        self._cleanup_guard_record = record
+        if record['state'] == 'CLEAN':
+            try:
+                self._cleanup_guard.clear(record['cleanup_fault_id'])
+                self._cleanup_guard_record = None
+                return
+            except CleanupGuardError as error:
+                self._safety_faults['cleanup_guard_fault'] = str(error)
+                self._accept_new_motion = False
+                return
+        process_absent, process_reason = (
+            FrontJumpSupervisor.guard_process_absent(record)
+        )
+        if (
+            record['boot_id'] != self._cleanup_guard.current_boot_id
+            and process_absent
+        ):
+            self._full_boot_recovery_guard_id = (
+                record['cleanup_fault_id']
+            )
+
+        fault_records = record.get('faults', [])
+        self._full_boot_recovery_fault_types = {
+            str(fault.get('fault_type', 'cleanup_fault'))
+            for fault in fault_records
+        } or {'cleanup_fault'}
+        self._full_boot_recovery_fault_ids = {
+            str(fault.get('fault_id', ''))
+            for fault in fault_records
+        }
+        if fault_records:
+            for fault in fault_records:
+                fault_type = str(
+                    fault.get('fault_type', 'cleanup_fault')
+                )
+                self._safety_faults[fault_type] = (
+                    str(fault.get('reason', '')).strip()
+                    or process_reason
+                    or 'dirty cleanup guard requires recovery'
+                )
+        else:
+            self._safety_faults['cleanup_fault'] = (
+                process_reason
+                or 'dirty cleanup guard requires recovery'
+            )
+        self._accept_new_motion = False
+
     def _on_command_json(self, msg):
         try:
             fields = json.loads(msg.data)
         except json.JSONDecodeError as error:
-            self.publish_status(
-                STATUS_FAILED,
-                f'invalid /gait/command_json: {error}'
+            self.publish_debug(
+                f'rejected invalid /gait/command_json: {error}'
             )
             return
 
         if not isinstance(fields, dict):
-            self.publish_status(
-                STATUS_FAILED,
+            self.publish_debug(
                 '/gait/command_json must contain a JSON object'
             )
             return
 
-        result = self.handle_command(fields)
+        result = self.handle_command(fields, entry_type='json')
         self.publish_debug(
             'JSON command result: '
             f'success={result.success}, status={result.status}'
@@ -664,27 +1125,251 @@ class GaitControlNode(Node):
         if not motion_name:
             self.get_logger().warn('Rejected empty motion goal')
             return GoalResponse.REJECT
+
+        fields = self.motion_name_to_command_fields(motion_name)
+        if fields is None:
+            self.get_logger().warn(
+                f'Rejected unsupported motion goal: {motion_name}'
+            )
+            return GoalResponse.REJECT
+
+        command = str(fields.get('command', '')).strip().upper()
+        if command in ('STOP', 'OBSTACLE_STOP'):
+            return GoalResponse.ACCEPT
+
+        slot, reason = self._try_reserve_motion_slot(
+            entry_type='action',
+            motion_name=motion_name,
+            command=command,
+            identity='pending_uuid',
+        )
+        if slot is None:
+            self.get_logger().warn(
+                f'Rejected motion goal {motion_name}: {reason}'
+            )
+            return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
+    def _motion_handle_accepted_callback(self, goal_handle):
+        motion_name = str(goal_handle.request.motion_name or '').strip()
+        fields = self.motion_name_to_command_fields(motion_name)
+        command = (
+            ''
+            if fields is None
+            else str(fields.get('command', '')).strip().upper()
+        )
+
+        if command in ('STOP', 'OBSTACLE_STOP'):
+            try:
+                goal_handle.execute()
+            except Exception as error:
+                self._latch_action_fault(
+                    'action_reservation_fault',
+                    'STOP handle execute failed: {}: {}'.format(
+                        type(error).__name__,
+                        str(error),
+                    ),
+                )
+                self._attempt_action_terminal(
+                    goal_handle,
+                    None,
+                    'abort',
+                )
+            return
+
+        try:
+            goal_uuid = self._front_jump_goal_id(goal_handle)
+            if not goal_uuid:
+                raise ValueError('accepted goal UUID is unavailable')
+            with self._state_lock:
+                slot = self._motion_slot
+                if (
+                    slot is None
+                    or slot.entry_type != 'action'
+                    or slot.state not in ('RESERVED', 'STOPPING')
+                    or slot.motion_name != motion_name
+                ):
+                    raise RuntimeError(
+                        'accepted goal has no matching reservation'
+                    )
+                slot.goal_handle = goal_handle
+                slot.identity = goal_uuid
+                if slot.state != 'STOPPING':
+                    self._transition_motion_slot_locked(slot, 'ACCEPTED')
+        except Exception as error:
+            faulted_slot = self._fault_current_motion_slot(
+                'action_reservation_fault',
+                'handle binding failed: {}: {}'.format(
+                    type(error).__name__,
+                    str(error),
+                ),
+            )
+            terminal_ok = self._attempt_action_terminal(
+                goal_handle,
+                faulted_slot,
+                'abort',
+            )
+            self._complete_motion_slot(
+                faulted_slot,
+                terminal_ok=terminal_ok,
+            )
+            return
+
+        try:
+            goal_handle.execute()
+        except Exception as error:
+            self._fault_current_motion_slot(
+                'action_reservation_fault',
+                'goal_handle.execute failed: {}: {}'.format(
+                    type(error).__name__,
+                    str(error),
+                ),
+            )
+            self._attempt_action_terminal(goal_handle, slot, 'abort')
+
     def _motion_cancel_callback(self, goal_handle):
-        del goal_handle
         with self._state_lock:
-            self._emergency_stop = True
-        self.motion.stop('motion action cancel requested', log_level='warn')
+            slot = self._motion_slot
+            if (
+                slot is None
+                or slot.entry_type != 'action'
+                or slot.goal_handle is not goal_handle
+                or slot.state not in (
+                    'ACCEPTED',
+                    'EXECUTING',
+                    'STOPPING',
+                )
+                or slot.terminal_claimed
+            ):
+                return CancelResponse.REJECT
+            slot.cancel_accepted = True
+            slot.cancel_event.set()
+            if not slot.first_abort_reason:
+                slot.first_abort_reason = 'cancel_requested'
+            self._transition_motion_slot_locked(slot, 'STOPPING')
+            is_front_jump = self._is_front_jump_motion_name(
+                slot.motion_name
+            )
+            if not is_front_jump:
+                self._emergency_stop = True
+        if is_front_jump:
+            self.front_jump_supervisor.wake()
         return CancelResponse.ACCEPT
 
     def _execute_motion_action(self, goal_handle):
+        with self._state_lock:
+            self._active_action_worker_count += 1
+            self._action_workers_done_event.clear()
+        try:
+            return self._execute_motion_action_impl(goal_handle)
+        finally:
+            with self._state_lock:
+                self._active_action_worker_count -= 1
+                if self._active_action_worker_count == 0:
+                    self._action_workers_done_event.set()
+
+    def _execute_motion_action_impl(self, goal_handle):
         motion_name = str(goal_handle.request.motion_name or '').strip()
         fields = self.motion_name_to_command_fields(motion_name)
         result_msg = ExecuteMotion.Result()
 
         if fields is None:
             message = f'unsupported motion_name: {motion_name}'
-            self.get_logger().error(message)
             result_msg.success = False
-            result_msg.message = message
-            goal_handle.abort()
+            terminal_ok = self._attempt_action_terminal(
+                goal_handle,
+                None,
+                'abort',
+            )
+            result_msg.message = self._action_result_message(
+                message,
+                'abort',
+                terminal_ok,
+            )
             return result_msg
+
+        command = str(fields.get('command', '')).strip().upper()
+        if command in ('STOP', 'OBSTACLE_STOP'):
+            result = self.execute_stop()
+            terminal_state = 'succeed' if result.success else 'abort'
+            terminal_ok = self._attempt_action_terminal(
+                goal_handle,
+                None,
+                terminal_state,
+            )
+            result_msg.success = bool(
+                result.success
+                and terminal_state == 'succeed'
+                and terminal_ok
+            )
+            result_msg.message = self._action_result_message(
+                result.message,
+                terminal_state,
+                terminal_ok,
+            )
+            return result_msg
+
+        with self._state_lock:
+            current_slot = self._motion_slot
+            if (
+                current_slot is None
+                or current_slot.entry_type != 'action'
+                or current_slot.goal_handle is not goal_handle
+                or current_slot.state not in ('ACCEPTED', 'STOPPING')
+            ):
+                slot = None
+            else:
+                slot = current_slot
+                if slot.state == 'ACCEPTED':
+                    self._transition_motion_slot_locked(slot, 'EXECUTING')
+                slot.worker_started_event.set()
+        if slot is None:
+            message = 'accepted action has no executable reservation'
+            self._latch_action_fault(
+                'action_reservation_fault',
+                message,
+            )
+            if self._is_front_jump_motion_name(motion_name):
+                message = FrontJumpOutcome(
+                    success=False,
+                    terminal_state='abort',
+                    stage='action_reservation',
+                    reason='accepted_action_has_no_executable_reservation',
+                    helper_started=False,
+                    sdk_request_may_have_been_sent=False,
+                    cleanup_completed=False,
+                    sdk_command_accepted=False,
+                    post_settle_completed=False,
+                ).message()
+            result_msg.success = False
+            terminal_ok = self._attempt_action_terminal(
+                goal_handle,
+                (
+                    current_slot
+                    if (
+                        current_slot is not None
+                        and current_slot.entry_type == 'action'
+                        and current_slot.goal_handle is goal_handle
+                    )
+                    else None
+                ),
+                'abort',
+            )
+            result_msg.message = self._action_result_message(
+                message,
+                'abort',
+                terminal_ok,
+            )
+            return result_msg
+
+        if command in ('JUMP_START_OBSTACLE', 'JUMP_END_OBSTACLE'):
+            return self._execute_front_jump_action(
+                goal_handle,
+                'start_jump'
+                if command == 'JUMP_START_OBSTACLE'
+                else 'finish_jump',
+                slot,
+            )
 
         def feedback_callback(current_step, progress):
             feedback = ExecuteMotion.Feedback()
@@ -698,7 +1383,11 @@ class GaitControlNode(Node):
 
         try:
             self.publish_action_feedback(f'{motion_name}: start', 0.0)
-            result = self.handle_command(fields)
+            result = self.handle_command(
+                fields,
+                slot=slot,
+                entry_type='action',
+            )
             self.publish_action_feedback(
                 f'{motion_name}: {result.status}',
                 1.0
@@ -712,15 +1401,497 @@ class GaitControlNode(Node):
                 self._active_goal_handle = None
                 self._active_feedback_callback = None
 
-        result_msg.success = bool(result.success)
-        result_msg.message = result.message
-        if result.success:
-            goal_handle.succeed()
-        elif goal_handle.is_cancel_requested:
-            goal_handle.canceled()
-        else:
-            goal_handle.abort()
+        terminal_state = self._terminal_state_for_slot(slot, result.success)
+        result_msg.success = False
+        terminal_ok = self._attempt_action_terminal(
+            goal_handle,
+            slot,
+            terminal_state,
+        )
+        self._complete_motion_slot(slot, terminal_ok=terminal_ok)
+        terminal_fault = bool(slot.fault_type)
+        cleanup_completed = bool(
+            slot.state == 'DONE'
+            and slot.worker_done_event.is_set()
+            and slot.completion_event.is_set()
+        )
+        result_msg.success = bool(
+            result.success
+            and terminal_state == 'succeed'
+            and terminal_ok
+            and not terminal_fault
+            and cleanup_completed
+        )
+        result_msg.message = self._action_result_message(
+            result.message,
+            terminal_state,
+            terminal_ok,
+        )
         return result_msg
+
+    def _execute_front_jump_action(self, goal_handle, motion_name, slot):
+        result_msg = ExecuteMotion.Result()
+
+        def feedback_callback(current_step, progress):
+            feedback = ExecuteMotion.Feedback()
+            feedback.current_step = str(current_step)
+            feedback.progress = float(max(0.0, min(1.0, progress)))
+            goal_handle.publish_feedback(feedback)
+
+        try:
+            outcome = self._run_front_jump(
+                motion_name,
+                slot=slot,
+                goal_handle=goal_handle,
+                feedback_callback=feedback_callback,
+            )
+        except Exception as error:
+            reason = (
+                'FrontJump node delivery failed: {}: {}'
+                .format(type(error).__name__, str(error))
+            )
+            self._latch_action_fault(
+                'action_terminal_delivery_fault',
+                reason,
+            )
+            outcome = FrontJumpOutcome(
+                success=False,
+                terminal_state='abort',
+                stage='finally_keep_zero_and_release_lock',
+                reason='node_delivery_failed',
+                helper_started=False,
+                sdk_request_may_have_been_sent=False,
+                cleanup_completed=False,
+                sdk_command_accepted=False,
+                post_settle_completed=False,
+            )
+
+        with self._state_lock:
+            owns_action = self._motion_slot is slot
+            cancel_accepted = slot.cancel_accepted
+            stop_requested = slot.stop_event.is_set()
+        if owns_action and cancel_accepted:
+            outcome = self._front_jump_late_stop_outcome(
+                outcome,
+                terminal_state='canceled',
+                reason='cancel_requested',
+            )
+        elif owns_action and outcome.success and stop_requested:
+            outcome = self._front_jump_late_stop_outcome(
+                outcome,
+                terminal_state='abort',
+                reason=slot.first_abort_reason or 'gait_stop_requested',
+            )
+
+        result_msg.success = False
+        try:
+            self.publish_status(
+                self._front_jump_outcome_status(outcome),
+                outcome.message(),
+            )
+        except Exception as error:
+            self._latch_action_fault(
+                'action_terminal_delivery_fault',
+                'FrontJump status publish failed: {}: {}'.format(
+                    type(error).__name__,
+                    str(error),
+                ),
+            )
+        terminal_ok = self._attempt_action_terminal(
+            goal_handle,
+            slot,
+            outcome.terminal_state,
+        )
+        self._complete_motion_slot(slot, terminal_ok=terminal_ok)
+        terminal_fault = bool(slot.fault_type)
+        result_msg.success = bool(
+            outcome.success
+            and outcome.terminal_state == 'succeed'
+            and outcome.cleanup_completed
+            and terminal_ok
+            and not terminal_fault
+        )
+        result_msg.message = self._action_result_message(
+            outcome.message(),
+            outcome.terminal_state,
+            terminal_ok,
+        )
+        return result_msg
+
+    def _try_reserve_motion_slot(
+        self,
+        *,
+        entry_type,
+        motion_name,
+        command,
+        identity,
+    ):
+        with self._state_lock:
+            reason = self._motion_admission_reason_locked()
+            if reason:
+                return None, reason
+            if self._motion_slot is not None:
+                return None, 'another motion owns the execution slot'
+            if entry_type == 'json':
+                self._json_command_sequence += 1
+                identity = 'json-{}'.format(self._json_command_sequence)
+            slot = _MotionExecutionSlot(
+                reservation_token=uuid.uuid4().hex,
+                entry_type=str(entry_type),
+                motion_name=str(motion_name),
+                command=str(command),
+                identity=str(identity),
+            )
+            self._motion_slot = slot
+            self._action_active = True
+            return slot, ''
+
+    def _motion_admission_reason_locked(self):
+        if not self._accept_new_motion:
+            return 'node is not accepting new motion'
+        if self._safety_faults:
+            return 'safety fault is latched: {}'.format(
+                ','.join(sorted(self._safety_faults))
+            )
+        if (
+            hasattr(self, '_control_lock_publisher')
+            and self._control_lock_publisher.lock_publish_fault
+        ):
+            return 'lock publish fault is latched'
+        return ''
+
+    def _fault_current_motion_slot(self, fault_type, reason):
+        fault_type = _sanitize_fault_text(fault_type, limit=128)
+        reason = _sanitize_fault_text(reason)
+        with self._state_lock:
+            slot = self._motion_slot
+            if slot is not None:
+                # A running worker must finish its own cleanup and terminal
+                # attempt before completion is observable.  STOPPING blocks
+                # new work without claiming that the worker is already done.
+                if slot.state not in ('FINALIZING', 'DONE', 'FAULTED'):
+                    self._transition_motion_slot_locked(slot, 'STOPPING')
+                slot.fault_type = fault_type
+                slot.fault_reason = reason
+            self._safety_faults[fault_type] = reason
+            self._accept_new_motion = False
+            operation = {}
+            if slot is not None:
+                operation = {
+                    'reservation_token': slot.reservation_token,
+                    'entry_type': slot.entry_type,
+                    'motion_name': slot.motion_name,
+                    'goal_uuid': (
+                        slot.identity
+                        if slot.entry_type == 'action'
+                        else ''
+                    ),
+                    'command_identity': slot.identity,
+                }
+        try:
+            record = self._cleanup_guard.record_fault(
+                fault_type,
+                reason,
+                operation=operation,
+            )
+            self._cleanup_guard_record = record
+        except Exception as error:
+            with self._state_lock:
+                self._safety_faults['cleanup_guard_fault'] = (
+                    '{}: {}'.format(type(error).__name__, str(error))
+                )
+        return slot
+
+    def _transition_motion_slot_locked(self, slot, target_state):
+        """Apply one checked transition while ``_state_lock`` is held."""
+
+        target_state = str(target_state)
+        current_state = slot.state
+        if current_state == target_state:
+            return True
+        allowed = _MOTION_SLOT_TRANSITIONS.get(current_state, set())
+        if target_state in allowed:
+            slot.state = target_state
+            slot.transitions.append(target_state)
+            return True
+
+        reason = 'illegal motion slot transition {}->{}'.format(
+            current_state,
+            target_state,
+        )
+        slot.fault_type = 'motion_slot_transition_fault'
+        slot.fault_reason = reason
+        if current_state != 'FAULTED':
+            slot.state = 'FAULTED'
+            slot.transitions.append('FAULTED')
+        self._safety_faults['motion_slot_transition_fault'] = reason
+        self._accept_new_motion = False
+        return False
+
+    def _transition_motion_slot(self, slot, target_state):
+        """Checked public transition helper used by tests and callbacks."""
+
+        with self._state_lock:
+            transitioned = self._transition_motion_slot_locked(
+                slot,
+                target_state,
+            )
+            reason = slot.fault_reason if not transitioned else ''
+        if not transitioned:
+            self._fault_current_motion_slot(
+                'motion_slot_transition_fault',
+                reason,
+            )
+        return transitioned
+
+    def _latch_action_fault(self, fault_type, reason):
+        reason = _sanitize_fault_text(reason)
+        self._fault_current_motion_slot(fault_type, reason)
+        try:
+            self.get_logger().error(
+                '{}: {}'.format(fault_type, reason)
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _terminal_state_for_slot(slot, command_succeeded):
+        if slot is not None and slot.cancel_accepted:
+            return 'canceled'
+        if command_succeeded:
+            return 'succeed'
+        return 'abort'
+
+    @staticmethod
+    def _action_result_message(message, desired_terminal, terminal_ok):
+        return (
+            '{};desired_terminal={};terminal_delivery_succeeded={};'
+            'terminal_delivery_fault={}'
+        ).format(
+            str(message),
+            str(desired_terminal),
+            str(bool(terminal_ok)).lower(),
+            str(not bool(terminal_ok)).lower(),
+        )
+
+    def _attempt_action_terminal(self, goal_handle, slot, terminal_state):
+        with self._state_lock:
+            if slot is not None:
+                if slot.terminal_claimed:
+                    return False
+                slot.terminal_claimed = True
+                slot.expected_terminal = str(terminal_state)
+                if slot.state != 'FINALIZING':
+                    self._transition_motion_slot_locked(slot, 'FINALIZING')
+            else:
+                goal_uuid = self._front_jump_goal_id(goal_handle)
+                terminal_key = (
+                    'uuid:{}'.format(goal_uuid)
+                    if goal_uuid
+                    else 'handle:{}'.format(id(goal_handle))
+                )
+                if terminal_key in self._terminal_claims_without_slot:
+                    return False
+                self._terminal_claims_without_slot[terminal_key] = str(
+                    terminal_state
+                )
+
+        try:
+            if terminal_state == 'succeed':
+                goal_handle.succeed()
+            elif terminal_state == 'canceled':
+                goal_handle.canceled()
+            elif terminal_state == 'abort':
+                goal_handle.abort()
+            else:
+                raise ValueError(
+                    f'unsupported Action terminal state: {terminal_state}'
+                )
+            with self._state_lock:
+                if slot is not None:
+                    slot.terminal_delivery_succeeded = True
+            return True
+        except Exception as error:
+            reason = (
+                'expected_terminal={};cancel_accepted={};'
+                'terminal_delivery_failed=true;exception_type={};error={}'
+                .format(
+                    terminal_state,
+                    str(
+                        bool(slot is not None and slot.cancel_accepted)
+                    ).lower(),
+                    type(error).__name__,
+                    str(error),
+                )
+            )
+            self._fault_current_motion_slot(
+                'action_terminal_delivery_fault',
+                reason,
+            )
+            with self._state_lock:
+                if slot is not None:
+                    slot.terminal_delivery_succeeded = False
+            try:
+                self.get_logger().error(reason)
+            except Exception:
+                pass
+            return False
+
+    def _complete_motion_slot(self, slot, *, terminal_ok=True):
+        if slot is None:
+            return
+        with self._state_lock:
+            if slot.state not in ('FINALIZING', 'FAULTED'):
+                self._transition_motion_slot_locked(slot, 'FINALIZING')
+            # Clean local references before notifying observers. Completion
+            # means worker, external terminal attempt, and slot cleanup are
+            # all finished, not merely that a fault was noticed.
+            if self._motion_slot is slot and not (
+                terminal_ok and not slot.fault_type
+            ):
+                self._action_active = False
+                self._front_jump_goal_handle = None
+                self._front_jump_action_goal_handle = None
+                self._front_jump_cancel_event = None
+                self._front_jump_stop_event = None
+                self._active_goal_handle = None
+                self._active_feedback_callback = None
+            slot.worker_done_event.set()
+            if not terminal_ok or slot.fault_type:
+                self._transition_motion_slot_locked(slot, 'FAULTED')
+                slot.completion_event.set()
+                return
+            self._transition_motion_slot_locked(slot, 'DONE')
+            if self._motion_slot is slot:
+                self._motion_slot = None
+                self._action_active = False
+                self._emergency_stop = False
+                self._front_jump_goal_handle = None
+                self._front_jump_action_goal_handle = None
+                self._front_jump_cancel_event = None
+                self._front_jump_stop_event = None
+            slot.completion_event.set()
+
+    @staticmethod
+    def _front_jump_late_stop_outcome(
+        outcome,
+        *,
+        terminal_state,
+        reason,
+    ):
+        return FrontJumpOutcome(
+            success=False,
+            terminal_state=terminal_state,
+            stage='finally_keep_zero_and_release_lock',
+            reason=reason,
+            helper_started=outcome.helper_started,
+            sdk_request_may_have_been_sent=(
+                outcome.sdk_request_may_have_been_sent
+            ),
+            cleanup_completed=outcome.cleanup_completed,
+            sdk_command_accepted=outcome.sdk_command_accepted,
+            post_settle_completed=outcome.post_settle_completed,
+        )
+
+    def _run_front_jump(
+        self,
+        motion_name,
+        *,
+        slot,
+        goal_handle=None,
+        feedback_callback=None,
+    ):
+        with self._state_lock:
+            if self._motion_slot is not slot:
+                return FrontJumpOutcome(
+                    success=False,
+                    terminal_state='abort',
+                    stage='acquire_gait_lock',
+                    reason='motion_slot_not_owned',
+                    helper_started=False,
+                    sdk_request_may_have_been_sent=False,
+                    cleanup_completed=True,
+                    sdk_command_accepted=False,
+                    post_settle_completed=False,
+                )
+            self._status = STATUS_RUNNING
+            self._current_mode = motion_name.upper()
+            self._front_jump_goal_handle = goal_handle
+            self._front_jump_action_goal_handle = goal_handle
+            self._front_jump_cancel_event = slot.cancel_event
+            self._front_jump_stop_event = slot.stop_event
+
+        self.publish_mode(motion_name.upper())
+        self.publish_status(
+            STATUS_RUNNING,
+            '{} supervised flow started'.format(motion_name),
+        )
+        goal_id = self._front_jump_goal_id(goal_handle)
+        outcome = self.front_jump_supervisor.run(
+            motion_name,
+            goal_id=goal_id,
+            cancel_requested=slot.cancel_event,
+            gait_stop_requested=slot.stop_event,
+            feedback_callback=feedback_callback,
+            reservation_token=slot.reservation_token,
+            entry_type=slot.entry_type,
+            command_identity=slot.identity,
+        )
+        if not outcome.cleanup_completed:
+            fault_type = (
+                'cleanup_guard_fault'
+                if outcome.reason
+                == (
+                    'helper_start_failed_process_identity_'
+                    'cleanup_unverified'
+                )
+                else 'cleanup_fault'
+            )
+            self._fault_current_motion_slot(
+                fault_type,
+                outcome.message(),
+            )
+
+        with self._state_lock:
+            self._front_jump_goal_handle = None
+            self._current_mode = 'IDLE'
+
+        self.publish_mode('IDLE')
+        return outcome
+
+    @classmethod
+    def _is_front_jump_motion_name(cls, motion_name):
+        normalized = cls._normalize_motion_name(motion_name)
+        return normalized in {
+            'start_jump',
+            'jump_start_obstacle',
+            'finish_jump',
+            'end_jump',
+            'jump_end_obstacle',
+        }
+
+    @staticmethod
+    def _front_jump_goal_id(goal_handle):
+        if goal_handle is None:
+            return ''
+        try:
+            return bytes(goal_handle.goal_id.uuid).hex()
+        except (AttributeError, TypeError, ValueError):
+            return ''
+
+    @staticmethod
+    def _front_jump_outcome_status(outcome):
+        if outcome.success:
+            return STATUS_DONE
+        if 'timeout' in outcome.reason:
+            return STATUS_TIMEOUT
+        if (
+            outcome.terminal_state == 'canceled'
+            or 'estop' in outcome.reason
+            or 'gait_stop' in outcome.reason
+        ):
+            return STATUS_EMERGENCY_STOP
+        return STATUS_FAILED
 
     def motion_name_to_command_fields(self, motion_name):
         normalized = self._normalize_motion_name(motion_name)
@@ -777,7 +1948,13 @@ class GaitControlNode(Node):
             normalized = normalized.replace('__', '_')
         return normalized
 
-    def handle_command(self, fields):
+    def handle_command(
+        self,
+        fields,
+        *,
+        slot=None,
+        entry_type='json',
+    ):
         command = str(fields.get('command', '')).strip().upper()
         if command not in self.COMMANDS:
             return CommandResult(
@@ -791,6 +1968,80 @@ class GaitControlNode(Node):
 
         if command == 'OBSTACLE_STOP':
             return self.execute_stop()
+
+        if command == 'FRONT_JUMP_RECOVER':
+            return self._execute_front_jump_recovery(fields)
+
+        owns_json_slot = False
+        if slot is None:
+            slot, reason = self._try_reserve_motion_slot(
+                entry_type=entry_type,
+                motion_name=command.lower(),
+                command=command,
+                identity='pending',
+            )
+            if slot is None:
+                return CommandResult(False, STATUS_FAILED, reason)
+            owns_json_slot = entry_type == 'json'
+
+        with self._state_lock:
+            if self._motion_slot is not slot:
+                return CommandResult(
+                    False,
+                    STATUS_FAILED,
+                    'motion execution slot is not owned',
+                )
+            if slot.state not in ('ACCEPTED', 'RESERVED', 'EXECUTING'):
+                return CommandResult(
+                    False,
+                    STATUS_FAILED,
+                    f'motion slot is not executable: {slot.state}',
+                )
+            # JSON commands share the exact reservation lifecycle with
+            # Actions.  They have no ROS goal-handle callback, so bind their
+            # local reservation through ACCEPTED before EXECUTING rather than
+            # taking an illegal RESERVED->EXECUTING shortcut.
+            if slot.state == 'RESERVED':
+                self._transition_motion_slot_locked(slot, 'ACCEPTED')
+            if slot.state == 'ACCEPTED':
+                self._transition_motion_slot_locked(slot, 'EXECUTING')
+            slot.worker_started_event.set()
+
+        try:
+            result = self._execute_reserved_command(fields, slot)
+        except Exception as error:
+            self.motion.stop('gait command exception', log_level='warn')
+            result = CommandResult(
+                False,
+                STATUS_FAILED,
+                '{}: {}'.format(type(error).__name__, str(error)),
+            )
+        finally:
+            if owns_json_slot:
+                self._complete_motion_slot(slot)
+        return result
+
+    def _execute_reserved_command(self, fields, slot):
+        command = str(fields.get('command', '')).strip().upper()
+        if command in ('JUMP_START_OBSTACLE', 'JUMP_END_OBSTACLE'):
+            motion_name = (
+                'start_jump'
+                if command == 'JUMP_START_OBSTACLE'
+                else 'finish_jump'
+            )
+            outcome = self._run_front_jump(
+                motion_name,
+                slot=slot,
+                goal_handle=slot.goal_handle,
+            )
+            result = CommandResult(
+                outcome.success,
+                self._front_jump_outcome_status(outcome),
+                outcome.message(),
+            )
+            if slot.entry_type == 'json':
+                self.publish_status(result.status, result.message)
+            return result
 
         if command == 'SPEED_LIMIT':
             try:
@@ -809,18 +2060,21 @@ class GaitControlNode(Node):
                 return result
 
         with self._state_lock:
-            if self._action_active:
-                return CommandResult(
-                    False,
-                    STATUS_FAILED,
-                    'another gait command is running; send STOP first'
-                )
-            self._action_active = True
             self._emergency_stop = False
             self._status = STATUS_RUNNING
             self._current_mode = command
 
-        self.publish_lock(True)
+        lock_result = self.publish_lock(True)
+        if not lock_result.publish_succeeded:
+            result = CommandResult(
+                False,
+                STATUS_FAILED,
+                'gait lock true publish failed: {}'.format(
+                    lock_result.error_message
+                ),
+            )
+            self.publish_status(result.status, result.message)
+            return result
         self.publish_mode(command)
         self.publish_status(STATUS_RUNNING, f'{command} started')
 
@@ -835,10 +2089,6 @@ class GaitControlNode(Node):
                 result = self.execute_turn_in_place(fields)
             elif command == 'BODY_HEIGHT_ADJUST':
                 result = self.execute_body_height_adjust(fields)
-            elif command == 'JUMP_START_OBSTACLE':
-                result = self.execute_jump_obstacle('start')
-            elif command == 'JUMP_END_OBSTACLE':
-                result = self.execute_jump_obstacle('end')
             elif command in ('PRACTICAL_OBSTACLE_ZONE', 'AVOID_ZONE'):
                 result = self.execute_practical_obstacle_zone()
             elif command == 'OBSTACLE_OPEN_LOOP_TEST':
@@ -896,18 +2146,294 @@ class GaitControlNode(Node):
             result = CommandResult(False, STATUS_FAILED, str(error))
         finally:
             with self._state_lock:
-                self._action_active = False
                 self._emergency_stop = False
 
         self.publish_status(result.status, result.message)
         self.publish_mode('IDLE')
-        self.publish_lock(False)
+        unlock_result = self.publish_lock(False)
+        if not unlock_result.publish_succeeded:
+            return CommandResult(
+                False,
+                STATUS_FAILED,
+                '{}; gait lock false publish failed: {}'.format(
+                    result.message,
+                    unlock_result.error_message,
+                ),
+            )
+        return result
+
+    def _execute_front_jump_recovery(self, fields):
+        requested_fault_id = fields.get('cleanup_fault_id')
+        confirmation = fields.get('confirm_no_front_jump_helper')
+        if (
+            not isinstance(requested_fault_id, str)
+            or not requested_fault_id
+            or not isinstance(confirmation, bool)
+            or confirmation is not True
+        ):
+            return CommandResult(
+                False,
+                STATUS_FAILED,
+                'recovery requires matching cleanup_fault_id and '
+                'confirm_no_front_jump_helper=true',
+            )
+
+        with self._state_lock:
+            faulted_slot = self._motion_slot
+            recovery_stop_sequence = self._stop_sequence
+            faulted_cleanup_slot = bool(
+                faulted_slot is not None
+                and faulted_slot.state == 'FAULTED'
+                and faulted_slot.fault_type == 'cleanup_fault'
+                and faulted_slot.worker_done_event.is_set()
+                and faulted_slot.completion_event.is_set()
+            )
+            if faulted_slot is not None and not faulted_cleanup_slot:
+                return CommandResult(
+                    False,
+                    STATUS_FAILED,
+                    'cannot recover while an active or non-cleanup '
+                    'motion slot exists',
+                )
+            if self._active_action_worker_count:
+                return CommandResult(
+                    False,
+                    STATUS_FAILED,
+                    'cannot recover while an Action worker is active',
+                )
+            blocking_faults = {
+                name
+                for name in self._safety_faults
+                if name
+                in {
+                    'lock_publish_fault',
+                    'action_reservation_fault',
+                    'action_terminal_delivery_fault',
+                    'fatal_shutdown_fault',
+                    'cleanup_guard_fault',
+                }
+            }
+            if blocking_faults:
+                return CommandResult(
+                    False,
+                    STATUS_FAILED,
+                    'recovery blocked by {}'.format(
+                        ','.join(sorted(blocking_faults))
+                    ),
+                )
+
+        try:
+            record = self._cleanup_guard.load()
+        except Exception as error:
+            return CommandResult(False, STATUS_FAILED, str(error))
+        if record is None:
+            return CommandResult(
+                False,
+                STATUS_FAILED,
+                'no cleanup guard is present',
+            )
+        if record['cleanup_fault_id'] != requested_fault_id:
+            return CommandResult(
+                False,
+                STATUS_FAILED,
+                'cleanup fault ID mismatch',
+            )
+        blocking_guard_faults = {
+            str(fault.get('fault_type', ''))
+            for fault in record.get('faults', [])
+            if str(fault.get('fault_type', ''))
+            in {
+                'lock_publish_fault',
+                'action_reservation_fault',
+                'action_terminal_delivery_fault',
+                'fatal_shutdown_fault',
+                'cleanup_guard_fault',
+            }
+        }
+        if blocking_guard_faults:
+            return CommandResult(
+                False,
+                STATUS_FAILED,
+                'recovery blocked by persisted {}'.format(
+                    ','.join(sorted(blocking_guard_faults))
+                ),
+            )
+        if self.front_jump_supervisor.active_context is not None:
+            return CommandResult(
+                False,
+                STATUS_FAILED,
+                'FrontJump supervisor is active',
+            )
+        if self.front_jump_supervisor.active_process is not None:
+            return CommandResult(
+                False,
+                STATUS_FAILED,
+                'FrontJump process handle is active',
+            )
+        process_absent, process_reason = (
+            FrontJumpSupervisor.guard_process_absent(record)
+        )
+        if not process_absent:
+            return CommandResult(False, STATUS_FAILED, process_reason)
+
+        baseline = self.front_jump_supervisor.begin_recovery_window()
+        confirm_samples = max(
+            profile.final_zero_confirm_samples
+            for profile in self.front_jump_profiles.values()
+        )
+        epsilon = min(
+            profile.final_zero_epsilon
+            for profile in self.front_jump_profiles.values()
+        )
+        timeout = max(
+            profile.final_zero_timeout
+            for profile in self.front_jump_profiles.values()
+        )
+        deadline = time.monotonic() + timeout
+        evidence_ready = False
+        evidence_reason = 'recovery evidence timeout'
+        while time.monotonic() < deadline:
+            evidence_ready, evidence_reason = (
+                self.front_jump_supervisor.recovery_evidence_ready(
+                    baseline,
+                    confirm_samples=confirm_samples,
+                    epsilon=epsilon,
+                )
+            )
+            if evidence_ready:
+                break
+            self.front_jump_supervisor.wait_for_update(
+                min(0.05, max(0.0, deadline - time.monotonic()))
+            )
+        if not evidence_ready:
+            return CommandResult(False, STATUS_FAILED, evidence_reason)
+
+        evidence_ready, evidence_reason = (
+            self.front_jump_supervisor.recovery_evidence_ready(
+                baseline,
+                confirm_samples=confirm_samples,
+                epsilon=epsilon,
+            )
+        )
+        if not evidence_ready:
+            return CommandResult(False, STATUS_FAILED, evidence_reason)
+
+        def mark_recovered_cleanup(guard_record):
+            cleanup = guard_record['cleanup']
+            cleanup['leader_reaped'] = True
+            cleanup['group_empty'] = True
+
+        try:
+            self._cleanup_guard.update(mark_recovered_cleanup)
+        except Exception as error:
+            return CommandResult(False, STATUS_FAILED, str(error))
+
+        evidence_ready, evidence_reason = (
+            self.front_jump_supervisor.recovery_evidence_ready(
+                baseline,
+                confirm_samples=confirm_samples,
+                epsilon=epsilon,
+            )
+        )
+        if not evidence_ready:
+            return CommandResult(False, STATUS_FAILED, evidence_reason)
+
+        with self._state_lock:
+            if (
+                self._motion_slot is not faulted_slot
+                or self._active_action_worker_count
+                or self._shutdown_requested.is_set()
+                or self._stop_sequence != recovery_stop_sequence
+            ):
+                return CommandResult(
+                    False,
+                    STATUS_FAILED,
+                    'recovery runtime state changed before unlock',
+                )
+            blocking_faults = {
+                name
+                for name in self._safety_faults
+                if name
+                in {
+                    'lock_publish_fault',
+                    'action_reservation_fault',
+                    'action_terminal_delivery_fault',
+                    'fatal_shutdown_fault',
+                    'cleanup_guard_fault',
+                }
+            }
+            if blocking_faults:
+                return CommandResult(
+                    False,
+                    STATUS_FAILED,
+                    'recovery blocked before unlock by {}'.format(
+                        ','.join(sorted(blocking_faults))
+                    ),
+                )
+
+        unlock_result = self.publish_lock(False)
+        if not unlock_result.publish_succeeded:
+            return CommandResult(
+                False,
+                STATUS_FAILED,
+                'recovery lock false publish failed',
+            )
+
+        try:
+            def mark_release(guard_record):
+                guard_record['lock'][
+                    'lock_release_command_published'
+                ] = True
+                guard_record['lock']['generation'] = (
+                    unlock_result.generation
+                )
+                guard_record['cleanup']['cleanup_completed'] = True
+
+            self._cleanup_guard.update(mark_release)
+            self._cleanup_guard.mark_clean_and_clear(requested_fault_id)
+        except Exception as error:
+            self.publish_lock(True)
+            self._fault_current_motion_slot(
+                'cleanup_guard_fault',
+                str(error),
+            )
+            return CommandResult(False, STATUS_FAILED, str(error))
+
+        with self._state_lock:
+            self._safety_faults.pop('cleanup_fault', None)
+            self._accept_new_motion = not self._safety_faults
+            self._cleanup_guard_record = None
+            if self._motion_slot is faulted_slot:
+                faulted_slot.state = 'DONE'
+                self._motion_slot = None
+                self._action_active = False
+                self._emergency_stop = False
+        result = CommandResult(
+            True,
+            STATUS_DONE,
+            'FrontJump cleanup fault explicitly recovered',
+        )
+        self.publish_status(result.status, result.message)
+        self.publish_mode('IDLE')
         return result
 
     def execute_stop(self):
         with self._state_lock:
-            interrupted = self._action_active
-            self._emergency_stop = True
+            self._stop_sequence += 1
+            slot = self._motion_slot
+            interrupted = slot is not None
+            front_jump_interrupted = bool(
+                interrupted
+                and self._is_front_jump_motion_name(slot.motion_name)
+            )
+            if interrupted:
+                slot.stop_event.set()
+                if not slot.first_abort_reason:
+                    slot.first_abort_reason = 'gait_stop_requested'
+                if slot.state not in ('FINALIZING', 'FAULTED', 'DONE'):
+                    self._transition_motion_slot_locked(slot, 'STOPPING')
+            if not front_jump_interrupted and interrupted:
+                self._emergency_stop = True
             self._status = (
                 STATUS_EMERGENCY_STOP
                 if interrupted
@@ -915,7 +2441,20 @@ class GaitControlNode(Node):
             )
             self._current_mode = 'STOP'
 
-        self.publish_lock(True)
+        if front_jump_interrupted:
+            self.front_jump_supervisor.wake()
+            message = 'active FrontJump supervision interrupted by gait STOP'
+            self.publish_mode('STOP')
+            self.publish_status(STATUS_EMERGENCY_STOP, message)
+            return CommandResult(
+                True,
+                STATUS_EMERGENCY_STOP,
+                message,
+            )
+
+        lock_result = None
+        if not interrupted:
+            lock_result = self.publish_lock(True)
         self.publish_mode('STOP')
         self.motion.stop('STOP command', log_level='warn')
         status = STATUS_EMERGENCY_STOP if interrupted else STATUS_DONE
@@ -930,7 +2469,12 @@ class GaitControlNode(Node):
             with self._state_lock:
                 self._emergency_stop = False
             self.publish_mode('IDLE')
-            self.publish_lock(False)
+            if (
+                lock_result is not None
+                and lock_result.publish_succeeded
+                and not self._safety_faults
+            ):
+                self.publish_lock(False)
 
         return CommandResult(True, status, message)
 
@@ -1271,116 +2815,6 @@ class GaitControlNode(Node):
             'OBSTACLE_SIDE_ADJUST completed'
         )
 
-    def execute_jump_obstacle(self, obstacle_type):
-        command_name = self._jump_command_name(obstacle_type)
-        start_time = time.monotonic()
-
-        initial_check = self._pre_obstacle_check(start_time)
-        if initial_check is not None:
-            return initial_check
-
-        self.zero_velocity(f'{command_name} pre-stop')
-        check = self._wait_for_obstacle(self.jump_pre_stop_sec, start_time)
-        if check is not None:
-            return check
-
-        check = self.prepare_obstacle_pose(start_time)
-        if check is not None:
-            return check
-
-        self.publish_debug('obstacle phase 1')
-        check = self._run_obstacle_velocity_phase(
-            self.jump_phase1_vx,
-            self.jump_phase1_duration,
-            start_time
-        )
-        if check is not None:
-            return check
-
-        self.zero_velocity(f'{command_name} pause')
-        check = self._wait_for_obstacle(self.jump_pause_duration, start_time)
-        if check is not None:
-            return check
-
-        self.publish_debug('obstacle phase 2')
-        check = self._run_obstacle_velocity_phase(
-            self.jump_phase2_vx,
-            self.jump_phase2_duration,
-            start_time
-        )
-        if check is not None:
-            return check
-
-        self.zero_velocity(f'{command_name} phase sequence stop')
-        check = self.recover_after_obstacle(start_time)
-        if check is not None:
-            return check
-
-        return CommandResult(
-            True,
-            STATUS_DONE,
-            f'{command_name} completed'
-        )
-
-    def prepare_obstacle_pose(self, start_time):
-        self.publish_debug(
-            'prepare_obstacle_pose TODO: body height/gait mode adapter is not '
-            'wired yet'
-        )
-        return self._wait_for_obstacle(self.jump_prepare_sec, start_time)
-
-    def recover_after_obstacle(self, start_time):
-        self.publish_debug('obstacle recovery')
-        self.zero_velocity('obstacle recovery')
-        return self._wait_for_obstacle(self.jump_recover_sec, start_time)
-
-    def _run_obstacle_velocity_phase(self, vx, duration, start_time):
-        end_time = time.monotonic() + float(duration)
-        period = 1.0 / self.publish_rate_hz
-
-        while time.monotonic() < end_time:
-            check = self._pre_obstacle_check(start_time)
-            if check is not None:
-                return check
-            self.send_velocity(vx, 0.0, 0.0)
-            time.sleep(period)
-
-        return None
-
-    def _wait_for_obstacle(self, duration, start_time):
-        end_time = time.monotonic() + float(duration)
-        period = 1.0 / self.publish_rate_hz
-
-        while time.monotonic() < end_time:
-            check = self._pre_obstacle_check(start_time)
-            if check is not None:
-                return check
-            time.sleep(period)
-
-        return None
-
-    def _pre_obstacle_check(self, start_time):
-        with self._state_lock:
-            emergency_stop = self._emergency_stop
-
-        if emergency_stop:
-            self.motion.stop('obstacle emergency stop', log_level='warn')
-            return CommandResult(
-                False,
-                STATUS_EMERGENCY_STOP,
-                'obstacle interrupted by STOP'
-            )
-
-        if time.monotonic() - start_time > self.jump_timeout_sec:
-            self.motion.stop('obstacle timeout stop', log_level='warn')
-            return CommandResult(False, STATUS_TIMEOUT, 'obstacle timeout')
-
-        if not self.is_robot_stable():
-            self.motion.stop('obstacle unstable stop', log_level='warn')
-            return CommandResult(False, STATUS_UNSTABLE, 'obstacle unstable')
-
-        return None
-
     def _run_practical_obstacle_step(
         self,
         step,
@@ -1594,12 +3028,6 @@ class GaitControlNode(Node):
             return -self.max_correction_wz
         return correction
 
-    @staticmethod
-    def _jump_command_name(obstacle_type):
-        if obstacle_type == 'end':
-            return 'JUMP_END_OBSTACLE'
-        return 'JUMP_START_OBSTACLE'
-
     def set_speed_limit(self, fields):
         updates = {}
         for name, hard_limit in (
@@ -1659,11 +3087,23 @@ class GaitControlNode(Node):
             self.publish_debug(debug_message)
 
     def publish_lock(self, locked):
-        with self._state_lock:
-            self._control_locked = bool(locked)
-        msg = Bool()
-        msg.data = bool(locked)
-        self.lock_pub.publish(msg)
+        result = self._control_lock_publisher.set_locked(locked)
+        if not result.publish_succeeded:
+            self._fault_current_motion_slot(
+                'lock_publish_fault',
+                'requested_state={} generation={} error={}'.format(
+                    str(result.requested_state).lower(),
+                    result.generation,
+                    result.error_message,
+                ),
+            )
+        return result
+
+    def _update_control_lock_state_locked(self, locked, faulted):
+        """Update mirrors while the caller already owns ``_state_lock``."""
+
+        self._control_locked = bool(locked)
+        self._lock_publish_fault = bool(faulted)
 
     def publish_mode(self, mode):
         with self._state_lock:
@@ -1686,9 +3126,218 @@ class GaitControlNode(Node):
 
     def _active_goal_cancel_requested(self):
         with self._state_lock:
-            goal_handle = self._active_goal_handle
-        return bool(
-            goal_handle is not None and goal_handle.is_cancel_requested
+            slot = self._motion_slot
+            return bool(slot is not None and slot.cancel_event.is_set())
+
+    def _publish_front_jump_zero(self):
+        self.motion.move(0.0, 0.0, 0.0)
+
+    def _log_front_jump_event(self, record):
+        self.publish_debug(
+            'front_jump_supervision {}'.format(
+                json.dumps(record, sort_keys=True, ensure_ascii=True)
+            )
+        )
+
+    def _on_front_jump_final_cmd(self, msg):
+        self.front_jump_supervisor.update_final_command(
+            msg.linear.x,
+            msg.linear.y,
+            msg.angular.z,
+            receive_time=time.monotonic(),
+        )
+        self._try_complete_full_boot_recovery()
+
+    def _on_front_jump_estop_state(self, msg):
+        self.front_jump_supervisor.update_estop(
+            msg.data,
+            receive_time=time.monotonic(),
+        )
+        self._try_complete_full_boot_recovery()
+
+    def _try_complete_full_boot_recovery(self):
+        """Clear a prior-boot guard only after live startup evidence."""
+
+        with self._state_lock:
+            guard_id = self._full_boot_recovery_guard_id
+            baseline = self._full_boot_recovery_baseline
+            if (
+                not guard_id
+                or baseline is None
+                or self._full_boot_recovery_in_progress
+                or self._motion_slot is not None
+                or self._active_action_worker_count
+                or self._shutdown_requested.is_set()
+                or self._stop_sequence
+                != self._full_boot_recovery_stop_sequence
+            ):
+                return False
+            new_faults = (
+                set(self._safety_faults)
+                - self._full_boot_recovery_fault_types
+            )
+            if new_faults:
+                return False
+
+        confirm_samples = max(
+            profile.final_zero_confirm_samples
+            for profile in self.front_jump_profiles.values()
+        )
+        epsilon = min(
+            profile.final_zero_epsilon
+            for profile in self.front_jump_profiles.values()
+        )
+        evidence_ready, _ = (
+            self.front_jump_supervisor.recovery_evidence_ready(
+                baseline,
+                confirm_samples=confirm_samples,
+                epsilon=epsilon,
+            )
+        )
+        if not evidence_ready:
+            return False
+
+        with self._state_lock:
+            if (
+                self._full_boot_recovery_in_progress
+                or self._motion_slot is not None
+                or self._active_action_worker_count
+                or guard_id != self._full_boot_recovery_guard_id
+            ):
+                return False
+            self._full_boot_recovery_in_progress = True
+
+        try:
+            record = self._cleanup_guard.load()
+            if (
+                record is None
+                or record['cleanup_fault_id'] != guard_id
+                or record['boot_id']
+                == self._cleanup_guard.current_boot_id
+            ):
+                raise CleanupGuardError(
+                    'full-boot recovery guard identity changed'
+                )
+            current_fault_ids = {
+                str(fault.get('fault_id', ''))
+                for fault in record.get('faults', [])
+            }
+            if current_fault_ids != self._full_boot_recovery_fault_ids:
+                raise CleanupGuardError(
+                    'new fault appeared during full-boot startup checks'
+                )
+            process_absent, reason = (
+                FrontJumpSupervisor.guard_process_absent(record)
+            )
+            if not process_absent:
+                raise CleanupGuardError(reason)
+            if (
+                self.front_jump_supervisor.active_context is not None
+                or self.front_jump_supervisor.active_process is not None
+            ):
+                raise CleanupGuardError(
+                    'FrontJump supervisor is active during startup check'
+                )
+
+            evidence_ready, reason = (
+                self.front_jump_supervisor.recovery_evidence_ready(
+                    baseline,
+                    confirm_samples=confirm_samples,
+                    epsilon=epsilon,
+                )
+            )
+            if not evidence_ready:
+                raise CleanupGuardError(reason)
+
+            def mark_process_absent(guard_record):
+                guard_record['cleanup']['leader_reaped'] = True
+                guard_record['cleanup']['group_empty'] = True
+
+            self._cleanup_guard.update(mark_process_absent)
+            evidence_ready, reason = (
+                self.front_jump_supervisor.recovery_evidence_ready(
+                    baseline,
+                    confirm_samples=confirm_samples,
+                    epsilon=epsilon,
+                )
+            )
+            if not evidence_ready:
+                raise CleanupGuardError(reason)
+            with self._state_lock:
+                if (
+                    self._motion_slot is not None
+                    or self._active_action_worker_count
+                    or self._shutdown_requested.is_set()
+                    or self._stop_sequence
+                    != self._full_boot_recovery_stop_sequence
+                ):
+                    raise CleanupGuardError(
+                        'startup runtime state changed before unlock'
+                    )
+                new_faults = (
+                    set(self._safety_faults)
+                    - self._full_boot_recovery_fault_types
+                )
+                if new_faults:
+                    raise CleanupGuardError(
+                        'new safety fault appeared before unlock'
+                    )
+            unlock_result = self.publish_lock(False)
+            if not unlock_result.publish_succeeded:
+                raise CleanupGuardError(
+                    'full-boot lock false publish failed'
+                )
+
+            def mark_released(guard_record):
+                guard_record['lock'][
+                    'lock_release_command_published'
+                ] = True
+                guard_record['lock']['generation'] = (
+                    unlock_result.generation
+                )
+                guard_record['cleanup']['cleanup_completed'] = True
+
+            self._cleanup_guard.update(mark_released)
+            self._cleanup_guard.mark_clean_and_clear(guard_id)
+        except Exception as error:
+            if not self._control_lock_publisher.desired_state:
+                self.publish_lock(True)
+            with self._state_lock:
+                self._full_boot_recovery_guard_id = ''
+                self._full_boot_recovery_baseline = None
+            self._fault_current_motion_slot(
+                'cleanup_guard_fault',
+                'full-boot startup recovery failed: {}: {}'.format(
+                    type(error).__name__,
+                    str(error),
+                ),
+            )
+            return False
+        finally:
+            with self._state_lock:
+                self._full_boot_recovery_in_progress = False
+
+        with self._state_lock:
+            for fault_type in self._full_boot_recovery_fault_types:
+                self._safety_faults.pop(fault_type, None)
+            self._full_boot_recovery_guard_id = ''
+            self._full_boot_recovery_baseline = None
+            self._full_boot_recovery_fault_types = set()
+            self._full_boot_recovery_fault_ids = set()
+            self._full_boot_recovery_stop_sequence = self._stop_sequence
+            self._cleanup_guard_record = None
+            self._accept_new_motion = not self._safety_faults
+        self.publish_status(
+            STATUS_IDLE,
+            'prior-boot FrontJump safety guard passed startup checks',
+        )
+        self.publish_mode('IDLE')
+        return True
+
+    def _on_front_jump_cmd_mux_status(self, msg):
+        self.front_jump_supervisor.update_mux_status(
+            msg.data,
+            receive_time=time.monotonic(),
         )
 
     def _on_depth_image(self, msg):
@@ -1979,7 +3628,6 @@ class GaitControlNode(Node):
         with self._state_lock:
             status = self._status
             mode = self._current_mode
-            locked = self._control_locked
 
         status_msg = String()
         status_msg.data = status
@@ -1988,10 +3636,16 @@ class GaitControlNode(Node):
         mode_msg = String()
         mode_msg.data = mode
         self.mode_pub.publish(mode_msg)
-
-        lock_msg = Bool()
-        lock_msg.data = locked
-        self.lock_pub.publish(lock_msg)
+        result = self._control_lock_publisher.republish()
+        if not result.publish_succeeded:
+            self._fault_current_motion_slot(
+                'lock_publish_fault',
+                'periodic requested_state={} generation={} error={}'.format(
+                    str(result.requested_state).lower(),
+                    result.generation,
+                    result.error_message,
+                ),
+            )
 
     def _float_field(self, fields, name, default):
         return self._as_finite_float(fields.get(name, default), name)
@@ -2079,7 +3733,9 @@ class GaitControlNode(Node):
             'step_front_target_m'
         )
         if front_target_m < 0.0:
-            raise ValueError(f'{name}: step_front_target_m must be nonnegative')
+            raise ValueError(
+                f'{name}: step_front_target_m must be nonnegative'
+            )
 
         if normalized_type in ('forward', 'backward'):
             if linear_speed <= 0.0:
@@ -2197,6 +3853,46 @@ class GaitControlNode(Node):
             raise ValueError(f'{name} must be positive')
         return value
 
+    def _front_jump_string_parameter(self, name):
+        value = self.get_parameter(name).value
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f'{name} must be a non-empty string')
+        return value.strip()
+
+    def _front_jump_positive_float_parameter(self, name):
+        value = self.get_parameter(name).value
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+        ):
+            raise ValueError(f'{name} must be a finite positive number')
+        number = float(value)
+        if not math.isfinite(number) or number <= 0.0:
+            raise ValueError(f'{name} must be a finite positive number')
+        return number
+
+    def _front_jump_nonnegative_float_parameter(self, name):
+        value = self.get_parameter(name).value
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+        ):
+            raise ValueError(f'{name} must be a finite nonnegative number')
+        number = float(value)
+        if not math.isfinite(number) or number < 0.0:
+            raise ValueError(f'{name} must be a finite nonnegative number')
+        return number
+
+    def _front_jump_positive_int_parameter(self, name):
+        value = self.get_parameter(name).value
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+        ):
+            raise ValueError(f'{name} must be a positive integer')
+        return value
+
     def _string_array_parameter(self, name):
         value = self.get_parameter(name).value
         if not isinstance(value, (list, tuple)):
@@ -2209,33 +3905,317 @@ class GaitControlNode(Node):
             raise ValueError(f'{name} must be a float array')
         return [self._as_finite_float(item, name) for item in value]
 
-    def shutdown(self):
-        if not rclpy.ok():
+    def request_shutdown(self):
+        """Request local shutdown without waiting or using ROS APIs."""
+
+        if self._shutdown_requested.is_set():
             return
-        self.motion.stop('gait_control_node shutdown')
-        self.publish_lock(False)
-        self.publish_mode('IDLE')
-        self.publish_status(STATUS_IDLE, 'gait control shutdown')
+        with self._state_lock:
+            if self._shutdown_requested.is_set():
+                return
+            self._accept_new_motion = False
+            self._shutdown_requested.set()
+            slot = self._motion_slot
+            if slot is not None:
+                slot.stop_event.set()
+                if not slot.first_abort_reason:
+                    slot.first_abort_reason = 'node_shutdown'
+                if slot.state not in ('FINALIZING', 'FAULTED', 'DONE'):
+                    self._transition_motion_slot_locked(slot, 'STOPPING')
+                is_front_jump = self._is_front_jump_motion_name(
+                    slot.motion_name
+                )
+                if not is_front_jump:
+                    self._emergency_stop = True
+            else:
+                is_front_jump = False
+        if is_front_jump:
+            self.front_jump_supervisor.request_stop('node_shutdown')
+        self.front_jump_supervisor.wake()
+
+    def request_shutdown_from_context(self):
+        """Non-blocking Context callback with no Context/ROS access."""
+
+        self._ros_cleanup_allowed.clear()
+        self.request_shutdown()
+
+    def drain_shutdown_step(self, *, allow_ros):
+        """Perform a bounded cleanup retry outside the on-shutdown callback."""
+
+        if self.front_jump_supervisor.active_context is not None:
+            return
+        if self.front_jump_supervisor.cleanup_pending:
+            self.front_jump_supervisor.retry_cleanup(
+                allow_ros=bool(allow_ros)
+            )
+
+    def shutdown_drained(self):
+        with self._state_lock:
+            slot = self._motion_slot
+            slot_drained = bool(
+                slot is None
+                or (
+                    slot.worker_done_event.is_set()
+                    and slot.completion_event.is_set()
+                )
+            )
+            action_workers_drained = (
+                self._active_action_worker_count == 0
+                and self._action_workers_done_event.is_set()
+            )
+        supervisor_drained = (
+            self.front_jump_supervisor.active_context is None
+            and self.front_jump_supervisor.active_process is None
+            and not self.front_jump_supervisor.cleanup_pending
+        )
+        return bool(
+            slot_drained
+            and action_workers_drained
+            and supervisor_drained
+        )
+
+    def wait_for_shutdown_progress(self, timeout):
+        with self._state_lock:
+            slot = self._motion_slot
+            event = (
+                self._action_workers_done_event
+                if slot is None
+                else slot.worker_done_event
+            )
+        if event is None:
+            self.front_jump_supervisor.completion_event.wait(
+                timeout=max(0.0, float(timeout))
+            )
+        else:
+            event.wait(timeout=max(0.0, float(timeout)))
+
+    def prepare_finalize_shutdown(self, *, context_valid):
+        """Freeze a drained node fail-closed before executor shutdown.
+
+        This stage never publishes lock=false.  The executor result is not yet
+        known, so releasing the gait lock here would create an unsafe transient
+        unlock if callbacks later fail to drain.
+        """
+
+        if not self.shutdown_drained():
+            return False
+        with self._state_lock:
+            if self._shutdown_prepared:
+                return self._shutdown_prepare_clean
+            self._shutdown_prepared = True
+            faulted = bool(self._safety_faults)
+        if not context_valid:
+            self._shutdown_prepare_clean = False
+            return False
+        try:
+            lock_result = self.publish_lock(True)
+            if not lock_result.publish_succeeded:
+                self._shutdown_prepare_clean = False
+                return False
+            self.motion.stop('gait_control_node shutdown prepare')
+            with self._state_lock:
+                self._shutdown_prepare_clean = not bool(
+                    self._safety_faults
+                ) and not faulted
+            return self._shutdown_prepare_clean
+        except Exception as error:
+            self._fault_current_motion_slot(
+                'fatal_shutdown_fault',
+                '{}: {}'.format(type(error).__name__, str(error)),
+            )
+            self._shutdown_prepare_clean = False
+            return False
+
+    def commit_finalize_shutdown(
+        self,
+        *,
+        executor_shutdown_succeeded,
+        context_valid,
+        failure_reason='',
+    ):
+        """Commit normal unlock only after a successful executor shutdown."""
+
+        with self._state_lock:
+            if self._shutdown_commit_called:
+                return False
+            self._shutdown_commit_called = True
+            prepared_clean = self._shutdown_prepare_clean
+
+        if (
+            not executor_shutdown_succeeded
+            or not prepared_clean
+            or not context_valid
+            or bool(self._safety_faults)
+        ):
+            reason = str(failure_reason) or (
+                'executor shutdown failed or shutdown preparation was not '
+                'clean'
+            )
+            self.record_executor_shutdown_fault(
+                reason,
+                allow_ros=bool(context_valid),
+            )
+            return False
+
+        try:
+            unlock_result = self.publish_lock(False)
+            if not unlock_result.publish_succeeded:
+                self._fault_current_motion_slot(
+                    'fatal_shutdown_fault',
+                    'shutdown lock false publish failed: {}'.format(
+                        unlock_result.error_message
+                    ),
+                )
+                return False
+            self.publish_mode('IDLE')
+            self.publish_status(STATUS_IDLE, 'gait control shutdown')
+        except Exception as error:
+            self._fault_current_motion_slot(
+                'fatal_shutdown_fault',
+                '{}: {}'.format(type(error).__name__, str(error)),
+            )
+            return False
+        return not bool(self._safety_faults)
+
+    def record_executor_shutdown_fault(self, reason, *, allow_ros=True):
+        self._fatal_shutdown_fault = True
+        self._fault_current_motion_slot(
+            'fatal_shutdown_fault',
+            reason,
+        )
+        if allow_ros:
+            result = self.publish_lock(True)
+            if result.publish_succeeded:
+                try:
+                    def mark_lock(guard_record):
+                        guard_record['lock'][
+                            'lock_acquire_command_published'
+                        ] = True
+                        guard_record['lock']['generation'] = (
+                            result.generation
+                        )
+
+                    self._cleanup_guard.update(mark_lock)
+                except Exception as error:
+                    self._fault_current_motion_slot(
+                        'cleanup_guard_fault',
+                        '{}: {}'.format(
+                            type(error).__name__,
+                            str(error),
+                        ),
+                    )
+
+
+def _shutdown_executor_then_commit(
+    node,
+    executor,
+    *,
+    prepared,
+    context_valid,
+):
+    """Order executor shutdown before the only possible normal unlock.
+
+    Keeping this narrow coordinator separate makes the fail-closed ordering
+    directly testable: ``commit_finalize_shutdown`` never sees a successful
+    executor result until ``Executor.shutdown`` has actually returned true.
+    """
+
+    executor_shutdown_reason = ''
+    try:
+        executor_shutdown_ok = bool(executor.shutdown(timeout_sec=2.0))
+    except Exception as error:
+        executor_shutdown_ok = False
+        executor_shutdown_reason = '{}: {}'.format(
+            type(error).__name__,
+            str(error),
+        )
+    failure_reason = executor_shutdown_reason
+    if not failure_reason:
+        failure_reason = (
+            'executor shutdown timeout with outstanding callbacks'
+            if not executor_shutdown_ok
+            else 'shutdown preparation did not establish a clean terminal '
+            'state'
+        )
+    finalized = node.commit_finalize_shutdown(
+        executor_shutdown_succeeded=executor_shutdown_ok and bool(prepared),
+        context_valid=bool(context_valid),
+        failure_reason=failure_reason,
+    )
+    return executor_shutdown_ok, bool(finalized)
 
 
 def main(args=None):
-    rclpy.init(args=args)
+    context = Context()
+    rclpy.init(args=args, context=context)
     node = None
-    executor = MultiThreadedExecutor()
+    executor = MultiThreadedExecutor(num_threads=4, context=context)
+    shutdown_ok = True
     try:
-        node = GaitControlNode()
+        node = GaitControlNode(context=context)
         executor.add_node(node)
-        executor.spin()
+        context.on_shutdown(node.request_shutdown_from_context)
+        while context.ok() and not node._shutdown_requested.is_set():
+            executor.spin_once(timeout_sec=0.05)
     except (KeyboardInterrupt, ExternalShutdownException):
-        if node is not None and rclpy.ok():
-            node.get_logger().warn('Interrupted by user')
-    finally:
         if node is not None:
-            node.shutdown()
-            executor.remove_node(node)
-            node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+            node.request_shutdown()
+    finally:
+        try:
+            if node is not None:
+                node.request_shutdown()
+                deadline = (
+                    time.monotonic()
+                    + node.front_jump_shutdown_drain_timeout_sec
+                )
+                while (
+                    not node.shutdown_drained()
+                    and time.monotonic() < deadline
+                ):
+                    if context.ok():
+                        executor.spin_once(
+                            timeout_sec=min(
+                                0.05,
+                                max(
+                                    0.0,
+                                    deadline - time.monotonic(),
+                                ),
+                            )
+                        )
+                    else:
+                        node.wait_for_shutdown_progress(0.05)
+                    node.drain_shutdown_step(allow_ros=context.ok())
+                prepared = node.prepare_finalize_shutdown(
+                    context_valid=context.ok()
+                )
+                executor_shutdown_ok, finalized = (
+                    _shutdown_executor_then_commit(
+                        node,
+                        executor,
+                        prepared=prepared,
+                        context_valid=context.ok(),
+                    )
+                )
+                shutdown_ok = bool(executor_shutdown_ok and finalized)
+                try:
+                    executor.remove_node(node)
+                except Exception as error:
+                    shutdown_ok = False
+                    node.record_executor_shutdown_fault(
+                        'executor remove_node failed: {}: {}'.format(
+                            type(error).__name__,
+                            str(error),
+                        ),
+                        allow_ros=context.ok(),
+                    )
+                finally:
+                    node.destroy_node()
+        finally:
+            context.try_shutdown()
+    if not shutdown_ok:
+        raise RuntimeError(
+            'gait_control_node shutdown did not complete cleanly'
+        )
 
 
 if __name__ == '__main__':
