@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""将ROS Twist命令通过本机UDP安全转发到隔离的Unitree SDK进程。"""
+
 import math
 import socket
 import time
@@ -10,14 +12,16 @@ from rclpy.node import Node
 
 
 class CmdVelUdpForwarder(Node):
+    """将ROS速度命令隔离转发到Unitree SDK进程，并提供上游超时保护。"""
+
     DEFAULT_UDP_HOST = '127.0.0.1'
     DEFAULT_UDP_PORT = 15001
     DEFAULT_CMD_VEL_TOPIC = '/navigation/cmd_vel'
-    DEFAULT_MAX_VX = 0.60
-    DEFAULT_MAX_VY = 0.10
-    DEFAULT_MAX_YAW = 1.00
+    DEFAULT_MAX_VX = 0.25
+    DEFAULT_MAX_VY = 0.05
+    DEFAULT_MAX_YAW = 0.60
     DEFAULT_DEADBAND = 0.01
-    DEFAULT_TIMEOUT_SEC = 1.0
+    DEFAULT_TIMEOUT_SEC = 0.30
 
     def __init__(self):
         super().__init__('cmd_vel_udp_forwarder')
@@ -66,7 +70,8 @@ class CmdVelUdpForwarder(Node):
             self.on_cmd_vel,
             10
         )
-        self.timer = self.create_timer(0.1, self.on_timer)
+        # 50ms检查周期使0.30s超时的检测抖动不超过一个SDK输出周期。
+        self.timer = self.create_timer(0.05, self.on_timer)
 
         self.get_logger().info(
             'cmd_vel_udp_forwarder started: '
@@ -104,18 +109,36 @@ class CmdVelUdpForwarder(Node):
         self.last_cmd_time = time.monotonic()
 
         if not self.is_finite_cmd(msg):
-            self.send_stop_once()
+            self.get_logger().error(
+                'non-finite cmd_vel rejected; sending stop'
+            )
+            self.send_stop_once(reason='nonfinite_command')
             return
 
-        vx = self.apply_deadband_and_limit(msg.linear.x, self.max_vx)
-        vy = self.apply_deadband_and_limit(msg.linear.y, self.max_vy)
-        yaw = self.apply_deadband_and_limit(msg.angular.z, self.max_yaw)
+        raw_values = (
+            ('vx', msg.linear.x, self.max_vx),
+            ('vy', msg.linear.y, self.max_vy),
+            ('yaw', msg.angular.z, self.max_yaw),
+        )
+        for name, value, limit in raw_values:
+            if abs(value) > limit:
+                # 越界通常表示上游故障，静默截断会掩盖危险命令。
+                self.get_logger().error(
+                    f'{name}={value:.6f} exceeds limit={limit:.6f}; '
+                    'sending stop'
+                )
+                self.send_stop_once(reason='out_of_range_command')
+                return
+
+        vx = self.apply_deadband(msg.linear.x)
+        vy = self.apply_deadband(msg.linear.y)
+        yaw = self.apply_deadband(msg.angular.z)
 
         if self.is_zero_cmd(vx, vy, yaw):
-            self.send_stop_once()
+            self.send_stop_once(reason='zero_command')
             return
 
-        self.send_cmd(vx, vy, yaw)
+        self.send_cmd(vx, vy, yaw, reason='move_command')
         self.has_sent_stop = False
 
     def on_timer(self):
@@ -123,23 +146,24 @@ class CmdVelUdpForwarder(Node):
             return
 
         if time.monotonic() - self.last_cmd_time >= self.timeout_sec:
-            self.send_stop_once()
+            self.send_stop_once(reason='forwarder_watchdog')
 
     def send_stop(self):
-        self.send_stop_once(force=True)
+        self.send_stop_once(force=True, reason='explicit_stop')
 
-    def send_stop_once(self, force=False):
+    def send_stop_once(self, force=False, reason='stop'):
         if self.has_sent_stop and not force:
             return
 
-        self.send_cmd(0.0, 0.0, 0.0)
+        self.send_cmd(0.0, 0.0, 0.0, reason=reason)
         self.has_sent_stop = True
 
-    def send_cmd(self, vx, vy, yaw):
+    def send_cmd(self, vx, vy, yaw, reason):
         payload = f'{vx} {vy} {yaw}'.encode('utf-8')
         self.sock.sendto(payload, (self.udp_host, self.udp_port))
         print(
-            f'[UDP] send vx={vx:.3f} vy={vy:.3f} yaw={yaw:.3f}',
+            f'[UDP] send vx={vx:.3f} vy={vy:.3f} yaw={yaw:.3f} '
+            f'reason={reason}',
             flush=True
         )
 
@@ -149,10 +173,10 @@ class CmdVelUdpForwarder(Node):
         finally:
             return super().destroy_node()
 
-    def apply_deadband_and_limit(self, value, limit):
+    def apply_deadband(self, value):
         if abs(value) <= self.deadband:
             return 0.0
-        return max(-limit, min(limit, value))
+        return value
 
     @staticmethod
     def is_finite_cmd(msg):
@@ -176,7 +200,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.send_stop_once(force=True)
+        node.send_stop_once(force=True, reason='forwarder_shutdown')
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

@@ -8,6 +8,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 
+add_library(rk_udp_motion_core STATIC
+  src/udp_motion_core.cpp
+)
+target_include_directories(rk_udp_motion_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
 set(RK_UNITREE_SDK2_INSTALL_CANDIDATES
   "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/unitree_sdk2_official/install"
   "$ENV{UNITREE_SDK2_PREFIX}"
@@ -106,6 +114,13 @@ install(DIRECTORY launch/
 )
 
 if(unitree_sdk2_FOUND)
+  add_executable(go2_sdk_udp_server
+    src/go2_sdk_udp_server.cpp
+  )
+  target_link_libraries(go2_sdk_udp_server
+    rk_udp_motion_core
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_udp_server)
   add_executable(go2_sdk_capture_image
     src/go2_sdk_capture_image.cpp
   )
@@ -125,6 +140,7 @@ if(unitree_sdk2_FOUND)
   )
   rk_configure_unitree_sdk_target(go2_sdk_sport_state_monitor)
   install(TARGETS
+    go2_sdk_udp_server
     go2_sdk_capture_image
     go2_sdk_speed_sweep
     go2_sdk_motion_action
@@ -136,6 +152,20 @@ else()
   message(WARNING
     "unitree_sdk2 not found; SDK direct tools will not be built. "
     "Build/install third_party/unitree_sdk2 first if SDK direct tests are needed."
+  )
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(test_udp_motion_core
+    test/test_udp_motion_core.cpp
+  )
+  target_link_libraries(test_udp_motion_core
+    rk_udp_motion_core
+  )
+  add_test(
+    NAME test_udp_motion_core
+    COMMAND test_udp_motion_core
   )
 endif()
 
