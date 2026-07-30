@@ -207,6 +207,8 @@ line_course_mission_node:
     mission_stop_topic: /mission/stop
     white_bar_action_request_topic: /mission/white_bar_action_request
     white_bar_action_done_topic: /mission/white_bar_action_done
+    white_bar_stage_command_topic: /mission/white_bar_stage_command
+    white_bar_stage_status_topic: /mission/white_bar_stage_status
 
     control_rate_hz: 10.0
     suggested_cmd_timeout_sec: 0.5
@@ -242,14 +244,14 @@ line_course_mission_node:
     turn_after_red_angular_z: 0.35
     turn_after_red_timeout_sec: 5.0
 
-    # 白横线到位后只请求这里显式指定的动作；空值或非法值均安全停机。
-    # 具体赛程阶段必须写 start_jump 或 finish_jump，不能按第几条白线推断。
+    # Deprecated: no automatic fallback. 具体阶段必须通过显式 stage command 激活。
     white_bar_confirm_frames: 3
     white_bar_min_confidence: 0.55
     white_bar_approach_speed: 0.03
     white_bar_stop_y_ratio: 0.70
     white_bar_action_timeout_sec: 5.0
     white_bar_motion_name: ''
+    allow_finish_only_test: false
 
     # 蓝区先靠近，机器人参考点连续进入后最终停车。
     stop_zone_confirm_frames: 3
