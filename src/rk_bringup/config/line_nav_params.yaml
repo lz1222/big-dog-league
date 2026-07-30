@@ -273,3 +273,17 @@ white_bar_action_executor:
     action_name: /locomotion/execute_motion
     server_wait_timeout_sec: 2.0
     action_timeout_sec: 5.0
+
+white_bar_stage_command_publisher:
+  ros__parameters:
+    mission_start_topic: /mission/start
+    mission_stop_topic: /mission/stop
+    white_bar_stage_status_topic: /mission/white_bar_stage_status
+    white_bar_stage_command_topic: /mission/white_bar_stage_command
+    line_course_state_topic: /mission/line_course_state
+    publisher_status_topic: /mission/white_bar_stage_command_publisher_status
+    finish_milestone_state: TURN_AFTER_RED
+    control_rate_hz: 10.0
+    command_retry_sec: 0.5
+    command_ack_timeout_sec: 5.0
+    max_command_retries: 5
