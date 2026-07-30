@@ -11,12 +11,6 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackagePrefix
 
 
-SDK_SERVER_ENV = {
-    'LD_LIBRARY_PATH': (
-        '/usr/local/lib:'
-        '/home/unitree/cyclonedds_ws/install/cyclonedds/lib'
-    ),
-}
 FORWARDER_ENV = {
     'ROS_DOMAIN_ID': '10',
     'LD_LIBRARY_PATH': (
@@ -39,6 +33,14 @@ def generate_launch_description():
     max_yaw = LaunchConfiguration('max_yaw')
     deadband = LaunchConfiguration('deadband')
     timeout_sec = LaunchConfiguration('timeout_sec')
+    # SDK服务端必须加载与本包一起安装的CycloneDDS，避免误用/usr/local
+    # 中的不同ABI版本并在ChannelFactory初始化阶段崩溃。
+    sdk_server_env = {
+        'LD_LIBRARY_PATH': PathJoinSubstitution([
+            FindPackagePrefix('rk_go2_sdk_bridge'),
+            'lib',
+        ]),
+    }
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -125,7 +127,7 @@ def generate_launch_description():
             ],
             output='screen',
             condition=IfCondition(start_sdk_server),
-            additional_env=SDK_SERVER_ENV,
+            additional_env=sdk_server_env,
         ),
         Node(
             package='rk_go2_sdk_bridge',
