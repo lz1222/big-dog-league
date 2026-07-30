@@ -260,6 +260,13 @@ def generate_launch_description():
             ],
         ),
         Node(
+            package='rk_mission',
+            executable='white_bar_action_executor',
+            name='white_bar_action_executor',
+            output='screen',
+            parameters=[line_nav_config],
+        ),
+        Node(
             package='rk_safety',
             executable='command_mux_node',
             name='command_mux_node',

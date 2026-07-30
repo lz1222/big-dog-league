@@ -1,4 +1,5 @@
-"""Fail-closed national competition mission policy.
+"""
+Fail-closed national competition mission policy.
 
 No ROS type is imported here.  The node owns topic and Action wiring, while
 this module owns state entry, event acceptance, timing, and safe transitions.

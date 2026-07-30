@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""ROS wiring for the modular national integrated mission FSM.
+"""
+ROS wiring for the modular national integrated mission FSM.
 
 This node publishes only ``/control/mission_cmd`` candidates.  ``rk_safety``
 remains the only publisher of ``/navigation/cmd_vel``.

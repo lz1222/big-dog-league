@@ -1,4 +1,5 @@
-"""Types shared by the national integrated mission implementation.
+"""
+Types shared by the national integrated mission implementation.
 
 The types in this module deliberately do not import ROS.  This keeps the
 mission policy testable while :mod:`national_mission_node` owns all ROS I/O.
