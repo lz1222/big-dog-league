@@ -27,6 +27,7 @@ from rk_mission.sign_action_executor_node import (
     DEFAULT_SDK_ACTION_EXECUTABLE,
     SDK_LD_LIBRARY_PATH_PREFIX,
 )
+from rk_mission.white_bar_action_core import WhiteBarActionRequestGate
 
 
 STAGES = [
@@ -843,7 +844,10 @@ class LineCourseMissionNode(Node):
         self.reacquire_seen_count = 0
         self.red_handled = False
         self.white_bar_handled = False
-        self.white_bar_action_done = False
+        self.white_bar_action_gate = WhiteBarActionRequestGate(
+            self.white_bar_motion_name
+        )
+        self.white_bar_action_request_time = None
         self.last_corner_finish_time = -1.0e9
         self.red_action_process = None
         self.red_action_start_time = None
@@ -857,6 +861,11 @@ class LineCourseMissionNode(Node):
         self.state_publisher = self.create_publisher(
             String,
             self.mission_state_topic,
+            10
+        )
+        self.white_bar_action_request_publisher = self.create_publisher(
+            String,
+            self.white_bar_action_request_topic,
             10
         )
         self.create_subscription(
@@ -935,6 +944,9 @@ class LineCourseMissionNode(Node):
             'corner_candidate_topic': '/perception/corner_candidate',
             'mission_start_topic': '/mission/start',
             'mission_stop_topic': '/mission/stop',
+            'white_bar_action_request_topic': (
+                '/mission/white_bar_action_request'
+            ),
             'white_bar_action_done_topic': '/mission/white_bar_action_done',
         }
         for name, value in topics.items():
@@ -975,6 +987,7 @@ class LineCourseMissionNode(Node):
             'white_bar_approach_speed': 0.03,
             'white_bar_stop_y_ratio': 0.70,
             'white_bar_action_timeout_sec': 5.0,
+            'white_bar_motion_name': '',
             'stop_zone_confirm_frames': 3,
             'stop_zone_min_confidence': 0.55,
             'stop_zone_approach_speed': 0.04,
@@ -999,7 +1012,9 @@ class LineCourseMissionNode(Node):
             'corner_candidate_topic',
             'mission_start_topic',
             'mission_stop_topic',
+            'white_bar_action_request_topic',
             'white_bar_action_done_topic',
+            'white_bar_motion_name',
             'corner_turn_direction',
             'red_circle_sdk_action',
             'sdk_network_interface',
@@ -1142,7 +1157,7 @@ class LineCourseMissionNode(Node):
         self.mission_started = True
         self.red_handled = False
         self.white_bar_handled = False
-        self.white_bar_action_done = False
+        self._reset_white_bar_action_state()
         self._reset_detection_counts()
         self._set_line_course_state('LINE_FOLLOW', 'mission_start')
 
@@ -1151,12 +1166,22 @@ class LineCourseMissionNode(Node):
             return
         self.mission_started = False
         self._terminate_red_action()
+        self._reset_white_bar_action_state()
         self._set_line_course_state('WAIT_START', 'mission_stop')
         self._publish_final_cmd(Twist())
 
     def _on_white_bar_action_done(self, msg):
-        if msg.data:
-            self.white_bar_action_done = True
+        if not msg.data:
+            return
+        if self.state != 'HANDLE_WHITE_BAR':
+            self.get_logger().debug(
+                'Ignored white-bar done outside HANDLE_WHITE_BAR'
+            )
+            return
+        if not self.white_bar_action_gate.accept_done(msg.data):
+            self.get_logger().warn(
+                'Ignored white-bar done before a current action request'
+            )
 
     def _on_line_course_timer(self):
         now = time.monotonic()
@@ -1392,13 +1417,26 @@ class LineCourseMissionNode(Node):
         self._publish_final_cmd(cmd)
 
     def _control_white_bar(self, now):
-        if self.white_bar_action_done:
+        if self.white_bar_action_gate.action_done:
             self.white_bar_handled = True
             self.white_seen_count = 0
             self._set_line_course_state(
                 'REACQUIRE_LINE',
                 'white_bar_action_done'
             )
+            return
+        if self.white_bar_action_gate.request_sent:
+            self._publish_final_cmd(Twist())
+            if (
+                self.white_bar_action_request_time is not None
+                and now - self.white_bar_action_request_time
+                >= self.white_bar_action_timeout_sec
+            ):
+                self._set_line_course_state(
+                    'EMERGENCY_STOP',
+                    'white_bar_action_timeout'
+                )
+                self._publish_final_cmd(Twist())
             return
         if not self._is_fresh(self.latest_white_bar_time, now):
             self._set_line_course_state(
@@ -1407,23 +1445,31 @@ class LineCourseMissionNode(Node):
             )
             self._publish_final_cmd(Twist())
             return
-        if now - self.state_enter_time >= self.white_bar_action_timeout_sec:
-            self._set_line_course_state(
-                'EMERGENCY_STOP',
-                'white_bar_action_not_configured'
-            )
-            self._publish_final_cmd(Twist())
-            return
-        if (
+        stop_threshold_reached = (
             self.latest_white_bar is not None
             and float(self.latest_white_bar.center_y)
-            < self.white_bar_stop_y_ratio
-        ):
+            >= self.white_bar_stop_y_ratio
+        )
+        event = self.white_bar_action_gate.evaluate(stop_threshold_reached)
+        if event.action == 'APPROACH':
             cmd = self._copy_suggested_cmd(now)
             cmd.linear.x = self.white_bar_approach_speed
             self._publish_final_cmd(cmd)
             return
         self._publish_final_cmd(Twist())
+        if event.action == 'CONFIG_ERROR':
+            self._set_line_course_state('EMERGENCY_STOP', event.reason)
+            return
+        if event.action == 'SEND_REQUEST':
+            request = String()
+            request.data = event.motion_name
+            self.white_bar_action_request_publisher.publish(request)
+            self.white_bar_action_request_time = now
+            self.get_logger().info(
+                'Requested white-bar action: '
+                f'{event.motion_name}'
+            )
+        return
 
     def _control_approach_stop_zone(self, now):
         if not self._is_fresh(self.latest_stop_zone_time, now):
@@ -1496,6 +1542,10 @@ class LineCourseMissionNode(Node):
             'final_wz': float(cmd.angular.z),
             'red_confirm_count': self.red_seen_count,
             'white_bar_confirm_count': self.white_seen_count,
+            'white_bar_action_request_sent': (
+                self.white_bar_action_gate.request_sent
+            ),
+            'white_bar_motion_name': self.white_bar_motion_name,
             'stop_zone_confirm_count': self.stop_seen_count,
             'stop_zone_inside_count': self.stop_inside_count,
             'corner_confirm_count': self.corner_seen_count,
@@ -1513,7 +1563,7 @@ class LineCourseMissionNode(Node):
         self.state_enter_time = time.monotonic()
         self.reacquire_seen_count = 0
         if new_state == 'HANDLE_WHITE_BAR':
-            self.white_bar_action_done = False
+            self._reset_white_bar_action_state()
         self.get_logger().info(
             f'[LINE_COURSE] {old_state} -> {new_state}: {reason}'
         )
@@ -1525,6 +1575,10 @@ class LineCourseMissionNode(Node):
         self.white_seen_count = 0
         self.corner_seen_count = 0
         self.reacquire_seen_count = 0
+
+    def _reset_white_bar_action_state(self):
+        self.white_bar_action_gate.reset(self.white_bar_motion_name)
+        self.white_bar_action_request_time = None
 
     def _is_fresh(self, receive_time, now):
         return (

@@ -9,7 +9,8 @@ from .mission_types import MotionCommand
 
 @dataclass
 class SegmentProgress:
-    """Accumulate only safe, state-authorized final command motion.
+    """
+    Accumulate only safe, state-authorized final command motion.
 
     ``commanded_forward_distance`` is intentionally only a command estimate.
     It is not a measured robot distance and must not be used as one.
