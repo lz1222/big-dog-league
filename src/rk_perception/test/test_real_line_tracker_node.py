@@ -3,7 +3,10 @@ import numpy as np
 
 from rk_perception.real_line_tracker_node import (
     LineTrackerConfig,
+    detect_blue_stop_zone,
     detect_line_in_image,
+    detect_red_circle,
+    detect_white_bar,
 )
 
 
@@ -113,3 +116,47 @@ def test_small_noise_is_not_visible():
     result = detect_line_in_image(image, default_config())
 
     assert result.line_visible is False
+
+
+def test_red_circle_detection_reports_normalized_geometry():
+    image = make_image()
+    cv2.circle(image, (320, 300), 55, (0, 0, 255), -1)
+
+    result = detect_red_circle(image)
+
+    assert result.visible is True
+    assert result.target_type == 'red_circle'
+    assert 0.45 < result.center_x < 0.55
+    assert result.area_ratio > 0.002
+
+
+def test_blue_stop_zone_detects_robot_reference_inside():
+    image = make_image()
+    cv2.rectangle(image, (80, 300), (560, 479), (255, 0, 0), -1)
+
+    result = detect_blue_stop_zone(
+        image,
+        robot_center_x=320.0,
+        min_area_ratio=0.05
+    )
+
+    assert result.visible is True
+    assert result.inside_candidate is True
+    assert result.target_type == 'blue_stop_zone'
+
+
+def test_white_horizontal_bar_is_detected_but_white_block_is_rejected():
+    image = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.rectangle(image, (120, 300), (520, 335), (255, 255, 255), -1)
+
+    result = detect_white_bar(image)
+
+    assert result.visible is True
+    assert result.width_ratio > 0.20
+    assert result.height_ratio < 0.15
+
+    square = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.rectangle(square, (250, 200), (390, 340), (255, 255, 255), -1)
+    rejected = detect_white_bar(square)
+
+    assert rejected.visible is False

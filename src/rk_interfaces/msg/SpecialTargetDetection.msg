@@ -1,0 +1,12 @@
+std_msgs/Header header
+string target_type
+bool visible
+float32 confidence
+float32 center_x
+float32 center_y
+float32 area_ratio
+float32 width_ratio
+float32 height_ratio
+bool inside_candidate
+string direction_hint
+string reason

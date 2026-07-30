@@ -48,6 +48,21 @@ def generate_launch_description():
     white_line_max_saturation = LaunchConfiguration(
         'white_line_max_saturation'
     )
+    white_line_max_line_confidence = LaunchConfiguration(
+        'white_line_max_line_confidence'
+    )
+    center_before_obstacle_timeout_sec = LaunchConfiguration(
+        'center_before_obstacle_timeout_sec'
+    )
+    center_before_obstacle_stable_sec = LaunchConfiguration(
+        'center_before_obstacle_stable_sec'
+    )
+    center_before_obstacle_max_lateral_error = LaunchConfiguration(
+        'center_before_obstacle_max_lateral_error'
+    )
+    center_before_obstacle_max_heading_error = LaunchConfiguration(
+        'center_before_obstacle_max_heading_error'
+    )
     start_realsense = LaunchConfiguration('start_realsense')
     start_line_nodes = LaunchConfiguration('start_line_nodes')
     image_topic = LaunchConfiguration('image_topic')
@@ -145,7 +160,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'line_lost_switch_sec',
-            default_value='0.6',
+            default_value='0.45',
             description=(
                 'Switch from line following to the hardcoded obstacle route '
                 'after line_visible has stayed false for this many seconds.'
@@ -178,6 +193,34 @@ def generate_launch_description():
             'white_line_max_saturation',
             default_value='130',
             description='HSV S upper threshold for white-line detection.'
+        ),
+        DeclareLaunchArgument(
+            'white_line_max_line_confidence',
+            default_value='0.65',
+            description=(
+                'Only accept white-foam candidates when black-line confidence '
+                'is below this value, or the black line is already lost.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'center_before_obstacle_timeout_sec',
+            default_value='8.0',
+            description='Maximum time to keep centering before obstacle route.'
+        ),
+        DeclareLaunchArgument(
+            'center_before_obstacle_stable_sec',
+            default_value='0.60',
+            description='Required stable centered time before obstacle route.'
+        ),
+        DeclareLaunchArgument(
+            'center_before_obstacle_max_lateral_error',
+            default_value='0.10',
+            description='Max lateral error before entering obstacle route.'
+        ),
+        DeclareLaunchArgument(
+            'center_before_obstacle_max_heading_error',
+            default_value='0.22',
+            description='Max heading error before entering obstacle route.'
         ),
         DeclareLaunchArgument(
             'start_realsense',
@@ -310,11 +353,36 @@ def generate_launch_description():
                 '-p',
                 ['white_line_max_saturation:=', white_line_max_saturation],
                 '-p',
+                [
+                    'white_line_max_line_confidence:=',
+                    white_line_max_line_confidence,
+                ],
+                '-p',
                 'line_visible_wait_timeout_sec:=10.0',
                 '-p',
                 ['line_lost_switch_sec:=', line_lost_switch_sec],
                 '-p',
                 ['line_track_stale_sec:=', line_track_stale_sec],
+                '-p',
+                [
+                    'center_before_obstacle_timeout_sec:=',
+                    center_before_obstacle_timeout_sec,
+                ],
+                '-p',
+                [
+                    'center_before_obstacle_stable_sec:=',
+                    center_before_obstacle_stable_sec,
+                ],
+                '-p',
+                [
+                    'center_before_obstacle_max_lateral_error:=',
+                    center_before_obstacle_max_lateral_error,
+                ],
+                '-p',
+                [
+                    'center_before_obstacle_max_heading_error:=',
+                    center_before_obstacle_max_heading_error,
+                ],
                 '-p',
                 ['run_without_sdk_actions:=', run_without_sdk_actions],
                 '-p',

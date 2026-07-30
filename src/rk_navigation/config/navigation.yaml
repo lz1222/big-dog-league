@@ -1,7 +1,8 @@
 line_follower_node:
   ros__parameters:
     line_track_topic: /perception/line_track
-    cmd_vel_topic: /navigation/cmd_vel
+    suggested_cmd_topic: /navigation/line_follow_cmd_suggested
+    line_follow_status_topic: /navigation/line_follow_status
     mission_start_topic: /mission/start
     mission_stop_topic: /mission/stop
     gait_control_lock_topic: /gait/control_lock

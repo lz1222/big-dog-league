@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 
 package_name = 'rk_tools'
@@ -6,7 +6,7 @@ package_name = 'rk_tools'
 setup(
     name=package_name,
     version='0.0.1',
-    packages=[package_name],
+    packages=find_packages(exclude=['test']),
     data_files=[
         (
             'share/ament_index/resource_index/packages',
@@ -37,6 +37,10 @@ setup(
             'keyboard_route_recorder = '
             'rk_tools.keyboard_route_node:record_main',
             'keyboard_route_replay = rk_tools.keyboard_route_node:replay_main',
+            'national_route_simulator = '
+            'rk_tools.national_route_simulator:main',
+            'run_national_sim_suite = '
+            'rk_tools.run_national_sim_suite:main',
         ],
     },
 )

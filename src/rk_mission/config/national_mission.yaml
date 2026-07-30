@@ -1,0 +1,131 @@
+# 国赛整链路集成模拟 v1。
+# All values below are DEVELOPMENT DEFAULT and NOT FIELD VALIDATED.
+# commanded_forward_distance is a command estimate, never physical odometry.
+national_mission_node:
+  ros__parameters:
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: common control and safety.
+    control_rate_hz: 20.0
+    min_line_confidence: 0.55
+    min_effective_speed: 0.05
+    final_cmd_stale_sec: 0.75
+    zero_epsilon: 0.01
+    zero_confirm_frames: 2
+    state_timeout_sec: 12.0
+    action_timeout_sec: 8.0
+    simulation_mode: false
+    start_from_state: ''
+
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: confirmation thresholds.
+    line_reacquire_frames: 3
+    white_confirm_frames: 3
+    marker_confirm_frames: 3
+    sign_confirm_frames: 3
+    red_confirm_frames: 3
+    marker_min_confidence: 0.70
+    sign_min_confidence: 0.70
+    red_min_confidence: 0.60
+    red_near_y: 0.72
+    start_white_min_segment_sec: 0.10
+    finish_white_min_segment_sec: 0.10
+
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: station approach gates.
+    maze_entry_min_distance: 0.10
+    maze_entry_target_distance: 0.18
+    maze_entry_max_distance: 0.45
+    maze_entry_min_effective_time: 0.15
+    maze_entry_target_effective_time: 0.35
+    maze_entry_hard_timeout: 8.0
+    stairs_approach_min_distance: 0.10
+    stairs_approach_target_distance: 0.18
+    stairs_approach_max_distance: 0.45
+    stairs_approach_min_effective_time: 0.15
+    stairs_approach_target_effective_time: 0.35
+    stairs_approach_hard_timeout: 8.0
+    transfer_platform_min_distance: 0.10
+    transfer_platform_target_distance: 0.18
+    transfer_platform_max_distance: 0.45
+    transfer_platform_min_effective_time: 0.15
+    transfer_platform_target_effective_time: 0.35
+    transfer_platform_hard_timeout: 8.0
+    place_platform_min_distance: 0.10
+    place_platform_target_distance: 0.18
+    place_platform_max_distance: 0.45
+    place_platform_min_effective_time: 0.15
+    place_platform_target_effective_time: 0.35
+    place_platform_hard_timeout: 8.0
+    final_zone_min_distance: 0.10
+    final_zone_target_distance: 0.18
+    final_zone_max_distance: 0.45
+    final_zone_min_effective_time: 0.15
+    final_zone_target_effective_time: 0.35
+    final_zone_hard_timeout: 8.0
+
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: curved pick-platform apex.
+    pick_arc_min_distance: 0.12
+    pick_arc_target_distance: 0.22
+    pick_arc_max_distance: 0.50
+    pick_arc_min_curve_duration: 0.20
+    pick_arc_min_abs_angular_z: 0.10
+    pick_arc_target_turn_progress_rad: 0.24
+    pick_arc_expected_turn_sign: auto
+    pick_arc_hard_timeout: 8.0
+
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: turns and stationary search.
+    mission_turn_speed: 0.70
+    search_turn_speed: 0.40
+    pick_turn_target_rad: 1.5708
+    inspection_turn_target_rad: 1.5708
+    turn_timeout_sec: 5.0
+    search_small_angle_rad: 0.30
+    search_medium_angle_rad: 0.55
+    search_large_angle_rad: 0.85
+    search_settle_sec: 0.20
+    pattern_search_timeout_sec: 7.0
+    sign_search_timeout_sec: 6.0
+    reacquire_timeout_sec: 7.0
+
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: red marker body offset.
+    red_track_speed: 0.10
+    red_track_kp: 1.20
+    red_track_max_wz: 0.70
+    post_red_marker_distance: 0.10
+    post_red_marker_time_fallback: 0.45
+    post_red_marker_hard_timeout: 5.0
+
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: replaceable task names.
+    start_jump_motion: start_jump
+    finish_jump_motion: finish_jump
+    maze_motion: maze_traverse_fake
+    stairs_motion: stairs_traverse
+    pick_arm_task: pick_item
+    transfer_place_task: transfer_place
+    transfer_pick_task: transfer_pick
+    place_platform_1_task: place_platform_1
+    place_platform_2_task: place_platform_2
+    inspection_electric_shock_task: stretch
+    inspection_oxidizer_task: hello
+    inspection_radiation_task: headlight_blink_3
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: no station turn in v1.
+    transfer_platform_turn_to_station: false
+
+route_marker_detector_node:
+  ros__parameters:
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: ground ROI white bar detector.
+    ground_roi_top_fraction: 0.42
+    white_min_value: 185
+    white_max_saturation: 70
+    white_min_width_fraction: 0.28
+    white_min_thickness_px: 3.0
+    white_max_thickness_px: 90.0
+    white_confirm_frames: 3
+    # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED: HSV dual-red circular detector.
+    red_hue_low_1: 0
+    red_hue_high_1: 10
+    red_hue_low_2: 170
+    red_hue_high_2: 180
+    red_min_saturation: 90
+    red_min_value: 70
+    red_min_area_ratio: 0.0015
+    red_min_circularity: 0.55
+    red_confirm_frames: 3
+    publish_debug_overlay: true

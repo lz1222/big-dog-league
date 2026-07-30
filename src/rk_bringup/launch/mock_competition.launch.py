@@ -57,6 +57,19 @@ def generate_launch_description():
             parameters=[competition_config]
         ),
         Node(
+            package='rk_mission',
+            executable='line_course_mission_node',
+            name='line_course_mission_node',
+            output='screen',
+            parameters=[
+                competition_config,
+                {
+                    # Standalone mock launch: preserve its legacy final output.
+                    'cmd_vel_topic': '/navigation/cmd_vel',
+                },
+            ]
+        ),
+        Node(
             package='rk_tools',
             executable='mock_locomotion_server',
             name='mock_locomotion_server',

@@ -16,7 +16,7 @@ try:
     from sensor_msgs.msg import Image
     from std_msgs.msg import Header
 
-    from rk_interfaces.msg import LineTrack
+    from rk_interfaces.msg import LineTrack, SpecialTargetDetection
 except ImportError:
     rclpy = None
     CvBridge = None
@@ -25,6 +25,7 @@ except ImportError:
     Header = None
     Image = None
     LineTrack = None
+    SpecialTargetDetection = None
     Node = object
     qos_profile_sensor_data = 10
 
@@ -218,6 +219,336 @@ class LineDetectionResult:
     candidate_rejected: bool = False
     candidate_rejection_reason: str = 'none'
     track_jump_rejected: bool = False
+
+
+@dataclass(frozen=True)
+class SpecialDetectionResult:
+    target_type: str
+    visible: bool = False
+    confidence: float = 0.0
+    center_x: float = 0.0
+    center_y: float = 0.0
+    area_ratio: float = 0.0
+    width_ratio: float = 0.0
+    height_ratio: float = 0.0
+    inside_candidate: bool = False
+    direction_hint: str = 'unknown'
+    reason: str = 'not_detected'
+
+
+def detect_red_circle(
+    image,
+    min_area_ratio=0.002,
+    min_circularity=0.55
+):
+    """Return visual evidence for the largest red circular region."""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    low_red = cv2.inRange(hsv, (0, 80, 60), (12, 255, 255))
+    high_red = cv2.inRange(hsv, (170, 80, 60), (180, 255, 255))
+    mask = cv2.bitwise_or(low_red, high_red)
+    mask = _clean_special_mask(mask)
+    return _best_special_contour(
+        mask,
+        image.shape,
+        'red_circle',
+        min_area_ratio,
+        shape_filter='circle',
+        min_circularity=min_circularity
+    )
+
+
+def detect_blue_stop_zone(
+    image,
+    robot_center_x,
+    blue_h_min=90,
+    blue_h_max=130,
+    blue_s_min=60,
+    blue_v_min=40,
+    min_area_ratio=0.05,
+    reference_y_ratio=0.85
+):
+    """Return visual evidence for a blue floor stop zone."""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lower = (
+        int(clamp(blue_h_min, 0, 180)),
+        int(clamp(blue_s_min, 0, 255)),
+        int(clamp(blue_v_min, 0, 255)),
+    )
+    upper = (
+        int(clamp(blue_h_max, lower[0], 180)),
+        255,
+        255,
+    )
+    mask = _clean_special_mask(cv2.inRange(hsv, lower, upper), 7)
+    return _best_special_contour(
+        mask,
+        image.shape,
+        'blue_stop_zone',
+        min_area_ratio,
+        reference_point=(
+            float(robot_center_x),
+            float(image.shape[0]) * clamp(reference_y_ratio, 0.0, 1.0),
+        )
+    )
+
+
+def detect_white_bar(
+    image,
+    white_v_min=180,
+    white_s_max=80,
+    min_width_ratio=0.20,
+    max_height_ratio=0.15,
+    min_area_ratio=0.002
+):
+    """Return visual evidence for a bright horizontal route marker."""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(
+        hsv,
+        (0, 0, int(clamp(white_v_min, 0, 255))),
+        (180, int(clamp(white_s_max, 0, 255)), 255)
+    )
+    mask = _clean_special_mask(mask, 5)
+    return _best_special_contour(
+        mask,
+        image.shape,
+        'white_bar',
+        min_area_ratio,
+        shape_filter='horizontal',
+        min_width_ratio=min_width_ratio,
+        max_height_ratio=max_height_ratio
+    )
+
+
+def detect_corner_candidate(
+    line_result,
+    image_width,
+    min_heading_error=0.30,
+    edge_fraction=0.28
+):
+    """Publish a geometric corner hint; mission decides whether to turn."""
+    if line_result is None:
+        return SpecialDetectionResult(
+            target_type='corner_candidate',
+            reason='line_result_missing'
+        )
+
+    valid_ratio = (
+        float(len(line_result.selected_bands))
+        / max(1.0, float(len(line_result.band_rows)))
+    )
+    heading_score = clamp(
+        abs(float(line_result.heading_error))
+        / max(0.01, float(min_heading_error)),
+        0.0,
+        1.0
+    )
+    sparse_upper_path = (
+        bool(line_result.bottom_band_valid)
+        and valid_ratio < 0.55
+    )
+    rejection_hint = (
+        'too_wide' in str(line_result.reason)
+        or 'too_wide' in str(line_result.candidate_rejection_reason)
+        or 'obstacle_like_dark_block' in str(line_result.reason)
+    )
+    anchor = line_result.tracking_anchor_x
+    direction_hint = 'unknown'
+    edge_score = 0.0
+    if anchor is not None and image_width > 0:
+        normalized_x = float(anchor) / float(image_width)
+        if normalized_x < edge_fraction:
+            direction_hint = 'left'
+            edge_score = clamp(
+                (edge_fraction - normalized_x) / max(edge_fraction, 0.01),
+                0.0,
+                1.0
+            )
+        elif normalized_x > 1.0 - edge_fraction:
+            direction_hint = 'right'
+            edge_score = clamp(
+                (normalized_x - (1.0 - edge_fraction))
+                / max(edge_fraction, 0.01),
+                0.0,
+                1.0
+            )
+        elif float(line_result.heading_error) > min_heading_error:
+            direction_hint = 'right'
+        elif float(line_result.heading_error) < -min_heading_error:
+            direction_hint = 'left'
+
+    visible = bool(
+        line_result.bottom_band_valid
+        and (
+            abs(float(line_result.heading_error)) >= min_heading_error
+            or (sparse_upper_path and edge_score > 0.0)
+            or rejection_hint
+        )
+    )
+    confidence = clamp(
+        0.45 * heading_score
+        + 0.35 * edge_score
+        + (0.20 if sparse_upper_path or rejection_hint else 0.0),
+        0.0,
+        1.0
+    )
+    reason_parts = []
+    if sparse_upper_path:
+        reason_parts.append('upper_path_sparse')
+    if rejection_hint:
+        reason_parts.append('wide_or_block_rejection')
+    if heading_score >= 1.0:
+        reason_parts.append('large_heading')
+    if edge_score > 0.0:
+        reason_parts.append('anchor_near_edge')
+    return SpecialDetectionResult(
+        target_type='corner_candidate',
+        visible=visible,
+        confidence=confidence if visible else 0.0,
+        center_x=(
+            clamp(float(anchor) / float(image_width), 0.0, 1.0)
+            if anchor is not None and image_width > 0 else 0.0
+        ),
+        direction_hint=direction_hint,
+        reason=','.join(reason_parts) if reason_parts else 'not_candidate'
+    )
+
+
+def _clean_special_mask(mask, kernel_size=5):
+    kernel_size = max(3, int(kernel_size) | 1)
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+    opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    return cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel)
+
+
+def _best_special_contour(
+    mask,
+    image_shape,
+    target_type,
+    min_area_ratio,
+    shape_filter=None,
+    min_circularity=0.0,
+    min_width_ratio=0.0,
+    max_height_ratio=1.0,
+    reference_point=None
+):
+    height, width = image_shape[:2]
+    image_area = max(1.0, float(height * width))
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+    best = None
+    best_score = -1.0
+    rejection_reason = 'not_detected'
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        area_ratio = area / image_area
+        if area_ratio < max(0.0, float(min_area_ratio)):
+            rejection_reason = 'area_too_small'
+            continue
+        x, y, box_width, box_height = cv2.boundingRect(contour)
+        width_ratio = float(box_width) / max(1.0, float(width))
+        height_ratio = float(box_height) / max(1.0, float(height))
+        shape_score = 1.0
+        if shape_filter == 'circle':
+            perimeter = float(cv2.arcLength(contour, True))
+            circularity = (
+                4.0 * math.pi * area / (perimeter * perimeter)
+                if perimeter > 1.0 else 0.0
+            )
+            aspect = (
+                float(min(box_width, box_height))
+                / max(1.0, float(max(box_width, box_height)))
+            )
+            if circularity < min_circularity or aspect < 0.65:
+                rejection_reason = 'not_circular'
+                continue
+            shape_score = 0.65 * circularity + 0.35 * aspect
+        elif shape_filter == 'horizontal':
+            if (
+                width_ratio < min_width_ratio
+                or height_ratio > max_height_ratio
+                or box_width <= box_height
+            ):
+                rejection_reason = 'not_horizontal_bar'
+                continue
+            shape_score = clamp(
+                float(box_width) / max(1.0, float(box_height)) / 8.0,
+                0.0,
+                1.0
+            )
+
+        score = area_ratio + 0.1 * shape_score
+        if score > best_score:
+            best_score = score
+            best = (
+                contour,
+                area_ratio,
+                width_ratio,
+                height_ratio,
+                x,
+                y,
+                box_width,
+                box_height,
+                shape_score,
+            )
+
+    if best is None:
+        return SpecialDetectionResult(
+            target_type=target_type,
+            reason=rejection_reason
+        )
+
+    (
+        contour,
+        area_ratio,
+        width_ratio,
+        height_ratio,
+        x,
+        y,
+        box_width,
+        box_height,
+        shape_score,
+    ) = best
+    inside_candidate = False
+    if reference_point is not None:
+        inside_candidate = cv2.pointPolygonTest(
+            contour,
+            reference_point,
+            False
+        ) >= 0.0
+    confidence = clamp(
+        0.55 * shape_score
+        + 0.45 * clamp(
+            area_ratio / max(float(min_area_ratio), 0.001),
+            0.0,
+            1.0
+        ),
+        0.0,
+        1.0
+    )
+    return SpecialDetectionResult(
+        target_type=target_type,
+        visible=True,
+        confidence=confidence,
+        center_x=clamp(
+            (float(x) + float(box_width) / 2.0) / max(1.0, float(width)),
+            0.0,
+            1.0
+        ),
+        center_y=clamp(
+            (float(y) + float(box_height) / 2.0)
+            / max(1.0, float(height)),
+            0.0,
+            1.0
+        ),
+        area_ratio=area_ratio,
+        width_ratio=width_ratio,
+        height_ratio=height_ratio,
+        inside_candidate=inside_candidate,
+        reason='ok'
+    )
 
 
 def detect_line_in_image(
@@ -851,6 +1182,22 @@ class RealLineTrackerNode(Node):
             '/camera/color/image_raw'
         )
         self.declare_parameter('line_track_topic', '/perception/line_track')
+        self.declare_parameter(
+            'red_circle_topic',
+            '/perception/red_circle_detection'
+        )
+        self.declare_parameter(
+            'stop_zone_topic',
+            '/perception/stop_zone_detection'
+        )
+        self.declare_parameter(
+            'white_bar_topic',
+            '/perception/white_bar_detection'
+        )
+        self.declare_parameter(
+            'corner_candidate_topic',
+            '/perception/corner_candidate'
+        )
         self.declare_parameter('enable_debug_image', True)
         self.declare_parameter('debug_log', True)
         self.declare_parameter('use_full_frame_roi', True)
@@ -885,6 +1232,21 @@ class RealLineTrackerNode(Node):
         self.declare_parameter('max_band_center_jump_fraction', 0.30)
         self.declare_parameter('max_band_gap', 2)
         self.declare_parameter('frame_id', 'd435i_color_optical_frame')
+        self.declare_parameter('red_circle_min_area_ratio', 0.002)
+        self.declare_parameter('red_circle_min_circularity', 0.55)
+        self.declare_parameter('blue_h_min', 90)
+        self.declare_parameter('blue_h_max', 130)
+        self.declare_parameter('blue_s_min', 60)
+        self.declare_parameter('blue_v_min', 40)
+        self.declare_parameter('stop_zone_min_area_ratio', 0.05)
+        self.declare_parameter('stop_zone_reference_y_ratio', 0.85)
+        self.declare_parameter('white_bar_v_min', 180)
+        self.declare_parameter('white_bar_s_max', 80)
+        self.declare_parameter('white_bar_min_width_ratio', 0.20)
+        self.declare_parameter('white_bar_max_height_ratio', 0.15)
+        self.declare_parameter('white_bar_min_area_ratio', 0.002)
+        self.declare_parameter('corner_min_heading_error', 0.30)
+        self.declare_parameter('corner_edge_fraction', 0.28)
 
         self.image_topic = self.get_parameter('image_topic').value
         self.enable_debug_image = self._get_bool_parameter(
@@ -895,6 +1257,18 @@ class RealLineTrackerNode(Node):
         self.line_track_topic = self.get_parameter(
             'line_track_topic'
         ).get_parameter_value().string_value
+        self.red_circle_topic = str(
+            self.get_parameter('red_circle_topic').value
+        )
+        self.stop_zone_topic = str(
+            self.get_parameter('stop_zone_topic').value
+        )
+        self.white_bar_topic = str(
+            self.get_parameter('white_bar_topic').value
+        )
+        self.corner_candidate_topic = str(
+            self.get_parameter('corner_candidate_topic').value
+        )
         self.frame_id = self.get_parameter(
             'frame_id'
         ).get_parameter_value().string_value
@@ -914,6 +1288,26 @@ class RealLineTrackerNode(Node):
         self.publisher = self.create_publisher(
             LineTrack,
             self.line_track_topic,
+            10
+        )
+        self.red_circle_publisher = self.create_publisher(
+            SpecialTargetDetection,
+            self.red_circle_topic,
+            10
+        )
+        self.stop_zone_publisher = self.create_publisher(
+            SpecialTargetDetection,
+            self.stop_zone_topic,
+            10
+        )
+        self.white_bar_publisher = self.create_publisher(
+            SpecialTargetDetection,
+            self.white_bar_topic,
+            10
+        )
+        self.corner_candidate_publisher = self.create_publisher(
+            SpecialTargetDetection,
+            self.corner_candidate_topic,
             10
         )
         self.mask_pub = self.create_publisher(
@@ -940,6 +1334,9 @@ class RealLineTrackerNode(Node):
             'Real line tracker node started: '
             f'image_topic={self.image_topic}, '
             f'line_track_topic={self.line_track_topic}, '
+            f'special_topics=[{self.red_circle_topic}, '
+            f'{self.stop_zone_topic}, {self.white_bar_topic}, '
+            f'{self.corner_candidate_topic}], '
             f'enable_debug_image={self.enable_debug_image}, '
             f'debug_log={self.debug_log}, '
             'robot_center_offset='
@@ -996,6 +1393,57 @@ class RealLineTrackerNode(Node):
         self.robot_center_x_offset_px = self.get_parameter(
             'robot_center_x_offset_px'
         ).get_parameter_value().double_value
+        self.red_circle_min_area_ratio = max(
+            0.0,
+            float(self.get_parameter('red_circle_min_area_ratio').value)
+        )
+        self.red_circle_min_circularity = clamp(
+            float(self.get_parameter('red_circle_min_circularity').value),
+            0.0,
+            1.0
+        )
+        self.blue_h_min = int(self.get_parameter('blue_h_min').value)
+        self.blue_h_max = int(self.get_parameter('blue_h_max').value)
+        self.blue_s_min = int(self.get_parameter('blue_s_min').value)
+        self.blue_v_min = int(self.get_parameter('blue_v_min').value)
+        self.stop_zone_min_area_ratio = max(
+            0.0,
+            float(self.get_parameter('stop_zone_min_area_ratio').value)
+        )
+        self.stop_zone_reference_y_ratio = clamp(
+            float(self.get_parameter('stop_zone_reference_y_ratio').value),
+            0.0,
+            1.0
+        )
+        self.white_bar_v_min = int(
+            self.get_parameter('white_bar_v_min').value
+        )
+        self.white_bar_s_max = int(
+            self.get_parameter('white_bar_s_max').value
+        )
+        self.white_bar_min_width_ratio = clamp(
+            float(self.get_parameter('white_bar_min_width_ratio').value),
+            0.0,
+            1.0
+        )
+        self.white_bar_max_height_ratio = clamp(
+            float(self.get_parameter('white_bar_max_height_ratio').value),
+            0.0,
+            1.0
+        )
+        self.white_bar_min_area_ratio = max(
+            0.0,
+            float(self.get_parameter('white_bar_min_area_ratio').value)
+        )
+        self.corner_min_heading_error = max(
+            0.0,
+            float(self.get_parameter('corner_min_heading_error').value)
+        )
+        self.corner_edge_fraction = clamp(
+            float(self.get_parameter('corner_edge_fraction').value),
+            0.0,
+            0.49
+        )
         self.bottom_band_preference_weight = max(
             0.0,
             self.get_parameter(
@@ -1130,6 +1578,10 @@ class RealLineTrackerNode(Node):
                 result=result
             )
             self.publish_line_lost(image_msg, 'convert_failed')
+            self.publish_empty_special_detections(
+                image_msg,
+                'convert_failed'
+            )
             self.publish_fallback_debug(
                 image_msg,
                 image,
@@ -1148,6 +1600,10 @@ class RealLineTrackerNode(Node):
                 result=result
             )
             self.publish_line_lost(image_msg, 'convert_failed')
+            self.publish_empty_special_detections(
+                image_msg,
+                'convert_failed'
+            )
             self.publish_fallback_debug(
                 image_msg,
                 image,
@@ -1197,6 +1653,10 @@ class RealLineTrackerNode(Node):
                 result=result
             )
             self.publish_line_lost(image_msg, 'opencv_failed')
+            self.publish_empty_special_detections(
+                image_msg,
+                'opencv_failed'
+            )
             self.publish_fallback_debug(
                 image_msg,
                 image,
@@ -1215,6 +1675,10 @@ class RealLineTrackerNode(Node):
                 result=result
             )
             self.publish_line_lost(image_msg, 'tracking_failed')
+            self.publish_empty_special_detections(
+                image_msg,
+                'tracking_failed'
+            )
             self.publish_fallback_debug(
                 image_msg,
                 image,
@@ -1223,6 +1687,18 @@ class RealLineTrackerNode(Node):
                 stage=stage
             )
             return
+
+        try:
+            self.publish_special_detections(image_msg, image, result)
+        except (cv2.error, ValueError, TypeError) as exc:
+            self.get_logger().error(
+                'Special target detection failed: '
+                f'{type(exc).__name__}: {exc}'
+            )
+            self.publish_empty_special_detections(
+                image_msg,
+                'special_detection_failed'
+            )
 
         debug_status = self.publish_debug_images(
             image_msg,
@@ -1248,6 +1724,110 @@ class RealLineTrackerNode(Node):
         msg = self.make_line_track_msg(image_msg, 0.0, 0.0, 0.0, False)
         self.publisher.publish(msg)
         self.log_debug_reason(reason)
+
+    def publish_special_detections(self, image_msg, image, line_result):
+        image_width = image.shape[1]
+        robot_center_x = self.robot_center_x(image_width)
+        detections = (
+            (
+                self.red_circle_publisher,
+                detect_red_circle(
+                    image,
+                    self.red_circle_min_area_ratio,
+                    self.red_circle_min_circularity
+                ),
+            ),
+            (
+                self.stop_zone_publisher,
+                detect_blue_stop_zone(
+                    image,
+                    robot_center_x,
+                    self.blue_h_min,
+                    self.blue_h_max,
+                    self.blue_s_min,
+                    self.blue_v_min,
+                    self.stop_zone_min_area_ratio,
+                    self.stop_zone_reference_y_ratio
+                ),
+            ),
+            (
+                self.white_bar_publisher,
+                detect_white_bar(
+                    image,
+                    self.white_bar_v_min,
+                    self.white_bar_s_max,
+                    self.white_bar_min_width_ratio,
+                    self.white_bar_max_height_ratio,
+                    self.white_bar_min_area_ratio
+                ),
+            ),
+            (
+                self.corner_candidate_publisher,
+                detect_corner_candidate(
+                    line_result,
+                    image_width,
+                    self.corner_min_heading_error,
+                    self.corner_edge_fraction
+                ),
+            ),
+        )
+        for publisher, result in detections:
+            publisher.publish(
+                self.make_special_detection_msg(image_msg, result)
+            )
+
+    def publish_empty_special_detections(self, image_msg, reason):
+        publishers = (
+            (self.red_circle_publisher, 'red_circle'),
+            (self.stop_zone_publisher, 'blue_stop_zone'),
+            (self.white_bar_publisher, 'white_bar'),
+            (self.corner_candidate_publisher, 'corner_candidate'),
+        )
+        for publisher, target_type in publishers:
+            result = SpecialDetectionResult(
+                target_type=target_type,
+                reason=reason
+            )
+            publisher.publish(
+                self.make_special_detection_msg(image_msg, result)
+            )
+
+    def make_special_detection_msg(self, image_msg, result):
+        msg = SpecialTargetDetection()
+        header = getattr(image_msg, 'header', None)
+        if header is not None:
+            msg.header.stamp = header.stamp
+            msg.header.frame_id = header.frame_id or self.frame_id
+        else:
+            msg.header.frame_id = self.frame_id
+        msg.target_type = str(result.target_type)
+        msg.visible = bool(result.visible)
+        msg.confidence = clamp(
+            self.safe_float(result.confidence),
+            0.0,
+            1.0
+        )
+        msg.center_x = clamp(self.safe_float(result.center_x), 0.0, 1.0)
+        msg.center_y = clamp(self.safe_float(result.center_y), 0.0, 1.0)
+        msg.area_ratio = clamp(
+            self.safe_float(result.area_ratio),
+            0.0,
+            1.0
+        )
+        msg.width_ratio = clamp(
+            self.safe_float(result.width_ratio),
+            0.0,
+            1.0
+        )
+        msg.height_ratio = clamp(
+            self.safe_float(result.height_ratio),
+            0.0,
+            1.0
+        )
+        msg.inside_candidate = bool(result.inside_candidate)
+        msg.direction_hint = str(result.direction_hint)
+        msg.reason = str(result.reason)
+        return msg
 
     def robot_center_x(self, image_width):
         image_center_x = float(image_width) / 2.0

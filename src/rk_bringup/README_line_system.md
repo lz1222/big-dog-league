@@ -11,10 +11,25 @@ RealSense D435i
 -> real_line_tracker_node
 -> /perception/line_track
 -> line_follower_node
+-> /navigation/line_follow_cmd_suggested
+-> line_course_mission_node
+-> /control/mission_cmd
+-> command_mux_node
 -> /navigation/cmd_vel
--> cmd_vel_udp_forwarder.py or cmd_vel_bridge_node
+-> cmd_vel_udp_forwarder.py
+-> Unitree SDK UDP server
 -> Go2 Sport Move()
 -> robot motion
+```
+
+`command_mux_node` also owns both `/safety/estop` interfaces in the real line
+stack:
+
+```text
+/safety/estop  std_srvs/srv/SetBool
+/safety/estop  std_msgs/msg/Bool
+-> shared mux estop transition
+-> /navigation/cmd_vel stays owned by command_mux_node and becomes zero
 ```
 
 The startup script launches the full chain, but it does not publish
@@ -75,7 +90,7 @@ Start all line-system nodes without starting motion:
 ~/rk_inspection_ws/src/rk_bringup/scripts/start_line_system.sh
 ```
 
-The startup script defaults to the verified SDK UDP bridge
+The startup script uses the verified SDK UDP bridge only
 and starts every process with `nohup` in the background. It does not use tmux,
 so closing the SSH terminal will not stop the nodes.
 
@@ -130,10 +145,11 @@ ros2 run rk_go2_sdk_bridge go2_sdk_motion_action eth0 economic_gait 1.0
 
 The available SDK actions are `stand_up`, `balance_stand`, `classic_walk`,
 `classic_walk_on`, `classic_walk_off`, `static_walk`, `trot_run`, `free_walk`,
-`economic_gait`, `front_jump`, `recovery_stand`, and `stop_move`. The Python
-`gait_control_node` still publishes `cmd_vel` for fixed actions; its
-body-height and recovery-stand adapters are placeholders until the Unitree
-posture APIs are wired there.
+`economic_gait`, `front_jump`, `recovery_stand`, and `stop_move`. Do not start
+standalone gait or direct-control tools with this line-course launch:
+`command_mux_node` must remain the only `/navigation/cmd_vel` publisher.
+Red-circle body actions invoke the existing `go2_sdk_motion_action` helper
+directly.
 
 VM/Humble development build note:
 
@@ -176,6 +192,32 @@ Emergency stop and kill all related processes:
 ```bash
 ~/rk_inspection_ws/src/rk_bringup/scripts/stop_line_system.sh
 ```
+
+The normal stop path checks and calls the mux-owned
+`/safety/estop` `std_srvs/srv/SetBool` service with `data: true`, requires
+`success=true`, and samples `/navigation/cmd_vel` until the mux output is zero.
+Only then does it publish `/mission/stop` and terminate the background
+processes. `command_mux_node` therefore remains the sole final velocity
+publisher throughout a normal stop.
+
+Both the SetBool service and Bool topic use the same mux transition. A real
+false-to-true or true-to-false transition clears all cached line, mission, and
+locomotion commands and timestamps. Clearing estop leaves the output at zero
+until a new command arrives. Repeating an unchanged true/false value does not
+clear a newly received cache again.
+
+If the service is absent, has the wrong type, or the call fails,
+`stop_line_system.sh` prints a prominent `EMERGENCY FALLBACK` warning and
+publishes one zero Twist directly to `/navigation/cmd_vel`. This is an
+emergency-only bypass of the normal single-publisher architecture. It must not
+be reported as a successful normal ownership check. If the service call
+succeeds but mux zero output cannot be observed, the script exits with an
+error and deliberately leaves the nodes running instead of silently using the
+fallback.
+
+The service/topic behavior has been exercised in an isolated VM/Humble ROS
+graph. It has not been validated on the robot/Foxy graph, and a zero ROS Twist
+does not prove that the UDP server, Unitree SDK, or physical robot has stopped.
 
 Open image debug view from a VNC graphical desktop terminal:
 
@@ -305,15 +347,20 @@ documented above.
 
 - `sdk_server`: existing Go2 SDK UDP server.
 - `cmd_vel_udp_forwarder`: `/navigation/cmd_vel` to SDK UDP.
+- `command_mux`: `/control/mission_cmd` to the unique final command output;
+  owns the SetBool service and Bool topic for `/safety/estop`.
 - `realsense_camera`: low-bandwidth color stream.
 - `real_line_tracker`: `/camera/color/image_raw` to `/perception/line_track`.
-- `line_follower`: `/perception/line_track` to `/navigation/cmd_vel`.
+- `line_follower`: line tracking to `/navigation/line_follow_cmd_suggested`.
+- `line_course_mission`: special-event decisions and `/control/mission_cmd`.
 
 Useful log commands:
 
 ```bash
 tail -f ~/rk_line_logs/real_line_tracker.log
 tail -f ~/rk_line_logs/line_follower.log
+tail -f ~/rk_line_logs/line_course_mission.log
+tail -f ~/rk_line_logs/command_mux.log
 tail -f ~/rk_line_logs/cmd_vel_udp_forwarder.log
 ```
 
@@ -323,7 +370,8 @@ tail -f ~/rk_line_logs/cmd_vel_udp_forwarder.log
 
 - Confirm `line_visible=true` in `~/rk_line_logs/real_line_tracker.log`.
 - Confirm `/mission/start` was sent manually with `mission_start.sh`.
-- Check `line_follower_node` logs in `~/rk_line_logs/line_follower.log`.
+- Check `line_follower.log`, `line_course_mission.log`, and `command_mux.log`.
+- Inspect `/control/cmd_mux_status` for the active source and timeout ages.
 
 `line_visible=false`:
 
@@ -334,10 +382,20 @@ tail -f ~/rk_line_logs/cmd_vel_udp_forwarder.log
 
 Bridge only receives zero velocity:
 
-- Confirm `/navigation/cmd_vel` is nonzero in the `cmd_vel` tmux window.
+- Confirm `/navigation/cmd_vel` is nonzero with `ros2 topic echo`.
 - Run `check_line_system.sh` and confirm `/navigation/cmd_vel` has exactly one
-  publisher, `line_follower_node`.
+  publisher, `command_mux_node`.
 - Confirm normal ROS nodes use `ROS_DOMAIN_ID=10`.
+
+`stop_line_system.sh` prints `EMERGENCY FALLBACK`:
+
+- The normal mux SetBool service was absent, had the wrong type, or did not
+  return success.
+- A one-shot zero Twist bypassed the normal sole-publisher path.
+- Save the full stop log and fix the service/launch problem before treating
+  the line stack as ready.
+- Do not treat the fallback, the service response, or a zero ROS sample as a
+  Unitree hardware stop acknowledgement.
 
 `rqt_image_view` cannot see overlay:
 

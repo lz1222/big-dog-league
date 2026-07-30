@@ -45,6 +45,7 @@ class RouteStage:
     line_follow_until_lost: bool = False
     line_follow_until_white_line: bool = False
     line_follow_require_visible: bool = True
+    line_follow_finish_centered: bool = False
     enabled: bool = True
 
 
@@ -81,7 +82,7 @@ class RouteStage:
 #    - START_LINE_FOLLOW_UNTIL_WHITE_MAX_SEC：
 #      起步后最多巡线多久等待长白线；检测到长白线会提前停巡线。
 #    - START_FORWARD_AFTER_WHITE_STEPS：
-#      检测到长白线后，先向前直走几步再跳。你这次要求为 2 步。
+#      检测到长白线后，先向前直走几步再跳。你这次要求为 1 步。
 #    - POST_JUMP_LINE_FOLLOW_SEC：
 #      跳完后继续巡线多久再切入避障区。你这次要求为 3 秒。
 #    - WHITE_LINE_*：
@@ -116,57 +117,179 @@ class RouteStage:
 #   Ctrl+C 后本节点会立刻连续发布 0 速度和 mission_stop，并尽量调用
 #   SDK stop_move。现场仍建议手放急停/遥控器，真机调试不要只依赖软件。
 
+# ------------------------- 距离和巡线时间参数 -------------------------
+# 写死路线里“一步”对应的距离，forward(8) 就是约 8 * 0.10 = 0.80m。
 FORWARD_STEP_LENGTH_M = 0.10
+
+# 巡线阶段如果按“步数”估算距离时使用的步长，目前主要保留给调试备用。
 LINE_FOLLOW_STEP_LENGTH_M = 0.10
+
+# 巡线速度估计值，只用于把 line_follow_steps 换算成持续时间。
 LINE_FOLLOW_ESTIMATED_SPEED_MPS = 0.30
+
+# 每次启动巡线前先停稳多久；太小容易带着上一段速度进入巡线。
 LINE_FOLLOW_START_SETTLE_SEC = 0.35
+
+# 每次停止巡线后再停稳多久；太小可能还没停住就进入下一个动作。
 LINE_FOLLOW_STOP_SETTLE_SEC = 0.25
+
+# 启停区最多巡线等待长白线的时间，超过后会继续执行后面的跳跃流程。
 START_LINE_FOLLOW_UNTIL_WHITE_MAX_SEC = 16.0
-START_FORWARD_AFTER_WHITE_STEPS = 3
+
+# 检测到长白线后向前直走几步再跳；你现在要求为 1 步。
+START_FORWARD_AFTER_WHITE_STEPS = 1
+
+# 跳完之后继续巡线多久，然后再进入“居中确认”。
 POST_JUMP_LINE_FOLLOW_SEC = 3.0
+
+# 开始巡线前最多等待黑线可见多久，超时会报错停住。
 LINE_VISIBLE_WAIT_TIMEOUT_SEC = 10.0
-LINE_LOST_SWITCH_SEC = 0.60
+
+# 等待长白线时，如果黑线连续丢失这么久，就认为到达白泡沫条。
+LINE_LOST_SWITCH_SEC = 0.45
+
+# /perception/line_track 消息超过这个时间没更新，就认为相机/识别卡住。
 LINE_TRACK_STALE_SEC = 0.80
+
+# 本路线节点认为“黑线可用”的最低置信度。
 ROUTE_LINE_MIN_CONFIDENCE = 0.35
+
+# 本路线节点允许的最大黑线横向偏差；超过说明不适合直接巡线。
 ROUTE_LINE_MAX_ABS_LATERAL_ERROR = 0.95
+
+# ------------------------- 白色泡沫条识别参数 -------------------------
+# 是否启用长白线/白泡沫条识别。
 WHITE_LINE_DETECTION_ENABLED = True
+
+# 用哪个彩色图像话题识别白泡沫条。
 WHITE_LINE_IMAGE_TOPIC = '/camera/color/image_raw'
+
+# 白泡沫条识别的 ROI 上边界，0.25 表示从画面 25% 高度以下开始看。
 WHITE_LINE_ROI_TOP_FRACTION = 0.25
+
+# 白泡沫条识别的 ROI 下边界，0.98 表示看到接近画面底部。
 WHITE_LINE_ROI_BOTTOM_FRACTION = 0.98
+
+# 白泡沫条识别时左右两边裁掉的比例，避免边缘杂物干扰。
 WHITE_LINE_ROI_SIDE_MARGIN_FRACTION = 0.02
+
+# 颜色法要求白色候选横向至少占 ROI 宽度多少。
 WHITE_LINE_MIN_WIDTH_FRACTION = 0.22
+
+# 颜色法要求白色候选高度至少占 ROI 高度多少。
 WHITE_LINE_MIN_HEIGHT_FRACTION = 0.010
+
+# 颜色法允许白色候选最大高度，太高通常是整块白地板误识别。
 WHITE_LINE_MAX_HEIGHT_FRACTION = 0.45
+
+# 颜色法要求白色候选是横条形，宽高比越大越像长白线。
 WHITE_LINE_MIN_ASPECT_RATIO = 2.0
+
+# HSV 里 V 亮度阈值，越低越容易把灰白地板也识别成白线。
 WHITE_LINE_MIN_VALUE = 160
+
+# HSV 里 S 饱和度阈值，越高越容易把有颜色的区域也当白线。
 WHITE_LINE_MAX_SATURATION = 130
+
+# 是否启用泡沫条“凸起横向边缘”检测，白地白条时这个比颜色更可靠。
+WHITE_LINE_EDGE_DETECTION_ENABLED = True
+
+# 边缘法要求某一行的横向边缘像素至少占 ROI 宽度多少。
+WHITE_LINE_EDGE_MIN_ROW_FRACTION = 0.32
+
+# 边缘法的最小梯度强度，越低越灵敏但更容易受反光/纹理影响。
+WHITE_LINE_EDGE_MIN_GRADIENT = 14.0
+
+# 边缘法认为泡沫条上下两条边之间的最小距离比例。
+WHITE_LINE_EDGE_MIN_GAP_FRACTION = 0.012
+
+# 边缘法认为泡沫条上下两条边之间的最大距离比例。
+WHITE_LINE_EDGE_MAX_GAP_FRACTION = 0.20
+
+# 只有黑线置信度低于这个值，白泡沫候选才会被接受，防止白地板误触发。
+WHITE_LINE_MAX_LINE_CONFIDENCE = 0.65
+
+# 白泡沫候选需要连续稳定多久才算真的看到了。
 WHITE_LINE_STABLE_SEC = 0.08
+
+# 图像超过多久没有更新，就不再相信上一帧白泡沫检测结果。
 WHITE_LINE_STALE_SEC = 1.00
+
+# ------------------------- 进入避障区前居中确认参数 -------------------------
+# 跳后巡线结束后，最多继续居中确认多久；超时会停住报错，不盲进避障。
+CENTER_BEFORE_OBSTACLE_TIMEOUT_SEC = 8.0
+
+# 黑线居中状态需要连续稳定多久，才允许切入避障区。
+CENTER_BEFORE_OBSTACLE_STABLE_SEC = 0.60
+
+# 进入避障区前要求黑线最低置信度，越高越保守。
+CENTER_BEFORE_OBSTACLE_MIN_CONFIDENCE = 0.55
+
+# 进入避障区前允许的最大横向偏差，越小越要求站在黑线正中间。
+CENTER_BEFORE_OBSTACLE_MAX_LATERAL_ERROR = 0.10
+
+# 进入避障区前允许的最大方向偏差，越小越要求身体朝向和线一致。
+CENTER_BEFORE_OBSTACLE_MAX_HEADING_ERROR = 0.22
+
+# ------------------------- 避障区和普通直走参数 -------------------------
+# 切换续航步态后等待多久再开始避障动作。
 ECONOMIC_GAIT_WAIT_SEC = 0.30
+
+# 写死直走动作默认前进速度。
 DEFAULT_FORWARD_SPEED_MPS = 0.35
+
+# 写死转弯动作默认角速度。
 DEFAULT_TURN_SPEED_RADPS = 0.80
 # 避障区转弯时也要给前进速度，避免原地扭腿。
 # 你的 Go2 实测 0.27m/s 以下基本不往前走，所以这里默认用 0.27。
 # 如果转弯半径太大容易撞墙，先降到 0.27；如果还是像原地转，升到 0.35。
 DEFAULT_TURN_FORWARD_SPEED_MPS = 0.27
+
+# 长白线后直走一小步再跳时使用的前进速度。
 START_FORWARD_SPEED_MPS = 0.35
+
+# 备用开关：目前不使用直接起步直走，保持 False。
 USE_DIRECT_START_FORWARD = False
 
+# ------------------------- Unitree SDK 动作参数 -------------------------
+# Go2 SDK2 使用的网卡名；你的真机是 eth0。
 SDK_NETWORK_INTERFACE = 'eth0'
+
+# SDK 动作小工具路径。空字符串表示自动查找 install 里的 go2_sdk_motion_action。
 SDK_ACTION_EXECUTABLE = ''
+
+# SDK 动作等待超时时间会在动作等待时间基础上额外加这一段。
 SDK_ACTION_TIMEOUT_PADDING_SEC = 6.0
+
 # 普通 SDK 动作前先发一小段 0 速度，避免 UDP Move 还在持续上一次速度。
 SDK_ACTION_PRE_STOP_SEC = 0.25
+
 # 前跳对状态要求更严格：必须完全停住、站稳后再调用 FrontJump。
 # Unitree SDK 的 FrontJump 不暴露“慢速蹲下”参数，这里用更长停稳时间保护关节。
 FRONT_JUMP_CMD_STOP_SEC = 2.00
+
+# 前跳前先 balance_stand 等待多久。
 FRONT_JUMP_PRE_BALANCE_WAIT_SEC = 0.80
+
+# FrontJump 动作发出后等待多久。
 FRONT_JUMP_ACTION_WAIT_SEC = 2.00
+
+# 前跳完成后 recovery_stand 等待多久。
 FRONT_JUMP_RECOVERY_WAIT_SEC = 1.00
+
+# Ctrl+C 或异常时持续发送停止命令的时间。
 EMERGENCY_STOP_SEC = 1.20
+
+# 如果 SDK 动作小工具不存在，是否允许跳过跳跃/站立动作。比赛必须保持 False。
 RUN_WITHOUT_SDK_ACTIONS = False
+
+# 是否允许退回 ROS topic 调 Sport API。你这台容易 typesupport 冲突，保持 False。
 ALLOW_ROS_TOPIC_SDK_ACTIONS = False
+
+# ROS topic 方式调用 Sport API 时的话题名，默认不用改。
 SPORT_REQUEST_TOPIC = '/api/sport/request'
+
+# Unitree Sport API 的动作编号，一般不要改。
 SDK_ACTION_API_IDS = {
     'stand_up': 1004,
     'balance_stand': 1002,
@@ -175,6 +298,8 @@ SDK_ACTION_API_IDS = {
     'economic_gait': 1063,
     'front_jump': 1031,
 }
+
+# SDK 动作小工具运行时需要的动态库路径，一般不要改。
 SDK_LD_LIBRARY_PATH_PREFIX = (
     '/home/unitree/rk_inspection_ws/third_party/unitree_sdk2_official/'
     'thirdparty/lib/aarch64',
@@ -185,18 +310,32 @@ SDK_LD_LIBRARY_PATH_PREFIX = (
     '/home/unitree/cyclonedds_ws/install/cyclonedds/lib',
 )
 
+# ------------------------- 整体流程开关 -------------------------
+# 是否启用启停区到避障区的完整起步流程。
 ENABLE_START_SEQUENCE = True
+
+# 是否从趴下状态恢复站立；现在你说开始不用蹲下，所以保持 False。
 START_FROM_PRONE = False
+
+# 是否执行前跳动作；调试纯巡线/纯避障时可以临时改 False。
 ENABLE_FRONT_JUMP = True
+
+# 是否执行避障区写死路线。
 ENABLE_OBSTACLE_ROUTE = True
 
+# ------------------------- ROS 话题名 -------------------------
+# 给巡线节点发开始巡线的 topic。
 MISSION_START_TOPIC = '/mission/start'
+
+# 给巡线节点发停止巡线的 topic。
 MISSION_STOP_TOPIC = '/mission/stop'
+
+# 黑线识别结果 topic。
 LINE_TRACK_TOPIC = '/perception/line_track'
 
 
 def forward(steps, speed_mps=DEFAULT_FORWARD_SPEED_MPS):
-    """避障区：直走多少步。"""
+    """避障区：直走多少步."""
     return {
         'type': 'forward',
         'steps': int(steps),
@@ -206,7 +345,7 @@ def forward(steps, speed_mps=DEFAULT_FORWARD_SPEED_MPS):
 
 def left(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
          wz_radps=DEFAULT_TURN_SPEED_RADPS):
-    """避障区：边走边左转多少度。"""
+    """避障区：边走边左转多少度."""
     return {
         'type': 'turn',
         'direction': 'left',
@@ -218,7 +357,7 @@ def left(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
 
 def right(degrees, vx_mps=DEFAULT_TURN_FORWARD_SPEED_MPS,
           wz_radps=DEFAULT_TURN_SPEED_RADPS):
-    """避障区：边走边右转多少度。"""
+    """避障区：边走边右转多少度."""
     return {
         'type': 'turn',
         'direction': 'right',
@@ -320,7 +459,7 @@ ROUTE_STAGES = [
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         enabled=ENABLE_START_SEQUENCE and ENABLE_FRONT_JUMP,
     ),
-    # 第0-3阶段：检测到长白线后，再向前走两步，然后接前跳。
+    # 第0-3阶段：检测到长白线后，再向前走一步，然后接前跳。
     RouteStage(
         name='forward_after_white_line',
         description=(
@@ -359,10 +498,14 @@ ROUTE_STAGES = [
     # 这里允许一开始没看见线：巡线节点会自己进入找线状态，找到线后继续跟线。
     RouteStage(
         name='line_follow_after_jump',
-        description=f'第0-7阶段：跳后继续巡线 {POST_JUMP_LINE_FOLLOW_SEC:.1f} 秒',
+        description=(
+            f'第0-7阶段：跳后继续巡线 {POST_JUMP_LINE_FOLLOW_SEC:.1f} 秒，'
+            '然后确认位于黑线中间'
+        ),
         line_follow_duration_sec=POST_JUMP_LINE_FOLLOW_SEC,
         line_follow_speed_mps=LINE_FOLLOW_ESTIMATED_SPEED_MPS,
         line_follow_require_visible=False,
+        line_follow_finish_centered=True,
         enabled=ENABLE_START_SEQUENCE,
     ),
 
@@ -461,6 +604,30 @@ class ObstacleDirectRouteNode(Node):
             'white_line_max_saturation',
             WHITE_LINE_MAX_SATURATION
         ).value)
+        self.white_line_edge_detection_enabled = bool(self.declare_parameter(
+            'white_line_edge_detection_enabled',
+            WHITE_LINE_EDGE_DETECTION_ENABLED
+        ).value)
+        self.white_line_edge_min_row_fraction = float(self.declare_parameter(
+            'white_line_edge_min_row_fraction',
+            WHITE_LINE_EDGE_MIN_ROW_FRACTION
+        ).value)
+        self.white_line_edge_min_gradient = float(self.declare_parameter(
+            'white_line_edge_min_gradient',
+            WHITE_LINE_EDGE_MIN_GRADIENT
+        ).value)
+        self.white_line_edge_min_gap_fraction = float(self.declare_parameter(
+            'white_line_edge_min_gap_fraction',
+            WHITE_LINE_EDGE_MIN_GAP_FRACTION
+        ).value)
+        self.white_line_edge_max_gap_fraction = float(self.declare_parameter(
+            'white_line_edge_max_gap_fraction',
+            WHITE_LINE_EDGE_MAX_GAP_FRACTION
+        ).value)
+        self.white_line_max_line_confidence = float(self.declare_parameter(
+            'white_line_max_line_confidence',
+            WHITE_LINE_MAX_LINE_CONFIDENCE
+        ).value)
         self.white_line_stable_sec = float(self.declare_parameter(
             'white_line_stable_sec',
             WHITE_LINE_STABLE_SEC
@@ -469,6 +636,34 @@ class ObstacleDirectRouteNode(Node):
             'white_line_stale_sec',
             WHITE_LINE_STALE_SEC
         ).value)
+        self.center_before_obstacle_timeout_sec = float(
+            self.declare_parameter(
+                'center_before_obstacle_timeout_sec',
+                CENTER_BEFORE_OBSTACLE_TIMEOUT_SEC
+            ).value
+        )
+        self.center_before_obstacle_stable_sec = float(self.declare_parameter(
+            'center_before_obstacle_stable_sec',
+            CENTER_BEFORE_OBSTACLE_STABLE_SEC
+        ).value)
+        self.center_before_obstacle_min_confidence = float(
+            self.declare_parameter(
+                'center_before_obstacle_min_confidence',
+                CENTER_BEFORE_OBSTACLE_MIN_CONFIDENCE
+            ).value
+        )
+        self.center_before_obstacle_max_lateral_error = float(
+            self.declare_parameter(
+                'center_before_obstacle_max_lateral_error',
+                CENTER_BEFORE_OBSTACLE_MAX_LATERAL_ERROR
+            ).value
+        )
+        self.center_before_obstacle_max_heading_error = float(
+            self.declare_parameter(
+                'center_before_obstacle_max_heading_error',
+                CENTER_BEFORE_OBSTACLE_MAX_HEADING_ERROR
+            ).value
+        )
         self.line_visible_wait_timeout_sec = float(self.declare_parameter(
             'line_visible_wait_timeout_sec',
             LINE_VISIBLE_WAIT_TIMEOUT_SEC
@@ -642,8 +837,36 @@ class ObstacleDirectRouteNode(Node):
                 self.white_line_max_height_fraction
             ),
             'white_line_min_aspect_ratio': self.white_line_min_aspect_ratio,
+            'white_line_edge_min_row_fraction': (
+                self.white_line_edge_min_row_fraction
+            ),
+            'white_line_edge_min_gradient': self.white_line_edge_min_gradient,
+            'white_line_edge_min_gap_fraction': (
+                self.white_line_edge_min_gap_fraction
+            ),
+            'white_line_edge_max_gap_fraction': (
+                self.white_line_edge_max_gap_fraction
+            ),
+            'white_line_max_line_confidence': (
+                self.white_line_max_line_confidence
+            ),
             'white_line_stable_sec': self.white_line_stable_sec,
             'white_line_stale_sec': self.white_line_stale_sec,
+            'center_before_obstacle_timeout_sec': (
+                self.center_before_obstacle_timeout_sec
+            ),
+            'center_before_obstacle_stable_sec': (
+                self.center_before_obstacle_stable_sec
+            ),
+            'center_before_obstacle_min_confidence': (
+                self.center_before_obstacle_min_confidence
+            ),
+            'center_before_obstacle_max_lateral_error': (
+                self.center_before_obstacle_max_lateral_error
+            ),
+            'center_before_obstacle_max_heading_error': (
+                self.center_before_obstacle_max_heading_error
+            ),
         }
         for name, value in nonnegative.items():
             if not math.isfinite(value) or value < 0.0:
@@ -663,6 +886,25 @@ class ObstacleDirectRouteNode(Node):
             raise ValueError(
                 'white_line_min_height_fraction must be <= '
                 'white_line_max_height_fraction'
+            )
+        if self.white_line_edge_min_gap_fraction > (
+            self.white_line_edge_max_gap_fraction
+        ):
+            raise ValueError(
+                'white_line_edge_min_gap_fraction must be <= '
+                'white_line_edge_max_gap_fraction'
+            )
+        if not 0.0 <= self.white_line_edge_min_row_fraction <= 1.0:
+            raise ValueError(
+                'white_line_edge_min_row_fraction must be in [0.0, 1.0]'
+            )
+        if not 0.0 <= self.white_line_max_line_confidence <= 1.0:
+            raise ValueError(
+                'white_line_max_line_confidence must be in [0.0, 1.0]'
+            )
+        if not 0.0 <= self.center_before_obstacle_min_confidence <= 1.0:
+            raise ValueError(
+                'center_before_obstacle_min_confidence must be in [0.0, 1.0]'
             )
 
         if not self.sdk_network_interface:
@@ -769,6 +1011,11 @@ class ObstacleDirectRouteNode(Node):
             if has_line_follow and (has_forward or has_turn):
                 raise ValueError(
                     f'{stage.name} line_follow stages cannot also move/turn'
+                )
+            if stage.line_follow_finish_centered and not has_line_follow:
+                raise ValueError(
+                    f'{stage.name} line_follow_finish_centered requires a '
+                    'line_follow stage'
                 )
 
             if (
@@ -1036,6 +1283,110 @@ class ObstacleDirectRouteNode(Node):
                 f'accepted:{best_detail},roi=({x0},{y0})-({x1},{y1})'
             )
 
+        edge_detected, edge_score, edge_detail = (
+            self._detect_raised_white_strip_edges(roi)
+        )
+        if edge_detected:
+            return True, edge_score, (
+                f'edge_accepted:{edge_detail},roi=({x0},{y0})-({x1},{y1})'
+            )
+
+        return False, max(best_score, edge_score), (
+            f'{best_detail};edge={edge_detail}'
+        )
+
+    def _detect_raised_white_strip_edges(self, roi_bgr):
+        if not self.white_line_edge_detection_enabled:
+            return False, 0.0, 'edge_disabled'
+
+        roi_h, roi_w = roi_bgr.shape[:2]
+        if roi_h < 12 or roi_w < 20:
+            return False, 0.0, 'edge_roi_too_small'
+
+        hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
+        saturation = hsv[:, :, 1]
+        value = hsv[:, :, 2]
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        gradient_y = cv2.Sobel(gray, cv2.CV_16S, 0, 1, ksize=3)
+        gradient_y = cv2.convertScaleAbs(gradient_y)
+        adaptive_threshold = float(np.percentile(gradient_y, 92))
+        threshold = max(
+            float(self.white_line_edge_min_gradient),
+            adaptive_threshold
+        )
+        edge_mask = gradient_y >= threshold
+
+        bright_mask = (
+            (value >= max(0, self.white_line_min_value - 25))
+            & (saturation <= min(255, self.white_line_max_saturation + 45))
+        )
+        edge_mask = edge_mask & bright_mask
+
+        row_scores = edge_mask.mean(axis=1).astype(np.float32)
+        if row_scores.size < 5:
+            return False, 0.0, 'edge_no_rows'
+
+        row_scores = cv2.blur(row_scores.reshape(-1, 1), (1, 5)).ravel()
+        candidate_rows = np.flatnonzero(
+            row_scores >= self.white_line_edge_min_row_fraction
+        )
+        if candidate_rows.size == 0:
+            return False, float(row_scores.max(initial=0.0)), 'edge_no_row'
+
+        clusters = []
+        cluster_start = int(candidate_rows[0])
+        previous = int(candidate_rows[0])
+        for row in candidate_rows[1:]:
+            row = int(row)
+            if row == previous + 1:
+                previous = row
+                continue
+            clusters.append((cluster_start, previous))
+            cluster_start = row
+            previous = row
+        clusters.append((cluster_start, previous))
+
+        centers = [
+            (start + end) // 2
+            for start, end in clusters
+            if end >= start
+        ]
+        best_score = 0.0
+        best_detail = f'edge_clusters={len(centers)}'
+
+        min_gap = self.white_line_edge_min_gap_fraction
+        max_gap = self.white_line_edge_max_gap_fraction
+        for first_index, top in enumerate(centers):
+            for bottom in centers[first_index + 1:]:
+                gap_fraction = float(bottom - top) / float(max(1, roi_h))
+                if gap_fraction < min_gap or gap_fraction > max_gap:
+                    continue
+
+                y0 = max(0, min(top, bottom))
+                y1 = min(roi_h, max(top, bottom) + 1)
+                band_bright_fraction = float(bright_mask[y0:y1, :].mean())
+                edge_width_fraction = min(
+                    float(row_scores[top]),
+                    float(row_scores[bottom])
+                )
+                score = edge_width_fraction * min(1.0, band_bright_fraction)
+                detail = (
+                    f'edge_pair=({top},{bottom}),gap={gap_fraction:.3f},'
+                    f'edge_w={edge_width_fraction:.2f},'
+                    f'bright={band_bright_fraction:.2f}'
+                )
+                if score > best_score:
+                    best_score = score
+                    best_detail = detail
+
+                if (
+                    edge_width_fraction >= self.white_line_edge_min_row_fraction
+                    and band_bright_fraction >= 0.65
+                ):
+                    return True, score, detail
+
         return False, best_score, best_detail
 
     def _white_line_is_visible_now(self):
@@ -1084,6 +1435,46 @@ class ObstacleDirectRouteNode(Node):
 
         return True, 'line_visible'
 
+    def _line_is_centered_now(self):
+        now = time.monotonic()
+        if self._last_line_track_msg is None:
+            return False, 'center_no_line_track'
+
+        age = now - float(self._last_line_track_time or now)
+        if age > self.line_track_stale_sec:
+            return False, f'center_line_track_stale_{age:.2f}s'
+
+        msg = self._last_line_track_msg
+        if not bool(msg.line_visible):
+            return False, 'center_line_visible_false'
+
+        confidence = float(msg.confidence)
+        if confidence < self.center_before_obstacle_min_confidence:
+            return False, (
+                f'center_confidence_low_{confidence:.2f}<'
+                f'{self.center_before_obstacle_min_confidence:.2f}'
+            )
+
+        lateral_error = abs(float(msg.lateral_error))
+        if lateral_error > self.center_before_obstacle_max_lateral_error:
+            return False, (
+                f'center_lateral_large_{lateral_error:.3f}>'
+                f'{self.center_before_obstacle_max_lateral_error:.3f}'
+            )
+
+        heading_error = abs(float(msg.heading_error))
+        if heading_error > self.center_before_obstacle_max_heading_error:
+            return False, (
+                f'center_heading_large_{heading_error:.3f}>'
+                f'{self.center_before_obstacle_max_heading_error:.3f}'
+            )
+
+        return True, (
+            f'center_ok confidence={confidence:.2f}, '
+            f'lateral={float(msg.lateral_error):.3f}, '
+            f'heading={float(msg.heading_error):.3f}, age={age:.2f}s'
+        )
+
     def _run_line_follow(self, index, total, stage):
         duration_sec = self._line_follow_duration_sec(stage)
         distance_m = self._line_follow_distance_m(stage)
@@ -1130,6 +1521,8 @@ class ObstacleDirectRouteNode(Node):
             LINE_FOLLOW_START_SETTLE_SEC
         )
         self._wait_for_duration(duration_sec)
+        if stage.line_follow_finish_centered:
+            self._wait_for_centered_line_before_obstacle(stage.name)
         self._publish_mission_command(
             self.mission_stop_publisher,
             True,
@@ -1188,15 +1581,32 @@ class ObstacleDirectRouteNode(Node):
                 )
                 break
 
+            visible, line_reason = self._line_is_visible_now()
+            msg = self._last_line_track_msg
+            line_confidence = float(msg.confidence) if msg is not None else 0.0
+            line_weak_for_white = (
+                not visible
+                or line_confidence <= self.white_line_max_line_confidence
+            )
+
             white_visible, white_reason = self._white_line_is_visible_now()
-            if white_visible:
+            if white_visible and line_weak_for_white:
                 stop_reason = 'white_line_detected'
                 self.get_logger().warn(
-                    f'{stage.name}: long white line detected: {white_reason}'
+                    f'{stage.name}: long white foam line detected: '
+                    f'{white_reason}; line_confidence={line_confidence:.2f}, '
+                    f'line_reason={line_reason}'
                 )
                 break
+            if white_visible and not line_weak_for_white:
+                if now - last_report_time >= 1.0:
+                    self.get_logger().info(
+                        f'{stage.name}: ignore white candidate while black '
+                        f'line is still strong, '
+                        f'confidence={line_confidence:.2f}, {white_reason}'
+                    )
+                    last_report_time = now
 
-            visible, line_reason = self._line_is_visible_now()
             if visible:
                 lost_since = None
             else:
@@ -1407,6 +1817,65 @@ class ObstacleDirectRouteNode(Node):
                         f'last_visible={self._last_line_track_msg.line_visible}, '
                         f'confidence={self._last_line_track_msg.confidence:.3f}'
                     )
+                last_report_time = now
+
+            rclpy.spin_once(self, timeout_sec=0.0)
+            time.sleep(0.05)
+
+    def _wait_for_centered_line_before_obstacle(self, stage_name):
+        timeout_sec = self.center_before_obstacle_timeout_sec
+        stable_sec = self.center_before_obstacle_stable_sec
+        start_time = time.monotonic()
+        centered_since = None
+        last_report_time = 0.0
+
+        self.get_logger().warn(
+            f'{stage_name}: timed line-follow finished; keep line follower '
+            'running until robot is centered on black line before obstacle, '
+            f'timeout={timeout_sec:.2f}s, stable={stable_sec:.2f}s, '
+            f'max_lateral={self.center_before_obstacle_max_lateral_error:.3f}, '
+            f'max_heading={self.center_before_obstacle_max_heading_error:.3f}'
+        )
+
+        while rclpy.ok():
+            self._raise_if_stop_requested()
+            now = time.monotonic()
+            centered, reason = self._line_is_centered_now()
+
+            if centered:
+                if centered_since is None:
+                    centered_since = now
+                    self.get_logger().info(
+                        f'{stage_name}: center candidate started: {reason}'
+                    )
+                stable_for = now - centered_since
+                if stable_for >= stable_sec:
+                    self.get_logger().warn(
+                        f'{stage_name}: centered and stable for '
+                        f'{stable_for:.2f}s; switch to obstacle route. '
+                        f'{reason}'
+                    )
+                    return
+            else:
+                if centered_since is not None:
+                    self.get_logger().info(
+                        f'{stage_name}: center candidate reset: {reason}'
+                    )
+                centered_since = None
+
+            elapsed = now - start_time
+            if timeout_sec > 0.0 and elapsed >= timeout_sec:
+                raise RuntimeError(
+                    f'{stage_name}: cannot enter obstacle route because robot '
+                    f'is not centered on black line after {timeout_sec:.2f}s; '
+                    f'last_reason={reason}'
+                )
+
+            if now - last_report_time >= 1.0:
+                self.get_logger().info(
+                    f'{stage_name}: centering before obstacle, '
+                    f'elapsed={elapsed:.2f}s, {reason}'
+                )
                 last_report_time = now
 
             rclpy.spin_once(self, timeout_sec=0.0)
