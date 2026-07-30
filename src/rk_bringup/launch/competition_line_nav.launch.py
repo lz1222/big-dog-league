@@ -261,6 +261,13 @@ def generate_launch_description():
         ),
         Node(
             package='rk_mission',
+            executable='white_bar_stage_command_publisher',
+            name='white_bar_stage_command_publisher',
+            output='screen',
+            parameters=[line_nav_config],
+        ),
+        Node(
+            package='rk_mission',
             executable='white_bar_action_executor',
             name='white_bar_action_executor',
             output='screen',
