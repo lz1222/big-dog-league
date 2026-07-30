@@ -1,7 +1,7 @@
 <package format="3">
   <name>rk_go2_sdk_bridge</name>
   <version>0.0.1</version>
-  <description>Unitree Go2 SDK2 direct tools and optional cmd_vel UDP forwarder.</description>
+  <description>Unitree Go2 SDK2 direct tools and deterministic UDP motion bridge.</description>
   <maintainer email="2605128876@qq.com">ZhenLi</maintainer>
   <license>MIT</license>
 
