@@ -6,6 +6,7 @@ import os
 import subprocess
 import threading
 import time
+import uuid
 
 import rclpy
 from geometry_msgs.msg import Twist
@@ -27,7 +28,7 @@ from rk_mission.sign_action_executor_node import (
     DEFAULT_SDK_ACTION_EXECUTABLE,
     SDK_LD_LIBRARY_PATH_PREFIX,
 )
-from rk_mission.white_bar_action_core import WhiteBarActionRequestGate
+from rk_mission.white_bar_stage_core import WhiteBarStageController
 
 
 STAGES = [
@@ -843,9 +844,8 @@ class LineCourseMissionNode(Node):
         self.corner_seen_count = 0
         self.reacquire_seen_count = 0
         self.red_handled = False
-        self.white_bar_handled = False
-        self.white_bar_action_gate = WhiteBarActionRequestGate(
-            self.white_bar_motion_name
+        self.white_bar_stage_controller = WhiteBarStageController(
+            self.allow_finish_only_test
         )
         self.white_bar_action_request_time = None
         self.last_corner_finish_time = -1.0e9
@@ -866,6 +866,11 @@ class LineCourseMissionNode(Node):
         self.white_bar_action_request_publisher = self.create_publisher(
             String,
             self.white_bar_action_request_topic,
+            10
+        )
+        self.white_bar_stage_status_publisher = self.create_publisher(
+            String,
+            self.white_bar_stage_status_topic,
             10
         )
         self.create_subscription(
@@ -922,6 +927,12 @@ class LineCourseMissionNode(Node):
             self._on_white_bar_action_done,
             10
         )
+        self.create_subscription(
+            String,
+            self.white_bar_stage_command_topic,
+            self._on_white_bar_stage_command,
+            10
+        )
         self.control_timer = self.create_timer(
             1.0 / max(1.0, self.control_rate_hz),
             self._on_line_course_timer
@@ -930,6 +941,16 @@ class LineCourseMissionNode(Node):
             'Line course mission ready: mission_cmd='
             f'{self.cmd_vel_topic}, suggested_cmd={self.suggested_cmd_topic}, '
             f'sdk_action={self.red_circle_sdk_action or "disabled"}'
+        )
+        if self.white_bar_motion_name:
+            self.get_logger().warn(
+                'white_bar_motion_name is deprecated; explicit stage command '
+                'is required'
+            )
+        self._publish_white_bar_stage_status(
+            self.white_bar_stage_controller.status_event(
+                'white_bar_stage_controller_ready'
+            )
         )
 
     def _declare_line_course_parameters(self):
@@ -948,6 +969,10 @@ class LineCourseMissionNode(Node):
                 '/mission/white_bar_action_request'
             ),
             'white_bar_action_done_topic': '/mission/white_bar_action_done',
+            'white_bar_stage_command_topic': (
+                '/mission/white_bar_stage_command'
+            ),
+            'white_bar_stage_status_topic': '/mission/white_bar_stage_status',
         }
         for name, value in topics.items():
             self.declare_parameter(name, value)
@@ -988,6 +1013,7 @@ class LineCourseMissionNode(Node):
             'white_bar_stop_y_ratio': 0.70,
             'white_bar_action_timeout_sec': 5.0,
             'white_bar_motion_name': '',
+            'allow_finish_only_test': False,
             'stop_zone_confirm_frames': 3,
             'stop_zone_min_confidence': 0.55,
             'stop_zone_approach_speed': 0.04,
@@ -1014,6 +1040,8 @@ class LineCourseMissionNode(Node):
             'mission_stop_topic',
             'white_bar_action_request_topic',
             'white_bar_action_done_topic',
+            'white_bar_stage_command_topic',
+            'white_bar_stage_status_topic',
             'white_bar_motion_name',
             'corner_turn_direction',
             'red_circle_sdk_action',
@@ -1024,7 +1052,7 @@ class LineCourseMissionNode(Node):
         for name in topic_names:
             setattr(self, name, str(self.get_parameter(name).value).strip())
 
-        bool_names = ('enable_corner_pre_turn',)
+        bool_names = ('enable_corner_pre_turn', 'allow_finish_only_test')
         for name in bool_names:
             setattr(self, name, bool(self.get_parameter(name).value))
 
@@ -1156,9 +1184,12 @@ class LineCourseMissionNode(Node):
         self._terminate_red_action()
         self.mission_started = True
         self.red_handled = False
-        self.white_bar_handled = False
-        self._reset_white_bar_action_state()
+        stage_event = self.white_bar_stage_controller.start_run(
+            self._new_white_bar_run_id()
+        )
+        self.white_bar_action_request_time = None
         self._reset_detection_counts()
+        self._publish_white_bar_stage_status(stage_event)
         self._set_line_course_state('LINE_FOLLOW', 'mission_start')
 
     def _on_line_course_stop(self, msg):
@@ -1166,9 +1197,19 @@ class LineCourseMissionNode(Node):
             return
         self.mission_started = False
         self._terminate_red_action()
-        self._reset_white_bar_action_state()
+        stage_event = self.white_bar_stage_controller.mission_stop()
+        self.white_bar_action_request_time = None
+        self._publish_white_bar_stage_status(stage_event)
         self._set_line_course_state('WAIT_START', 'mission_stop')
         self._publish_final_cmd(Twist())
+
+    def _on_white_bar_stage_command(self, msg):
+        stage_event = self.white_bar_stage_controller.apply_json_command(
+            msg.data
+        )
+        if stage_event.accepted and stage_event.action == 'ARMED':
+            self.white_seen_count = 0
+        self._publish_white_bar_stage_status(stage_event)
 
     def _on_white_bar_action_done(self, msg):
         if not msg.data:
@@ -1178,10 +1219,28 @@ class LineCourseMissionNode(Node):
                 'Ignored white-bar done outside HANDLE_WHITE_BAR'
             )
             return
-        if not self.white_bar_action_gate.accept_done(msg.data):
-            self.get_logger().warn(
-                'Ignored white-bar done before a current action request'
+        if (
+            self.white_bar_stage_controller.state not in (
+                'START_RUNNING',
+                'FINISH_RUNNING',
             )
+            or not self.white_bar_stage_controller.request_sent
+        ):
+            self.get_logger().warn(
+                'Ignored white-bar done before a current stage action request'
+            )
+            return
+        stage_event = self.white_bar_stage_controller.complete_action(msg.data)
+        if not stage_event.accepted:
+            self.get_logger().warn(
+                f'Ignored white-bar done: {stage_event.reason}'
+            )
+            return
+        self.white_bar_action_request_time = None
+        self.white_seen_count = 0
+        self._publish_white_bar_stage_status(stage_event)
+        self._set_line_course_state('REACQUIRE_LINE', 'white_bar_action_done')
+        self._publish_final_cmd(Twist())
 
     def _on_line_course_timer(self):
         now = time.monotonic()
@@ -1242,7 +1301,7 @@ class LineCourseMissionNode(Node):
             self._publish_final_cmd(Twist())
             return
         if (
-            not self.white_bar_handled
+            self.white_bar_stage_controller.may_monitor_white_bar()
             and self._is_fresh(self.latest_white_bar_time, now)
             and self.white_seen_count >= self.white_bar_confirm_frames
         ):
@@ -1417,21 +1476,17 @@ class LineCourseMissionNode(Node):
         self._publish_final_cmd(cmd)
 
     def _control_white_bar(self, now):
-        if self.white_bar_action_gate.action_done:
-            self.white_bar_handled = True
-            self.white_seen_count = 0
-            self._set_line_course_state(
-                'REACQUIRE_LINE',
-                'white_bar_action_done'
-            )
-            return
-        if self.white_bar_action_gate.request_sent:
+        if self.white_bar_stage_controller.request_sent:
             self._publish_final_cmd(Twist())
             if (
                 self.white_bar_action_request_time is not None
                 and now - self.white_bar_action_request_time
                 >= self.white_bar_action_timeout_sec
             ):
+                stage_event = self.white_bar_stage_controller.action_fault(
+                    'white_bar_action_timeout'
+                )
+                self._publish_white_bar_stage_status(stage_event)
                 self._set_line_course_state(
                     'EMERGENCY_STOP',
                     'white_bar_action_timeout'
@@ -1450,24 +1505,31 @@ class LineCourseMissionNode(Node):
             and float(self.latest_white_bar.center_y)
             >= self.white_bar_stop_y_ratio
         )
-        event = self.white_bar_action_gate.evaluate(stop_threshold_reached)
-        if event.action == 'APPROACH':
+        stage_event = self.white_bar_stage_controller.white_bar_event(
+            stop_threshold_reached
+        )
+        if stage_event.action == 'APPROACH':
             cmd = self._copy_suggested_cmd(now)
             cmd.linear.x = self.white_bar_approach_speed
             self._publish_final_cmd(cmd)
             return
         self._publish_final_cmd(Twist())
-        if event.action == 'CONFIG_ERROR':
-            self._set_line_course_state('EMERGENCY_STOP', event.reason)
+        if stage_event.action in ('NOT_ARMED', 'FAULTED'):
+            self._publish_white_bar_stage_status(stage_event)
+            self._set_line_course_state(
+                'EMERGENCY_STOP',
+                stage_event.reason
+            )
             return
-        if event.action == 'SEND_REQUEST':
+        if stage_event.action == 'SEND_REQUEST':
             request = String()
-            request.data = event.motion_name
+            request.data = stage_event.motion_name
             self.white_bar_action_request_publisher.publish(request)
             self.white_bar_action_request_time = now
+            self._publish_white_bar_stage_status(stage_event)
             self.get_logger().info(
                 'Requested white-bar action: '
-                f'{event.motion_name}'
+                f'{stage_event.motion_name}'
             )
         return
 
@@ -1543,9 +1605,11 @@ class LineCourseMissionNode(Node):
             'red_confirm_count': self.red_seen_count,
             'white_bar_confirm_count': self.white_seen_count,
             'white_bar_action_request_sent': (
-                self.white_bar_action_gate.request_sent
+                self.white_bar_stage_controller.request_sent
             ),
             'white_bar_motion_name': self.white_bar_motion_name,
+            'white_bar_stage_state': self.white_bar_stage_controller.state,
+            'white_bar_stage_run_id': self.white_bar_stage_controller.run_id,
             'stop_zone_confirm_count': self.stop_seen_count,
             'stop_zone_inside_count': self.stop_inside_count,
             'corner_confirm_count': self.corner_seen_count,
@@ -1563,7 +1627,7 @@ class LineCourseMissionNode(Node):
         self.state_enter_time = time.monotonic()
         self.reacquire_seen_count = 0
         if new_state == 'HANDLE_WHITE_BAR':
-            self._reset_white_bar_action_state()
+            self.white_bar_action_request_time = None
         self.get_logger().info(
             f'[LINE_COURSE] {old_state} -> {new_state}: {reason}'
         )
@@ -1576,9 +1640,23 @@ class LineCourseMissionNode(Node):
         self.corner_seen_count = 0
         self.reacquire_seen_count = 0
 
-    def _reset_white_bar_action_state(self):
-        self.white_bar_action_gate.reset(self.white_bar_motion_name)
-        self.white_bar_action_request_time = None
+    @staticmethod
+    def _new_white_bar_run_id():
+        return f'line-course-{uuid.uuid4()}'
+
+    def _publish_white_bar_stage_status(self, event):
+        msg = String()
+        msg.data = json.dumps({
+            'run_id': event.run_id,
+            'state': event.state,
+            'active_stage': event.active_stage,
+            'motion_name': event.motion_name,
+            'last_sequence': event.last_sequence,
+            'reason': event.reason,
+            'request_sent': event.request_sent,
+            'action_done': event.action_done,
+        }, separators=(',', ':'))
+        self.white_bar_stage_status_publisher.publish(msg)
 
     def _is_fresh(self, receive_time, now):
         return (
