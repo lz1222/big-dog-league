@@ -147,7 +147,38 @@ python3 scripts/maze_navigation_dry_run.py \
   --params-file config/maze_navigation_dry_run.yaml
 ```
 
-终端3：
+终端 D 启动中文实时操作提示器：
+
+```bash
+cd ~/big-dog-league
+
+python3 scripts/maze_operator_monitor.py \
+  --ros-args \
+  --params-file config/maze_navigation_dry_run.yaml
+```
+
+该提示器只订阅 `/maze/navigation/dry_run_status`，不创建速度发布器，也不调用
+Unitree SDK。交互终端会动态显示中文操作指令、五扇区距离、路线进度、转角误差、
+居中误差和数据新鲜度。B2 状态超过 `status_stale_timeout_sec` 未更新时，终端 D
+会直接显示“立即停止”。
+
+人工干跑时按终端 D 的当前指令操作：
+
+| 中文指令 | 操作 |
+|---|---|
+| 保持静止 | 不推动遥控杆，等待传感器确认 |
+| 短促前进 | 每次前进约2至5cm，松杆后重新观察 |
+| 更小步前进 | 每次前进约1至3cm，等待明确转向状态 |
+| 停止并等待 | 不前进、不提前转向，检查开口和距离 |
+| 开始左转/右转 | 少量前进加对应转向，禁止纯原地旋转 |
+| 松杆保持，等待角度确认 | 当前误差已进入4度范围，不再增加转角 |
+| 缓慢进入新通道 | 短促进入并居中，等待下一段走廊状态 |
+| 立即停止 | 松开遥控器；故障锁止需排障后重启 B2 |
+
+`REVERSE_RECOVERY` 即使包含负的 `desired_vx`，终端 D 也只会提示停止。原因是
+B1 没有后向扇区，操控员不得把该诊断候选直接执行为倒退动作。
+
+需要保存未经整理的原始 JSON 时，可另开终端执行：
 
 ```bash
 ros2 topic echo /maze/navigation/dry_run_status

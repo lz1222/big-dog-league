@@ -87,3 +87,12 @@ maze_navigation_simulator:
     sim_turn_sec: 2.0
     sim_reacquire_sec: 1.2
     sim_fault_after_sec: 2.0
+
+maze_operator_monitor:
+  ros__parameters:
+    # 终端 D 只订阅 B2 JSON，并显示中文人工操作提示。
+    navigation_status_topic: /maze/navigation/dry_run_status
+    refresh_rate: 5.0
+    status_stale_timeout_sec: 1.50
+    use_color: true
+    beep_on_action_change: true
