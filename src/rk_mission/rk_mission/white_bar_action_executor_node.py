@@ -18,6 +18,9 @@ from rk_interfaces.action import ExecuteMotion
 from rk_mission.white_bar_action_core import WhiteBarActionExecutorCore
 
 
+STATUS_HEARTBEAT_SEC = 0.5
+
+
 class WhiteBarActionExecutorNode(Node):
     """Turn one approved white-bar request into one ExecuteMotion goal."""
 
@@ -25,6 +28,7 @@ class WhiteBarActionExecutorNode(Node):
         super().__init__('white_bar_action_executor')
         self.callback_group = ReentrantCallbackGroup()
         self._state_lock = threading.RLock()
+        self._shutdown_requested = threading.Event()
         self._declare_parameters()
         self._read_parameters()
 
@@ -32,6 +36,7 @@ class WhiteBarActionExecutorNode(Node):
         self._request_started_time = None
         self._goal_started_time = None
         self._goal_handle = None
+        self._last_status_publish_time = 0.0
 
         self.done_publisher = self.create_publisher(Bool, self.done_topic, 10)
         self.status_publisher = self.create_publisher(
@@ -89,8 +94,9 @@ class WhiteBarActionExecutorNode(Node):
         )
         self.declare_parameter('mission_stop_topic', '/mission/stop')
         self.declare_parameter('action_name', '/locomotion/execute_motion')
-        self.declare_parameter('server_wait_timeout_sec', 2.0)
-        self.declare_parameter('action_timeout_sec', 5.0)
+        # FrontJump 最坏时长约 17s；执行器须先超时取消。
+        self.declare_parameter('server_wait_timeout_sec', 5.0)
+        self.declare_parameter('action_timeout_sec', 22.0)
 
     def _read_parameters(self):
         for name in (
@@ -138,42 +144,45 @@ class WhiteBarActionExecutorNode(Node):
         self._handle_event(event)
 
     def _poll_action_state(self):
+        """Action 超时与状态重发，支持 readiness 晚订阅。"""
+        event = None
         with self._state_lock:
-            if not self.core.active:
-                return
-            request_id = self.core.request_id
-            status = self.core.status
-            now = time.monotonic()
-            if status == 'WAIT_SERVER':
-                if self.action_client.server_is_ready():
-                    event = self.core.server_ready(request_id)
-                elif (
-                    self._request_started_time is not None
-                    and now - self._request_started_time
-                    >= self.server_wait_timeout_sec
-                ):
-                    event = self.core.timeout(
-                        request_id,
-                        'execute_motion_server_unavailable_timeout'
+            if self.core.active:
+                request_id = self.core.request_id
+                status = self.core.status
+                now = time.monotonic()
+                if status == 'WAIT_SERVER':
+                    if self.action_client.server_is_ready():
+                        event = self.core.server_ready(request_id)
+                    elif (
+                        self._request_started_time is not None
+                        and now - self._request_started_time
+                        >= self.server_wait_timeout_sec
+                    ):
+                        event = self.core.timeout(
+                            request_id,
+                            'execute_motion_server_unavailable_timeout'
+                        )
+                elif status in ('GOAL_SENT', 'RUNNING'):
+                    started_time = (
+                        self._goal_started_time or self._request_started_time
                     )
-                else:
-                    return
-            elif status in ('GOAL_SENT', 'RUNNING'):
-                started_time = (
-                    self._goal_started_time or self._request_started_time
-                )
-                if (
-                    started_time is None
-                    or now - started_time < self.action_timeout_sec
-                ):
-                    return
-                event = self.core.timeout(request_id)
-            else:
-                return
+                    if (
+                        started_time is not None
+                        and now - started_time >= self.action_timeout_sec
+                    ):
+                        event = self.core.timeout(request_id)
         self._handle_event(event)
+        self._publish_status_heartbeat()
 
     def _handle_event(self, event):
         if event is None:
+            return
+        if self._shutdown_requested.is_set() or not rclpy.ok():
+            # ROS context 失效后只取消 Action，不再发布状态。
+            # 否则 launch 退出路径会因 RCLError 变成失败。
+            if event.cancel_goal:
+                self._cancel_active_goal()
             return
         self._publish_status(
             event.status,
@@ -195,7 +204,8 @@ class WhiteBarActionExecutorNode(Node):
         goal.motion_name = event.motion_name
         try:
             goal_future = self.action_client.send_goal_async(goal)
-        except Exception as exc:  # rclpy action transport errors are runtime data.
+        except Exception as exc:
+            # ROS Action 传输异常是运行态故障，不能发布 done。
             with self._state_lock:
                 failure = self.core.goal_send_failed(
                     event.request_id,
@@ -210,7 +220,8 @@ class WhiteBarActionExecutorNode(Node):
     def _on_goal_response(self, request_id, future):
         try:
             goal_handle = future.result()
-        except Exception as exc:  # The future can fail when DDS drops a request.
+        except Exception as exc:
+            # DDS 响应丢失按失败处理，避免未知目标成功。
             with self._state_lock:
                 event = self.core.goal_send_failed(
                     request_id,
@@ -267,17 +278,48 @@ class WhiteBarActionExecutorNode(Node):
         self._handle_event(event)
 
     def _cancel_active_goal(self):
+        """请求取消但保留 goal handle，直到 result 证明 Action 已终态。"""
         with self._state_lock:
             goal_handle = self._goal_handle
-            self._goal_handle = None
         if goal_handle is None:
             return
         try:
             goal_handle.cancel_goal_async()
-        except Exception as exc:  # Cancellation must not accidentally publish done.
-            self.get_logger().error(f'ExecuteMotion cancel request failed: {exc}')
+        except Exception as exc:
+            # 取消请求异常仍不得绕过核心状态机发布 done。
+            self.get_logger().error(
+                f'ExecuteMotion cancel request failed: {exc}'
+            )
 
-    def _publish_status(self, status, motion_name, reason, request_id):
+    def _publish_status_heartbeat(self):
+        """低频状态心跳消除 readiness 晚订阅的 QoS 竞态。"""
+        if self._shutdown_requested.is_set() or not rclpy.ok():
+            return
+        now = time.monotonic()
+        if now - self._last_status_publish_time < STATUS_HEARTBEAT_SEC:
+            return
+        with self._state_lock:
+            status = self.core.status
+            motion_name = self.core.motion_name
+            request_id = self.core.request_id
+        self._publish_status(
+            status,
+            motion_name,
+            'white_bar_action_status_heartbeat',
+            request_id,
+            log_message=False,
+        )
+
+    def _publish_status(
+        self,
+        status,
+        motion_name,
+        reason,
+        request_id,
+        *,
+        log_message=True,
+    ):
+        """发布状态；心跳不刷日志，动作事件完整记录。"""
         message = String()
         message.data = json.dumps({
             'status': status,
@@ -286,6 +328,9 @@ class WhiteBarActionExecutorNode(Node):
             'request_id': request_id,
         }, separators=(',', ':'))
         self.status_publisher.publish(message)
+        self._last_status_publish_time = time.monotonic()
+        if not log_message:
+            return
         if status in ('FAILED', 'TIMEOUT', 'CANCELED'):
             self.get_logger().warn(
                 f'[WHITE_BAR_ACTION] {status}: {motion_name}: {reason}'
@@ -296,8 +341,13 @@ class WhiteBarActionExecutorNode(Node):
             )
 
     def destroy_node(self):
+        """关闭时只取消目标，不在失效 context 发布状态。"""
+        self._shutdown_requested.set()
         with self._state_lock:
             event = self.core.mission_stop()
+        # launch 的 SIGINT 可能先让 rclpy context 失效。
+        # 此时 _handle_event 会因 publisher 失效而使清理异常；
+        # 仍尽力取消 Action，但不把 shutdown 作为可发布事件。
         self._handle_event(event)
         return super().destroy_node()
 

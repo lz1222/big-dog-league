@@ -6,6 +6,7 @@ import time
 
 from geometry_msgs.msg import Twist
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy
 from rclpy.qos import QoSHistoryPolicy
@@ -260,23 +261,31 @@ class CommandMuxNode(Node):
         self._core.set_arm_lock(message.data, self._now_sec())
 
     def _publish_decision(self):
+        """发布最终仲裁结果；ROS context 关闭后不得把清理竞态变成节点异常。"""
+        if not rclpy.ok():
+            return
         decision = self._core.evaluate(self._now_sec())
 
         output = Twist()
         output.linear.x = decision.command.linear_x
         output.linear.y = decision.command.linear_y
         output.angular.z = decision.command.angular_z
-        self._command_publisher.publish(output)
+        try:
+            self._command_publisher.publish(output)
 
-        status = String()
-        status.data = json.dumps(
-            decision.status,
-            ensure_ascii=True,
-            separators=(',', ':'),
-            allow_nan=False,
-        )
-        self._status_publisher.publish(status)
-        self._publish_estop_state()
+            status = String()
+            status.data = json.dumps(
+                decision.status,
+                ensure_ascii=True,
+                separators=(',', ':'),
+                allow_nan=False,
+            )
+            self._status_publisher.publish(status)
+            self._publish_estop_state()
+        except Exception:
+            # 仅吞掉 shutdown 中 publisher 已失效的竞态；运行态错误保持可见。
+            if rclpy.ok():
+                raise
 
 
 def main(args=None):
@@ -286,7 +295,7 @@ def main(args=None):
     try:
         node = CommandMuxNode()
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         if node is not None:

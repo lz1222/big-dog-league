@@ -16,6 +16,9 @@ from rk_mission.white_bar_stage_command_core import (
 )
 
 
+STATUS_HEARTBEAT_SEC = 0.5
+
+
 def decode_json_object(raw_message):
     """Decode one String payload into a JSON object, or return None."""
     if type(raw_message) is not str:
@@ -40,6 +43,7 @@ class WhiteBarStageCommandPublisherNode(Node):
             max_command_retries=self.max_command_retries,
             finish_milestone_state=self.finish_milestone_state,
         )
+        self._last_status_publish_time = 0.0
 
         self.command_publisher = self.create_publisher(
             String,
@@ -159,15 +163,52 @@ class WhiteBarStageCommandPublisherNode(Node):
         )
 
     def _on_line_course_state(self, msg):
+        """用持续路线状态补偿一次性 start/stage-status 的 DDS 发现竞态。"""
+        payload = decode_json_object(msg.data)
+        # /mission/start 是一次性广播；发布器刚重启或 DDS 发现迟到时可能错过它。
+        # 仅在路线状态已明确携带活动 run 时补建 sequencer，随后仍由同一 run_id
+        # 和 DISARMED 阶段状态门控发送 START，绝不凭视觉或白线次数自行起任务。
+        if (
+            self.sequencer.state == 'IDLE'
+            and isinstance(payload, dict)
+            and payload.get('mission_started') is True
+            and str(payload.get('white_bar_stage_run_id', '')).strip()
+        ):
+            self._handle_event(self.sequencer.mission_start(time.monotonic()))
+        # line_course 在新 run 建立时持续发布 ``DISARMED`` 与 run_id。若唯一的
+        # white_bar_stage_status 恰好在本节点订阅连接前发出，可由这份同源状态
+        # 安全恢复 START 命令；仅接受 sequence=0 的 DISARMED，绝不从视觉推断。
+        if (
+            self.sequencer.state == 'WAIT_RUN'
+            and isinstance(payload, dict)
+            and payload.get('mission_started') is True
+            and payload.get('white_bar_stage_state') == 'DISARMED'
+            and str(payload.get('white_bar_stage_run_id', '')).strip()
+        ):
+            self._handle_event(
+                self.sequencer.on_stage_status({
+                    'run_id': payload['white_bar_stage_run_id'],
+                    'state': 'DISARMED',
+                    'last_sequence': 0,
+                    'active_stage': '',
+                    'motion_name': '',
+                    'request_sent': False,
+                    'action_done': False,
+                }, time.monotonic())
+            )
         self._handle_event(
             self.sequencer.on_line_course_state(
-                decode_json_object(msg.data),
+                payload,
                 time.monotonic(),
             )
         )
 
     def _on_timer(self):
-        self._handle_event(self.sequencer.on_timer(time.monotonic()))
+        """重试命令并低频重发状态，避免 readiness/CLI 晚订阅漏掉阶段证据。"""
+        now = time.monotonic()
+        self._handle_event(self.sequencer.on_timer(now))
+        if now - self._last_status_publish_time >= STATUS_HEARTBEAT_SEC:
+            self._handle_event(self.sequencer.status_event('status_heartbeat'))
 
     def _handle_event(self, event):
         if event.action == 'SEND_COMMAND':
@@ -192,6 +233,7 @@ class WhiteBarStageCommandPublisherNode(Node):
             'reason': event.reason,
         }, separators=(',', ':'))
         self.status_publisher.publish(status)
+        self._last_status_publish_time = time.monotonic()
         if event.action == 'FAULT':
             self.get_logger().error(
                 f'[WHITE_BAR_STAGE_COMMAND] {event.state}: {event.reason}'
@@ -199,14 +241,21 @@ class WhiteBarStageCommandPublisherNode(Node):
 
 
 def main(args=None):
+    """运行白横线阶段发布器；关闭后不把 context 失效当成路线故障。"""
     rclpy.init(args=args)
-    node = WhiteBarStageCommandPublisherNode()
+    node = None
     try:
+        node = WhiteBarStageCommandPublisherNode()
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except Exception:
+        # launch 关闭可在 wait set 重建前使 context 失效；运行态异常仍需抛出。
+        if rclpy.ok():
+            raise
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 

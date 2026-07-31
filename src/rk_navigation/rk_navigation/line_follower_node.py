@@ -10,9 +10,11 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, String
 
 from rk_interfaces.msg import LineTrack
+from rk_navigation.start_ready_core import StartReadyGate
 
 
 WAIT_START = 'WAIT_START'
+START_READY = 'START_READY'
 LINE_FOLLOW = 'LINE_FOLLOW'
 SHORT_LOST = 'SHORT_LOST'
 TURN_LOST_KEEP = 'TURN_LOST_KEEP'
@@ -29,6 +31,7 @@ RUNNING_STATES = {
 }
 VALID_STATES = {
     WAIT_START,
+    START_READY,
     LINE_FOLLOW,
     SHORT_LOST,
     TURN_LOST_KEEP,
@@ -42,7 +45,7 @@ class LineFollowerNode(Node):
     """Competition line navigation state machine."""
 
     def __init__(self, parameter_overrides=None):
-        """Create the follower, optionally with launch/test parameter overrides."""
+        """创建巡线节点，允许 launch 或测试覆盖参数。"""
         super().__init__(
             'line_follower_node', parameter_overrides=parameter_overrides
         )
@@ -106,6 +109,13 @@ class LineFollowerNode(Node):
         self.declare_parameter('line_msg_timeout', 0.5)
         self.declare_parameter('continuous_search_enabled', True)
 
+        # 启动稳定门：收到 start 后先确认当前画面可安全巡线，禁止盲走。
+        self.declare_parameter('start_ready_confirm_frames', 5)
+        self.declare_parameter('start_ready_timeout_sec', 5.0)
+        self.declare_parameter('start_ready_min_confidence', 0.55)
+        self.declare_parameter('start_ready_max_lateral_error', 0.80)
+        self.declare_parameter('start_ready_max_heading_error', 0.80)
+
         self.suggested_cmd_topic = self.string_parameter(
             'suggested_cmd_topic'
         )
@@ -140,11 +150,18 @@ class LineFollowerNode(Node):
         self.lost_line_count = 0
         self.gait_control_locked = False
         self.mission_started = False
+        self.start_ready_failed = False
         self.last_published_cmd_is_zero = True
         self.last_stop_reason = 'startup'
         self.speed_floor_warning_keys = set()
 
         self.refresh_parameters()
+        self.start_ready_gate = StartReadyGate(
+            self.start_ready_confirm_frames,
+            self.start_ready_min_confidence,
+            self.start_ready_max_lateral_error,
+            self.start_ready_max_heading_error,
+        )
 
         self.publisher = self.create_publisher(
             Twist,
@@ -319,6 +336,35 @@ class LineFollowerNode(Node):
             'continuous_search_enabled'
         ).get_parameter_value().bool_value
 
+        start_ready_confirm_frames = self.get_parameter(
+            'start_ready_confirm_frames'
+        ).get_parameter_value().integer_value
+        self.start_ready_confirm_frames = max(
+            1,
+            int(start_ready_confirm_frames),
+        )
+        self.start_ready_timeout_sec = self.positive_float_parameter(
+            'start_ready_timeout_sec'
+        )
+        self.start_ready_min_confidence = self.clamp(
+            self.nonnegative_float_parameter('start_ready_min_confidence'),
+            0.0,
+            1.0,
+        )
+        self.start_ready_max_lateral_error = self.nonnegative_float_parameter(
+            'start_ready_max_lateral_error'
+        )
+        self.start_ready_max_heading_error = self.nonnegative_float_parameter(
+            'start_ready_max_heading_error'
+        )
+        if hasattr(self, 'start_ready_gate'):
+            self.start_ready_gate.configure(
+                self.start_ready_confirm_frames,
+                self.start_ready_min_confidence,
+                self.start_ready_max_lateral_error,
+                self.start_ready_max_heading_error,
+            )
+
         if self.error_slowest_threshold < self.error_slow_threshold:
             self.error_slowest_threshold = self.error_slow_threshold
 
@@ -326,17 +372,31 @@ class LineFollowerNode(Node):
         if not msg.data:
             return
 
+        if self.mission_started:
+            self.get_logger().warn(
+                'Duplicate mission start ignored: '
+                f'state={self.state}, mission remains active'
+            )
+            return
+
         now = self.get_clock().now()
         self.get_logger().info(
             'Mission start received: '
-            f'state={self.state}, target_state={LINE_FOLLOW}'
+            f'state={self.state}, target_state={START_READY}'
         )
         self.stable_seen_count = 0
+        self.start_ready_gate.reset()
+        self.start_ready_failed = False
         self.last_angular_z = 0.0
         self.last_loss_reason = 'mission_start'
         self.last_stop_reason = 'none'
         self.mission_started = True
-        self.set_state(LINE_FOLLOW, 'mission_start', now)
+        self.set_state(
+            START_READY,
+            'mission_start_waiting_for_stable_line',
+            now,
+        )
+        self.publish_zero('mission_start_start_ready', force=True)
 
     def on_mission_stop(self, msg):
         if not msg.data:
@@ -350,8 +410,10 @@ class LineFollowerNode(Node):
         self.last_loss_reason = 'mission_stop'
         self.last_angular_z = 0.0
         self.mission_started = False
+        self.start_ready_failed = False
+        self.start_ready_gate.reset()
         self.set_state(WAIT_START, 'mission_stop', now)
-        self.publish_zero('mission_stop')
+        self.publish_zero('mission_stop', force=True)
 
     def on_gait_control_lock(self, msg):
         locked = bool(msg.data)
@@ -375,10 +437,23 @@ class LineFollowerNode(Node):
         if not self.is_valid_line_msg(msg):
             self.lost_line_count += 1
             self.last_loss_reason = 'invalid_line_track'
+            if self.state == START_READY:
+                self.start_ready_failed = True
+                self.set_state(
+                    STOP,
+                    'start_ready_invalid_line_track',
+                    now,
+                )
+                self.publish_zero('start_ready_invalid_line_track', force=True)
+                return
             if self.state in RUNNING_STATES:
                 self.log_invalid_line_track_stop(msg, now)
                 self.set_state(STOP, 'invalid_line_track', now)
                 self.publish_zero('invalid_line_track')
+            return
+
+        if self.state == START_READY:
+            self._update_start_ready(msg, now)
             return
 
         if self.is_trackable_line(msg):
@@ -392,7 +467,11 @@ class LineFollowerNode(Node):
             if self.state == SHORT_LOST:
                 self.log_line_recovered('line_recovered', msg)
                 self.set_state(LINE_FOLLOW, 'line_recovered', now)
-            elif self.state == STOP and self.mission_started:
+            elif (
+                self.state == STOP
+                and self.mission_started
+                and not self.start_ready_failed
+            ):
                 self.log_line_recovered('line_recovered_from_stop', msg)
                 self.set_state(LINE_FOLLOW, 'line_recovered_from_stop', now)
         else:
@@ -427,9 +506,29 @@ class LineFollowerNode(Node):
             self.log_control_debug(Twist(), 'waiting_for_mission_start')
             return
 
+        if self.state == START_READY:
+            if self.elapsed_in_state(now) >= self.start_ready_timeout_sec:
+                self.start_ready_failed = True
+                self.last_loss_reason = 'start_ready_timeout'
+                self.set_state(STOP, self.last_loss_reason, now)
+                self.publish_zero(self.last_loss_reason, force=True)
+            elif self.line_message_timed_out(now):
+                self.start_ready_failed = True
+                self.last_loss_reason = 'start_ready_line_msg_timeout'
+                self.set_state(STOP, self.last_loss_reason, now)
+                self.publish_zero(self.last_loss_reason, force=True)
+            else:
+                # 即使 mux 中留有旧候选，也在确认窗口持续送零候选。
+                self.publish_zero(
+                    'start_ready_waiting_for_stable_line',
+                    force=True,
+                )
+            return
+
         if self.state == STOP:
             if (
                 self.mission_started
+                and not self.start_ready_failed
                 and self.is_trackable_line(self.last_line_msg)
                 and not self.line_message_timed_out(now)
             ):
@@ -700,11 +799,11 @@ class LineFollowerNode(Node):
         self.last_stop_reason = 'none'
         self.log_control_debug(cmd, stop_reason)
 
-    def publish_zero(self, reason='stop'):
+    def publish_zero(self, reason='stop', force=False):
         cmd = Twist()
         self.last_stop_reason = reason
         self.last_angular_z = 0.0
-        if self.last_published_cmd_is_zero:
+        if self.last_published_cmd_is_zero and not force:
             self.log_control_debug(cmd, reason)
             return
 
@@ -739,14 +838,24 @@ class LineFollowerNode(Node):
         self.state = new_state
         self.state_enter_time = now
 
-        if new_state in {LINE_FOLLOW, WAIT_START, STOP}:
+        if new_state in {LINE_FOLLOW, WAIT_START, START_READY, STOP}:
             self.stable_seen_count = 0
-        if new_state in {WAIT_START, STOP}:
+        if new_state in {WAIT_START, START_READY, STOP}:
             self.last_angular_z = 0.0
         if new_state == WAIT_START:
             self.get_logger().info(
                 'Enter state WAIT_START: '
                 f'reason={reason}, waiting for mission start'
+            )
+            return
+        if new_state == START_READY:
+            self.get_logger().info(
+                'Enter state START_READY: '
+                f'reason={reason}, '
+                f'confirm_frames={self.start_ready_confirm_frames}, '
+                f'min_confidence={self.start_ready_min_confidence:.3f}, '
+                f'max_lateral_error={self.start_ready_max_lateral_error:.3f}, '
+                f'max_heading_error={self.start_ready_max_heading_error:.3f}'
             )
             return
         if new_state == LINE_FOLLOW:
@@ -848,6 +957,27 @@ class LineFollowerNode(Node):
             bool(msg.line_visible)
             and float(msg.confidence) >= self.line_follow_min_confidence
         )
+
+    def _update_start_ready(self, msg, now):
+        """只在新鲜、有限且连续居中的线迹后解锁普通巡线。"""
+        decision = self.start_ready_gate.observe(
+            msg.line_visible,
+            msg.confidence,
+            msg.lateral_error,
+            msg.heading_error,
+        )
+        self.stable_seen_count = decision.confirm_count
+        self.last_loss_reason = decision.reason
+        if decision.ready:
+            self.last_seen_time = now
+            self.last_seen_line_time = now
+            self.last_lateral_error = float(msg.lateral_error)
+            self.last_heading_error = float(msg.heading_error)
+            self.last_turn_direction = self.direction_from_errors(msg)
+            self.set_state(LINE_FOLLOW, 'start_ready_confirmed', now)
+            return
+        # 不合格帧会由核心复位计数，期间始终保持零速度。
+        self.publish_zero(decision.reason, force=True)
 
     def is_reacquired_line(self, msg):
         if msg is None:
@@ -985,6 +1115,9 @@ class LineFollowerNode(Node):
         )
 
     def log_control_debug(self, cmd, stop_reason):
+        """发布只读状态；shutdown 中 publisher 失效时不把清理竞态升级为异常。"""
+        if not rclpy.ok():
+            return
         line_visible = False
         lateral_error = 0.0
         heading_error = 0.0
@@ -997,6 +1130,17 @@ class LineFollowerNode(Node):
         status.data = json.dumps({
             'nav_state': self.state,
             'mission_started': bool(self.mission_started),
+            'start_ready': self.state == START_READY,
+            'ready': bool(
+                self.mission_started and self.state == LINE_FOLLOW
+            ),
+            'start_ready_confirm_count': int(
+                self.start_ready_gate.confirm_count
+            ),
+            'start_ready_confirm_frames': int(
+                self.start_ready_confirm_frames
+            ),
+            'start_ready_failed': bool(self.start_ready_failed),
             'line_visible': line_visible,
             'confidence': (
                 float(self.last_line_msg.confidence)
@@ -1009,7 +1153,13 @@ class LineFollowerNode(Node):
             'suggested_wz': float(cmd.angular.z),
             'reason': str(stop_reason),
         }, separators=(',', ':'))
-        self.status_publisher.publish(status)
+        try:
+            self.status_publisher.publish(status)
+        except Exception:
+            # 运行态发布错误必须继续暴露，只有 ROS 已关闭才静默结束回调。
+            if rclpy.ok():
+                raise
+            return
 
         self.log_debug(
             'control: '

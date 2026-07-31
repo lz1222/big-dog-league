@@ -29,6 +29,10 @@ setup(
             os.path.join('share', package_name, 'scripts'),
             glob('scripts/*.sh')
         ),
+        (
+            os.path.join('share', package_name, 'test_support'),
+            glob('test_support/*.c')
+        ),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -37,6 +41,11 @@ setup(
     description='Launch files for the RK inspection robot mock system.',
     license='MIT',
     entry_points={
-        'console_scripts': [],
+        'console_scripts': [
+            'competition_readiness_node = '
+            'rk_bringup.competition_readiness_node:main',
+            'non_arm_smoke_publisher = '
+            'rk_bringup.non_arm_smoke_publisher:main',
+        ],
     },
 )
