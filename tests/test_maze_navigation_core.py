@@ -154,7 +154,7 @@ class MazeNavigationPolicyTest(unittest.TestCase):
         )
         self.assertEqual(output['desired_vx'], 0.0)
 
-    def test_missing_side_after_start_latches_fault_stop(self):
+    def test_missing_side_after_start_stops_then_latches_fault(self):
         self._confirm_sensors()
         observation = self._observation(
             turn_rad=0.0,
@@ -167,6 +167,17 @@ class MazeNavigationPolicyTest(unittest.TestCase):
             },
         )
 
+        pending = self._step(observation)
+
+        self.assertEqual(pending['state'], STATE_CORRIDOR_FOLLOW)
+        self.assertEqual(pending['desired_vx'], 0.0)
+        self.assertEqual(pending['desired_wz'], 0.0)
+        self.assertEqual(pending['side_missing_streak'], 1)
+        self.assertEqual(
+            pending['reason'],
+            'corridor_side_distance_missing_confirmation_1/2',
+        )
+
         output = self._step(observation)
 
         self.assertEqual(output['state'], STATE_FAULT_STOP)
@@ -174,6 +185,57 @@ class MazeNavigationPolicyTest(unittest.TestCase):
             output['reason'],
             'corridor_side_distance_missing',
         )
+
+    def test_transient_missing_side_recovers_without_fault(self):
+        self._confirm_sensors()
+        missing = self._observation(
+            turn_rad=0.0,
+            distances={
+                'front': 2.0,
+                'left_front': 1.0,
+                'right_front': 1.0,
+                'left': None,
+                'right': 0.285,
+            },
+        )
+
+        pending = self._step(missing)
+        recovered = self._step(self._observation(turn_rad=0.0))
+
+        self.assertEqual(pending['desired_vx'], 0.0)
+        self.assertEqual(recovered['state'], STATE_CORRIDOR_FOLLOW)
+        self.assertEqual(recovered['reason'], 'corridor_centering')
+        self.assertEqual(recovered['side_missing_streak'], 0)
+        self.assertGreater(recovered['desired_vx'], 0.0)
+
+    def test_turn_clearance_missing_stops_then_latches_fault(self):
+        self._confirm_sensors()
+        turn_observation = self._observation(
+            turn_rad=0.0,
+            sensor_state='BLOCKED',
+            distances=self._turn_distances(DIRECTION_LEFT),
+        )
+        self._step(turn_observation)
+        self._step(turn_observation)
+
+        missing_distances = self._turn_distances(DIRECTION_LEFT)
+        missing_distances['right'] = None
+        missing = self._observation(
+            turn_rad=0.3,
+            sensor_state='BLOCKED',
+            distances=missing_distances,
+        )
+        pending = self._step(missing)
+        fault = self._step(missing)
+
+        self.assertEqual(pending['state'], STATE_TURN_LEFT)
+        self.assertEqual(pending['desired_vx'], 0.0)
+        self.assertEqual(
+            pending['reason'],
+            'turn_clearance_missing_confirmation_1/2',
+        )
+        self.assertEqual(fault['state'], STATE_FAULT_STOP)
+        self.assertEqual(fault['reason'], 'turn_clearance_missing')
 
     def test_missing_opposite_side_never_authorizes_turn(self):
         distances = self._turn_distances(DIRECTION_LEFT)

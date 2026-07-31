@@ -22,13 +22,24 @@ maze_perception_dry_run:
     side_max_range: 2.00
     distance_percentile: 10.0
 
+    # front角宽与斜前/正侧边界解耦，避免20度front同时丢失90度侧墙。
+    diagonal_angle_max: 30.0
+    side_angle_max: 120.0
+
     # 真机低矮挡板在正侧方无稳定回波，使用斜前点的 |y| 估算侧墙净距。
     # x_min 不得小于 body_x_max，避免把机身或腿部回波投影成墙面。
     side_projection_angle_min: 15.0
     side_projection_angle_max: 60.0
     side_projection_x_min: 0.45
     side_projection_x_max: 1.50
+    # 近似固定x的前挡板不具备侧墙纵向跨度，不能投影成左右近障。
+    side_projection_min_x_span: 0.12
+    side_projection_lateral_tolerance: 0.04
     side_min_points: 3
+    # 单侧稀疏回波最多保留2个点云帧；突然变远超过8cm也需连续确认。
+    # 更近障碍始终立即生效，点云断流时立即清空缓存。
+    side_hold_frames: 2
+    side_rise_tolerance: 0.08
 
     # 进入阈值小于退出阈值，形成滞回并减少临界距离附近的抖动。
     front_block_enter: 0.65

@@ -67,6 +67,7 @@ class MazePolicyConfig:
     max_odom_age_sec: float = 0.20
 
     sensor_confirm_frames: int = 3
+    side_missing_confirm_frames: int = 2
     corner_confirm_frames: int = 3
     turn_confirm_frames: int = 3
     reacquire_confirm_frames: int = 5
@@ -154,6 +155,7 @@ class MazeNavigationPolicy:
         self._state_enter_time = None
         self._sensor_ready_latched = False
         self._sensor_streak = 0
+        self._side_missing_streak = 0
         self._corner_streak = 0
         self._turn_streak = 0
         self._reacquire_streak = 0
@@ -249,6 +251,7 @@ class MazeNavigationPolicy:
             'route_index': self.route_index,
             'route_total': len(self.route_directions),
             'route_complete': self.route_complete(),
+            'side_missing_streak': self._side_missing_streak,
             'expected_turn': expected_turn,
             'turn_target_rad': self._turn_target_rad,
             'turn_target_deg': self._degrees_or_none(
@@ -467,11 +470,11 @@ class MazeNavigationPolicy:
                 self.expected_turn()
             )[0],)
 
-        if self._missing_required_side(
-            distances,
-            allowed_missing,
+        if self._pause_or_fault_for_missing(
+            self._missing_required_side(distances, allowed_missing),
+            'corridor_side_distance_missing',
+            now,
         ):
-            self._enter_fault('corridor_side_distance_missing', now)
             return self.snapshot(now)
         if not self._side_clearance_safe(
             distances,
@@ -538,11 +541,11 @@ class MazeNavigationPolicy:
 
         turn_side = self._turn_sector_names(direction)[0]
         allowed_missing = (turn_side,)
-        if self._missing_required_side(
-            distances,
-            allowed_missing,
+        if self._pause_or_fault_for_missing(
+            self._missing_required_side(distances, allowed_missing),
+            'corner_side_distance_missing',
+            now,
         ):
-            self._enter_fault('corner_side_distance_missing', now)
             return self.snapshot(now)
         if not self._side_clearance_safe(
             distances,
@@ -584,11 +587,14 @@ class MazeNavigationPolicy:
             self._enter_fault('turn_timeout', now)
             return self.snapshot(now)
         direction = self.expected_turn()
-        if not self._turn_clearance_observable(
-            direction,
-            observation.distances,
+        if self._pause_or_fault_for_missing(
+            not self._turn_clearance_observable(
+                direction,
+                observation.distances,
+            ),
+            'turn_clearance_missing',
+            now,
         ):
-            self._enter_fault('turn_clearance_missing', now)
             return self.snapshot(now)
         if not self._instant_clearance_safe(observation.distances):
             self._enter_fault('turn_clearance_unsafe', now)
@@ -620,11 +626,14 @@ class MazeNavigationPolicy:
             self._enter_fault('turn_fine_align_timeout', now)
             return self.snapshot(now)
         direction = self.expected_turn()
-        if not self._turn_clearance_observable(
-            direction,
-            observation.distances,
+        if self._pause_or_fault_for_missing(
+            not self._turn_clearance_observable(
+                direction,
+                observation.distances,
+            ),
+            'fine_align_clearance_missing',
+            now,
         ):
-            self._enter_fault('fine_align_clearance_missing', now)
             return self.snapshot(now)
         if not self._instant_clearance_safe(observation.distances):
             self._enter_fault('fine_align_clearance_unsafe', now)
@@ -681,8 +690,11 @@ class MazeNavigationPolicy:
         if self._state_age(now) > self.config.reacquire_timeout_sec:
             self._enter_fault('corridor_reacquire_timeout', now)
             return self.snapshot(now)
-        if self._missing_required_side(observation.distances):
-            self._enter_fault('reacquire_side_distance_missing', now)
+        if self._pause_or_fault_for_missing(
+            self._missing_required_side(observation.distances),
+            'reacquire_side_distance_missing',
+            now,
+        ):
             return self.snapshot(now)
         if not self._side_clearance_safe(observation.distances):
             self._enter_fault('reacquire_side_clearance_unsafe', now)
@@ -746,11 +758,14 @@ class MazeNavigationPolicy:
             allowed_missing = (
                 self._turn_sector_names(direction)[0],
             )
-        if self._missing_required_side(
-            observation.distances,
-            allowed_missing,
+        if self._pause_or_fault_for_missing(
+            self._missing_required_side(
+                observation.distances,
+                allowed_missing,
+            ),
+            'reverse_side_distance_missing',
+            now,
         ):
-            self._enter_fault('reverse_side_distance_missing', now)
             return self.snapshot(now)
         if not self._side_clearance_safe(
             observation.distances,
@@ -817,6 +832,7 @@ class MazeNavigationPolicy:
         self.reason = str(reason)
         self._state_enter_time = now
         self._corner_streak = 0
+        self._side_missing_streak = 0
         self._turn_streak = 0
         self._reacquire_streak = 0
         self._recovery_streak = 0
@@ -833,6 +849,27 @@ class MazeNavigationPolicy:
         self.reason = str(reason)
         self._state_enter_time = now
         self._set_command(0.0, 0.0)
+
+    def _pause_or_fault_for_missing(self, missing, fault_reason, now):
+        """侧向量测短暂缺失时先停住确认，持续缺失才锁定故障。"""
+        if not missing:
+            self._side_missing_streak = 0
+            return False
+
+        self._side_missing_streak += 1
+        self._set_command(0.0, 0.0)
+        if (
+            self._side_missing_streak
+            >= self.config.side_missing_confirm_frames
+        ):
+            self._enter_fault(fault_reason, now)
+        else:
+            self.reason = (
+                f'{fault_reason}_confirmation_'
+                f'{self._side_missing_streak}/'
+                f'{self.config.side_missing_confirm_frames}'
+            )
+        return True
 
     def _set_command(self, vx, wz):
         self.desired_vx = float(vx)
@@ -1084,6 +1121,9 @@ class MazeNavigationPolicy:
 
         frame_values = {
             'sensor_confirm_frames': self.config.sensor_confirm_frames,
+            'side_missing_confirm_frames': (
+                self.config.side_missing_confirm_frames
+            ),
             'corner_confirm_frames': self.config.corner_confirm_frames,
             'turn_confirm_frames': self.config.turn_confirm_frames,
             'reacquire_confirm_frames': (

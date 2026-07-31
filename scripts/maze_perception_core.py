@@ -41,10 +41,14 @@ class SectorExtractor:
         front_max_range,
         side_max_range,
         distance_percentile,
+        diagonal_angle_max_deg=60.0,
+        side_angle_max_deg=120.0,
         side_projection_angle_min_deg=15.0,
         side_projection_angle_max_deg=60.0,
         side_projection_x_min=0.45,
         side_projection_x_max=1.50,
+        side_projection_min_x_span=0.12,
+        side_projection_lateral_tolerance=0.04,
         side_min_points=3,
     ):
         self.z_min = float(z_min)
@@ -58,6 +62,10 @@ class SectorExtractor:
         self.front_max_range = float(front_max_range)
         self.side_max_range = float(side_max_range)
         self.distance_percentile = float(distance_percentile)
+        self.diagonal_angle_max_deg = float(
+            diagonal_angle_max_deg
+        )
+        self.side_angle_max_deg = float(side_angle_max_deg)
         self.side_projection_angle_min_deg = float(
             side_projection_angle_min_deg
         )
@@ -66,9 +74,21 @@ class SectorExtractor:
         )
         self.side_projection_x_min = float(side_projection_x_min)
         self.side_projection_x_max = float(side_projection_x_max)
+        self.side_projection_min_x_span = float(
+            side_projection_min_x_span
+        )
+        self.side_projection_lateral_tolerance = float(
+            side_projection_lateral_tolerance
+        )
         self.side_min_points = int(side_min_points)
         self._validate()
         self._front_angle_rad = math.radians(self.front_angle_deg)
+        self._diagonal_angle_max_rad = math.radians(
+            self.diagonal_angle_max_deg
+        )
+        self._side_angle_max_rad = math.radians(
+            self.side_angle_max_deg
+        )
         self._side_projection_angle_min_rad = math.radians(
             self.side_projection_angle_min_deg
         )
@@ -82,11 +102,15 @@ class SectorExtractor:
             name: []
             for name in SECTOR_NAMES
         }
+        projected_side_candidates = {
+            'left': [],
+            'right': [],
+        }
+        primary_point_indexes = set()
         total_points = 0
         finite_points = 0
-        accepted_points = 0
 
-        for point in points:
+        for point_index, point in enumerate(points):
             # total/finite 统计用于区分空点云与含 NaN/Inf 的损坏点云。
             total_points += 1
             x = float(point[0])
@@ -122,17 +146,45 @@ class SectorExtractor:
                     sector_values[sector].append(lateral_distance)
                     accepted = True
 
+            if accepted:
+                primary_point_indexes.add(point_index)
+
             projected_side = self._classify_projected_side(x, y, angle)
             if projected_side is not None and projected_side != sector:
                 # Go2 真机的低矮挡板回波集中在斜前方；投影到 y 轴后
-                # 才是走廊居中和机身侧向安全检查需要的墙面净距。
+                # 还需在整帧中确认这些点沿 x 方向形成侧墙，而不是前墙。
                 lateral_distance = abs(y)
                 if lateral_distance <= self.side_max_range:
-                    sector_values[projected_side].append(lateral_distance)
-                    accepted = True
+                    projected_side_candidates[projected_side].append(
+                        (point_index, x, lateral_distance)
+                    )
 
-            if accepted:
-                accepted_points += 1
+        # 正侧点优先；正侧点不足时才使用具有足够 x 跨度的斜前投影。
+        # 前挡板通常近似固定 x，因此不会再被投影成左右两侧的假近障。
+        selected_projection_indexes = set()
+        side_sources = {}
+        for name in ('left', 'right'):
+            direct_values = sector_values[name]
+            if len(direct_values) >= self.side_min_points:
+                side_sources[name] = 'direct'
+                continue
+
+            candidates = projected_side_candidates[name]
+            selected_candidates = (
+                self._select_projected_side_candidates(candidates)
+            )
+            if selected_candidates:
+                sector_values[name] = [
+                    lateral_distance
+                    for _, _, lateral_distance in selected_candidates
+                ]
+                selected_projection_indexes.update(
+                    point_index
+                    for point_index, _, _ in selected_candidates
+                )
+                side_sources[name] = 'projected'
+            else:
+                side_sources[name] = 'none'
 
         # 使用百分位距离，避免单个飞点像“最小值”一样触发误报。
         counts = {
@@ -155,8 +207,17 @@ class SectorExtractor:
         return {
             'distances': distances,
             'counts': counts,
+            'sources': {
+                'front': 'angular',
+                'left_front': 'angular',
+                'right_front': 'angular',
+                'left': side_sources['left'],
+                'right': side_sources['right'],
+            },
             # 投影点会同时参与斜前障碍和侧墙距离，统计时只计一次。
-            'valid_points': accepted_points,
+            'valid_points': len(
+                primary_point_indexes | selected_projection_indexes
+            ),
             'finite_points': finite_points,
             'total_points': total_points,
         }
@@ -170,18 +231,24 @@ class SectorExtractor:
     def _classify_sector(self, angle):
         """按水平角将点分配到前、斜前和侧方，后方点不参与判断。"""
         half_width = 0.5 * self._front_angle_rad
-        front_side_boundary = 1.5 * self._front_angle_rad
-        side_rear_boundary = 2.5 * self._front_angle_rad
 
         if -half_width <= angle <= half_width:
             return 'front'
-        if half_width < angle <= front_side_boundary:
+        if half_width < angle <= self._diagonal_angle_max_rad:
             return 'left_front'
-        if -front_side_boundary <= angle < -half_width:
+        if -self._diagonal_angle_max_rad <= angle < -half_width:
             return 'right_front'
-        if front_side_boundary < angle <= side_rear_boundary:
+        if (
+            self._diagonal_angle_max_rad
+            < angle
+            <= self._side_angle_max_rad
+        ):
             return 'left'
-        if -side_rear_boundary <= angle < -front_side_boundary:
+        if (
+            -self._side_angle_max_rad
+            <= angle
+            < -self._diagonal_angle_max_rad
+        ):
             return 'right'
         return None
 
@@ -205,6 +272,42 @@ class SectorExtractor:
         if y < 0.0:
             return 'right'
         return None
+
+    def _select_projected_side_candidates(self, candidates):
+        """选择横向成簇且沿 x 延伸的侧墙点，排除固定 x 前墙。"""
+        if len(candidates) < self.side_min_points:
+            return ()
+
+        best_cluster = ()
+        best_score = None
+        tolerance = self.side_projection_lateral_tolerance
+        # 两组错半格的横向桶避免墙面刚好落在分桶边界，同时保持 O(n)。
+        for offset in (0.0, 0.5 * tolerance):
+            clusters = {}
+            for candidate in candidates:
+                bucket = int(math.floor(
+                    (candidate[2] + offset) / tolerance
+                ))
+                clusters.setdefault(bucket, []).append(candidate)
+
+            for cluster in clusters.values():
+                if len(cluster) < self.side_min_points:
+                    continue
+
+                x_values = [x for _, x, _ in cluster]
+                robust_x_span = (
+                    self._percentile(x_values, 90.0)
+                    - self._percentile(x_values, 10.0)
+                )
+                if robust_x_span < self.side_projection_min_x_span:
+                    continue
+
+                # 优先使用支持点更多、纵向跨度更大的稳定墙面簇。
+                score = (len(cluster), robust_x_span)
+                if best_score is None or score > best_score:
+                    best_cluster = tuple(cluster)
+                    best_score = score
+        return best_cluster
 
     @staticmethod
     def _percentile(values, percentile):
@@ -237,10 +340,14 @@ class SectorExtractor:
             self.front_max_range,
             self.side_max_range,
             self.distance_percentile,
+            self.diagonal_angle_max_deg,
+            self.side_angle_max_deg,
             self.side_projection_angle_min_deg,
             self.side_projection_angle_max_deg,
             self.side_projection_x_min,
             self.side_projection_x_max,
+            self.side_projection_min_x_span,
+            self.side_projection_lateral_tolerance,
         )
         if not all(math.isfinite(value) for value in values):
             raise ValueError('sector parameters must be finite')
@@ -252,6 +359,17 @@ class SectorExtractor:
             raise ValueError('body_y_max must be greater than body_y_min')
         if not 0.0 < self.front_angle_deg <= 72.0:
             raise ValueError('front_angle must be in (0, 72] degrees')
+        if not (
+            0.5 * self.front_angle_deg
+            < self.diagonal_angle_max_deg
+            < self.side_angle_max_deg
+            <= 180.0
+        ):
+            raise ValueError(
+                'sector angles must satisfy '
+                'front_angle/2 < diagonal_angle_max '
+                '< side_angle_max <= 180 degrees'
+            )
         if self.min_range < 0.0:
             raise ValueError('min_range must be nonnegative')
         if self.front_max_range <= self.min_range:
@@ -287,8 +405,131 @@ class SectorExtractor:
                 'side_projection_x_max must be greater than '
                 'side_projection_x_min'
             )
+        if self.side_projection_min_x_span <= 0.0:
+            raise ValueError(
+                'side_projection_min_x_span must be positive'
+            )
+        if (
+            self.side_projection_min_x_span
+            > self.side_projection_x_max
+            - self.side_projection_x_min
+        ):
+            raise ValueError(
+                'side_projection_min_x_span must fit inside '
+                'the side projection x window'
+            )
+        if not (
+            0.0
+            < self.side_projection_lateral_tolerance
+            <= self.side_max_range
+        ):
+            raise ValueError(
+                'side_projection_lateral_tolerance must be in '
+                '(0, side_max_range]'
+            )
         if self.side_min_points <= 0:
             raise ValueError('side_min_points must be positive')
+
+
+class SideDistanceStabilizer:
+    """保守稳定稀疏侧墙量测，并显式标记保留来源和帧龄。"""
+
+    def __init__(self, hold_frames, rise_tolerance_m=0.08):
+        self.hold_frames = int(hold_frames)
+        if self.hold_frames < 0:
+            raise ValueError('side hold frames must be nonnegative')
+        self.rise_tolerance_m = float(rise_tolerance_m)
+        if (
+            not math.isfinite(self.rise_tolerance_m)
+            or self.rise_tolerance_m < 0.0
+        ):
+            raise ValueError(
+                'side rise tolerance must be finite and nonnegative'
+            )
+        self.reset()
+
+    def reset(self):
+        """传感器断流或输入损坏时清空缓存，禁止复用过期墙距。"""
+        self._cached_distances = {'left': None, 'right': None}
+        self._cached_sources = {'left': 'none', 'right': 'none'}
+        self._unconfirmed_frames = {'left': 0, 'right': 0}
+
+    def update(self, extraction):
+        """返回包含侧距短时保留结果的新提取快照。"""
+        if not isinstance(extraction, dict):
+            raise ValueError('extraction must be a dict')
+        distances = dict(extraction.get('distances', {}))
+        counts = dict(extraction.get('counts', {}))
+        sources = dict(extraction.get('sources', {}))
+        hold_ages = {name: 0 for name in SECTOR_NAMES}
+
+        for name in ('left', 'right'):
+            distance = distances.get(name)
+            if distance is not None:
+                value = float(distance)
+                if not math.isfinite(value) or value < 0.0:
+                    raise ValueError(f'{name} distance must be finite')
+
+                cached = self._cached_distances[name]
+                if (
+                    cached is None
+                    or value <= cached + self.rise_tolerance_m
+                ):
+                    # 更近障碍必须立即生效；正常小幅噪声也直接更新。
+                    self._accept_measurement(
+                        name,
+                        value,
+                        sources.get(name, 'unknown'),
+                    )
+                    continue
+
+                # 近墙回波偶发消失时，远墙点仍是有限值而非 n/a。
+                # 突然变远必须连续确认，避免将远处挡板误当成侧墙开口。
+                self._unconfirmed_frames[name] += 1
+                age = self._unconfirmed_frames[name]
+                if age <= self.hold_frames:
+                    distances[name] = cached
+                    sources[name] = (
+                        'held_rise_' + self._cached_sources[name]
+                    )
+                    hold_ages[name] = age
+                    continue
+
+                self._accept_measurement(
+                    name,
+                    value,
+                    sources.get(name, 'unknown'),
+                )
+                continue
+
+            self._unconfirmed_frames[name] += 1
+            age = self._unconfirmed_frames[name]
+            cached = self._cached_distances[name]
+            if cached is not None and age <= self.hold_frames:
+                distances[name] = cached
+                counts[name] = 0
+                sources[name] = 'held_' + self._cached_sources[name]
+                hold_ages[name] = age
+            else:
+                distances[name] = None
+                counts[name] = int(counts.get(name, 0))
+                sources[name] = 'none'
+                self._cached_distances[name] = None
+                self._cached_sources[name] = 'none'
+                self._unconfirmed_frames[name] = 0
+
+        result = dict(extraction)
+        result['distances'] = distances
+        result['counts'] = counts
+        result['sources'] = sources
+        result['hold_frames'] = hold_ages
+        return result
+
+    def _accept_measurement(self, name, distance, source):
+        """接受已确认量测，并重新开始该侧的保守确认窗口。"""
+        self._cached_distances[name] = float(distance)
+        self._cached_sources[name] = str(source)
+        self._unconfirmed_frames[name] = 0
 
 
 class DryRunDecisionEngine:

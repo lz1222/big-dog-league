@@ -25,6 +25,7 @@ from maze_perception_core import (
     ADVICE_STOP,
     DryRunDecisionEngine,
     SECTOR_NAMES,
+    SideDistanceStabilizer,
     STATE_STALE,
     SectorExtractor,
     normalize_angle,
@@ -84,6 +85,13 @@ class MazePerceptionDryRun(Node):
             distance_percentile=self._finite_float_parameter(
                 'distance_percentile', 10.0
             ),
+            # 正前角度只控制 front，斜前和正侧边界独立配置。
+            diagonal_angle_max_deg=self._finite_float_parameter(
+                'diagonal_angle_max', 30.0
+            ),
+            side_angle_max_deg=self._finite_float_parameter(
+                'side_angle_max', 120.0
+            ),
             # 真机侧墙回波集中在斜前方，投影参数用于估算横向净距。
             side_projection_angle_min_deg=self._finite_float_parameter(
                 'side_projection_angle_min', 15.0
@@ -97,8 +105,24 @@ class MazePerceptionDryRun(Node):
             side_projection_x_max=self._finite_float_parameter(
                 'side_projection_x_max', 1.50
             ),
+            side_projection_min_x_span=self._positive_float_parameter(
+                'side_projection_min_x_span', 0.12
+            ),
+            side_projection_lateral_tolerance=(
+                self._positive_float_parameter(
+                    'side_projection_lateral_tolerance', 0.04
+                )
+            ),
             side_min_points=self._positive_int_parameter(
                 'side_min_points', 3
+            ),
+        )
+        self.side_stabilizer = SideDistanceStabilizer(
+            hold_frames=self._nonnegative_int_parameter(
+                'side_hold_frames', 2
+            ),
+            rise_tolerance_m=self._nonnegative_float_parameter(
+                'side_rise_tolerance', 0.08
             ),
         )
 
@@ -173,6 +197,14 @@ class MazePerceptionDryRun(Node):
             name: 0
             for name in SECTOR_NAMES
         }
+        self._sources = {
+            name: 'none'
+            for name in SECTOR_NAMES
+        }
+        self._hold_frames = {
+            name: 0
+            for name in SECTOR_NAMES
+        }
         self._valid_points = 0
         self._finite_points = 0
         self._total_points = 0
@@ -235,6 +267,7 @@ class MazePerceptionDryRun(Node):
                 + ', '.join(sorted(missing_fields))
             )
             with self._lock:
+                self.side_stabilizer.reset()
                 self._last_cloud_time = receive_time
                 self._last_cloud_error = error
                 self._evaluate_locked(receive_time, update_decision=False)
@@ -251,6 +284,7 @@ class MazePerceptionDryRun(Node):
             result = self.extractor.extract(points)
         except Exception as error:
             with self._lock:
+                self.side_stabilizer.reset()
                 self._last_cloud_time = receive_time
                 self._last_cloud_error = (
                     f'failed to read PointCloud2: {error}'
@@ -260,11 +294,20 @@ class MazePerceptionDryRun(Node):
             return
 
         with self._lock:
+            if (
+                self._last_cloud_time is None
+                or receive_time - self._last_cloud_time
+                > self.cloud_stale_timeout
+            ):
+                self.side_stabilizer.reset()
+            result = self.side_stabilizer.update(result)
             self._last_cloud_time = receive_time
             self._last_cloud_error = ''
             self._cloud_frame_id = str(msg.header.frame_id)
             self._distances = result['distances']
             self._counts = result['counts']
+            self._sources = result['sources']
+            self._hold_frames = result['hold_frames']
             self._valid_points = result['valid_points']
             self._finite_points = result['finite_points']
             self._total_points = result['total_points']
@@ -404,6 +447,8 @@ class MazePerceptionDryRun(Node):
                 'turn_deg': math.degrees(self._accumulated_yaw),
                 'distances_m': dict(self._distances),
                 'sector_counts': dict(self._counts),
+                'sector_sources': dict(self._sources),
+                'sector_hold_frames': dict(self._hold_frames),
                 'valid_points': self._valid_points,
                 'finite_points': self._finite_points,
                 'total_points': self._total_points,
@@ -431,7 +476,9 @@ class MazePerceptionDryRun(Node):
             + ' '.join(
                 f'{name}='
                 f'{self._format_distance(payload["distances_m"][name])}'
-                f'(n={payload["sector_counts"][name]})'
+                f'(n={payload["sector_counts"][name]},'
+                f'src={payload["sector_sources"][name]},'
+                f'hold={payload["sector_hold_frames"][name]})'
                 for name in SECTOR_NAMES
             )
         )
@@ -495,6 +542,13 @@ class MazePerceptionDryRun(Node):
         value = int(self.declare_parameter(name, default).value)
         if value <= 0:
             raise ValueError(f'{name} must be positive')
+        return value
+
+    def _nonnegative_int_parameter(self, name, default):
+        """声明并读取允许为零的整数参数。"""
+        value = int(self.declare_parameter(name, default).value)
+        if value < 0:
+            raise ValueError(f'{name} must be nonnegative')
         return value
 
 

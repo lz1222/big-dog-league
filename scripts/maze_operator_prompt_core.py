@@ -112,16 +112,33 @@ def build_operator_view(payload, stream_age_sec, stale_timeout_sec):
             '无法判断 B2 状态是否新鲜',
         )
     if age > timeout:
+        last_state = str(payload.get('state', '')).upper()
+        last_state_label = STATE_LABELS.get(
+            last_state,
+            last_state or '未知',
+        )
+        last_reason = translate_reason(payload.get('reason', ''))
         return _stop_view(
-            'B2 状态中断',
+            f'B2 状态中断（最后：{last_state_label}）',
             '立即松开遥控器并停止；恢复状态流后重启 B2。',
-            f'超过 {timeout:.2f}s 未收到 B2 JSON',
+            (
+                f'超过 {timeout:.2f}s 未收到 B2 JSON；'
+                f'最后原因：{last_reason}'
+            ),
         )
 
     state = str(payload.get('state', '')).upper()
     reason = str(payload.get('reason', ''))
     state_label = STATE_LABELS.get(state, f'未知状态 {state or "空值"}')
     reason_label = translate_reason(reason)
+
+    if 'missing_confirmation_' in reason:
+        return _stop_view(
+            state_label,
+            '立即松开遥控器并保持静止；等待侧向距离恢复，禁止继续前进或转向。',
+            reason_label,
+            severity='warning',
+        )
 
     if state == 'WAIT_SENSOR':
         return OperatorView(
@@ -228,6 +245,10 @@ def translate_reason(reason):
     text = str(reason or '')
     if text in REASON_LABELS:
         return REASON_LABELS[text]
+    if 'missing_confirmation_' in text:
+        base_reason, count = text.rsplit('_confirmation_', 1)
+        base_label = REASON_LABELS.get(base_reason, base_reason)
+        return f'{base_label}，暂停确认 {count}'
     prefixes = (
         ('sensor_confirmation_', '传感器连续确认 '),
         ('fine_align_confirmation_', '目标角连续确认 '),

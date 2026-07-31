@@ -89,9 +89,11 @@ B2 不会把纯原地转向视为可行方案，而是检查开放侧、斜前�
 `FAULT_STOP` 和 `FINISHED` 均锁定为零诊断速度，需重启节点才能开始新一轮。
 
 `WAIT_SENSOR` 必须连续收到左右侧墙净距后才可进入
-`CORRIDOR_FOLLOW`。进入走廊后，非预期侧距缺失会锁定
+`CORRIDOR_FOLLOW`。进入走廊后，非预期侧距缺失会先按
+`side_missing_confirm_frames` 输出零诊断速度并要求保持静止，连续缺失才锁定
 `FAULT_STOP`；接近已知拐角时，仅允许预期转向侧以无墙回波表示开口，对侧墙、
-前方和目标斜前仍须有实测距离。
+前方和目标斜前仍须有实测距离。真实测得的空间不足和完整传感器 STALE 不使用
+此宽限，仍立即锁止。
 
 ## 4. 转向安全包络
 
@@ -132,6 +134,11 @@ python3 scripts/maze_perception_dry_run.py \
 B2 的持续帧和 Yaw 微调至少需要约 `10Hz` 的 B1 JSON 快照，因此真机配置
 已将 `print_rate` 固定为10Hz。当前Foxy环境不应在加载参数文件后再用同名
 `-p` 猜测覆盖结果；启动后应使用 `ros2 param get` 核对最终值。
+
+B2 真机配置同样以 `10Hz` 输出终端 D 所需状态，并将人工操作相关的
+`corner_timeout_sec`、`turn_timeout_sec`、`reacquire_timeout_sec` 设为30秒。
+延长值只给操控员分段松杆观察留出时间，不覆盖点云/Odom STALE、侧距不足和
+扫掠空间保护。未来接入自主运动输出前，必须根据实测速度重新缩短超时。
 
 2026-07-31 入口静态标定后，B1配置已将 `front_angle` 从45度改为20度；
 45度会在57cm窄通道中把侧墙回波混入 `front`。B2的前方阈值使用
@@ -281,6 +288,7 @@ B1，再启动 B2，最后播放 rosbag。
 | `footprint_safety_margin_m` | 扫掠和碰撞附加余量 |
 | `route_directions` | 固定五次大方向 |
 | `*_confirm_frames` | 状态持续帧确认 |
+| `side_missing_confirm_frames` | 必需侧距连续缺失后锁止的确认帧数；确认中诊断速度为零 |
 | `corridor_vx` 等 | 仅用于 JSON 的候选速度 |
 | `center_kp`、`side_target_m` | 走廊居中 |
 | `corner_approach_distance_m` | 进入转弯接近状态 |
@@ -310,6 +318,7 @@ python3 -m unittest discover \
 - 开放侧和被阻塞侧的移动转向包络。
 - 侧方空间不足立即锁定 `FAULT_STOP`。
 - 走廊左右侧距缺失不会被当作开放空间。
+- 单帧侧距缺失先暂停，连续缺失才锁定故障。
 - 目标开口侧可缺测，但对侧缺测绝不允许开始转弯。
 - 斜前墙点投影为左右横向净距，并受最小点数保护。
 - 传感器 STALE 锁定 `FAULT_STOP`。
@@ -317,6 +326,15 @@ python3 -m unittest discover \
 - `LEFT, LEFT, RIGHT, RIGHT, LEFT` 全流程进入 `FINISHED`。
 
 ## 10. 仍需真机验证
+
+2026-07-31 首次左转干跑在进入 `CORNER_APPROACH` 后触发
+`corner_side_clearance_unsafe`。记录中的左右侧距同时约为 `0.14m`，后续确认
+为前挡板边缘污染 B1 侧距，不是操控员偏离中心。B2 的 `0.185m` 侧向安全阈值
+未降低。修复后的回放已能进入 `TURN_LEFT`，约完成74度后对侧侧距连续缺失，
+随后还出现 `right=0.176m` 的低余量量测；旧轨迹仍应判为未通过。静止联调中，
+单帧缺测会正确显示“停止并等待”且恢复后继续，不再立即锁死。下一次人工干跑
+必须在首次暂停提示时松杆，并通过更早开始弧线、减小转向量或重新定位获得持续
+大于 `0.185m` 的对侧余量。
 
 - `base_link` 相对机身几何中心的真实偏移。
 - 雷达对45cm白色挡板、接头和底座的稳定返回。

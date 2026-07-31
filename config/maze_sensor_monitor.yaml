@@ -17,12 +17,16 @@ pointcloud_sector_monitor:
     min_range: 0.05
     front_max_range: 3.00
     side_max_range: 2.00
+    diagonal_angle_max: 67.5
+    side_angle_max: 112.5
 
     # 侧墙正侧方无稳定回波时，从斜前墙点的 |y| 投影横向净距。
     side_projection_angle_min: 15.0
     side_projection_angle_max: 60.0
     side_projection_x_min: 0.45
     side_projection_x_max: 1.50
+    side_projection_min_x_span: 0.12
+    side_projection_lateral_tolerance: 0.04
     side_min_points: 3
 
     # 百分位必须大于零，避免退化为单个最小飞点。

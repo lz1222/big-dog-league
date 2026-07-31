@@ -100,11 +100,11 @@ python3 scripts/odom_yaw_monitor.py \
 
 | 区域 | 角度范围 | 中心方向 | 最大量程参数 |
 |---|---:|---:|---|
-| `front` | `-22.5 .. +22.5 deg` | `0 deg` | `front_max_range` |
-| `left_front` | `+22.5 .. +67.5 deg` | `+45 deg` | `front_max_range` |
-| `right_front` | `-67.5 .. -22.5 deg` | `-45 deg` | `front_max_range` |
-| `left` | 正侧方或可配置左斜前投影窗 | 左侧墙 | `side_max_range` |
-| `right` | 正侧方或可配置右斜前投影窗 | 右侧墙 | `side_max_range` |
+| `front` | `±front_angle/2` | `0 deg` | `front_max_range` |
+| `left_front` | `front_angle/2 .. diagonal_angle_max` | 左斜前 | `front_max_range` |
+| `right_front` | 对称负角度 | 右斜前 | `front_max_range` |
+| `left` | `diagonal_angle_max .. side_angle_max` 或有效左斜前投影 | 左侧墙 | `side_max_range` |
+| `right` | 对称负角度或有效右斜前投影 | 右侧墙 | `side_max_range` |
 
 前方和斜前距离是有效径向距离的 `distance_percentile`。左右距离为正侧方
 点或斜前墙点投影后的横向净距 `|y|` 百分位。这样可兼容真机对 45cm 挡板
@@ -119,13 +119,17 @@ python3 scripts/odom_yaw_monitor.py \
 | `z_min` / `z_max` | 点云 | m，`min < max` | 保留点的垂直范围 |
 | `body_x_min` / `body_x_max` | 点云 | m，`min < max` | 自身过滤矩形的前后边界 |
 | `body_y_min` / `body_y_max` | 点云 | m，`min < max` | 自身过滤矩形的左右边界 |
-| `front_angle` | 点云 | deg，`0 < value <= 72` | 每个扇区的角宽 |
+| `front_angle` | 点云 | deg，`0 < value <= 72` | 正前扇区总角宽 |
+| `diagonal_angle_max` | 点云 | deg | 斜前扇区最大绝对角度 |
+| `side_angle_max` | 点云 | deg | 正侧扇区最大绝对角度 |
 | `min_range` | 点云 | m，`>= 0` | 丢弃离原点过近的点 |
 | `front_max_range` | 点云 | m，`> 0` | 前、左前、右前最大距离 |
 | `side_max_range` | 点云 | m，`> 0` | 左、右最大距离 |
 | `distance_percentile` | 点云 | `%`，`0 < value <= 100` | 每个扇区的距离百分位数 |
 | `side_projection_angle_min/max` | 点云 | deg | 侧墙斜前投影角度窗 |
 | `side_projection_x_min/max` | 点云 | m | 侧墙投影前向 x 窗口 |
+| `side_projection_min_x_span` | 点云 | m，`> 0` | 排除固定 x 前挡板的最小投影跨度 |
+| `side_projection_lateral_tolerance` | 点云 | m，`> 0` | 同一投影侧墙簇允许的横向厚度 |
 | `side_min_points` | 点云 | 正整数 | 单侧墙距离所需最少点数 |
 | `stale_timeout` | 两者 | s，`> 0` | 超过此消息间隔后显示 `STALE` |
 | `print_rate` | 两者 | Hz，`> 0` | 状态日志输出频率 |

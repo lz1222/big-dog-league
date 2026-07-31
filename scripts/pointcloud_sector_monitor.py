@@ -63,6 +63,12 @@ class PointCloudSectorMonitor(Node):
         self.distance_percentile = self._finite_float_parameter(
             'distance_percentile', 10.0
         )
+        self.diagonal_angle_max = self._finite_float_parameter(
+            'diagonal_angle_max', 67.5
+        )
+        self.side_angle_max = self._finite_float_parameter(
+            'side_angle_max', 112.5
+        )
         self.side_projection_angle_min = self._finite_float_parameter(
             'side_projection_angle_min', 15.0
         )
@@ -74,6 +80,16 @@ class PointCloudSectorMonitor(Node):
         )
         self.side_projection_x_max = self._finite_float_parameter(
             'side_projection_x_max', 1.50
+        )
+        self.side_projection_min_x_span = (
+            self._positive_float_parameter(
+                'side_projection_min_x_span', 0.12
+            )
+        )
+        self.side_projection_lateral_tolerance = (
+            self._positive_float_parameter(
+                'side_projection_lateral_tolerance', 0.04
+            )
         )
         self.side_min_points = self._positive_int_parameter(
             'side_min_points', 3
@@ -96,6 +112,8 @@ class PointCloudSectorMonitor(Node):
             front_max_range=self.front_max_range,
             side_max_range=self.side_max_range,
             distance_percentile=self.distance_percentile,
+            diagonal_angle_max_deg=self.diagonal_angle_max,
+            side_angle_max_deg=self.side_angle_max,
             side_projection_angle_min_deg=(
                 self.side_projection_angle_min
             ),
@@ -104,6 +122,12 @@ class PointCloudSectorMonitor(Node):
             ),
             side_projection_x_min=self.side_projection_x_min,
             side_projection_x_max=self.side_projection_x_max,
+            side_projection_min_x_span=(
+                self.side_projection_min_x_span
+            ),
+            side_projection_lateral_tolerance=(
+                self.side_projection_lateral_tolerance
+            ),
             side_min_points=self.side_min_points,
         )
 
@@ -119,6 +143,10 @@ class PointCloudSectorMonitor(Node):
         }
         self._last_sector_counts = {
             name: 0
+            for name in SECTOR_NAMES
+        }
+        self._last_sector_sources = {
+            name: 'none'
             for name in SECTOR_NAMES
         }
         self._last_error = ''
@@ -190,6 +218,7 @@ class PointCloudSectorMonitor(Node):
             self._last_valid_points = result['valid_points']
             self._last_distances = result['distances']
             self._last_sector_counts = result['counts']
+            self._last_sector_sources = result['sources']
             self._last_error = ''
             self._missing_fields_reported = False
 
@@ -202,6 +231,7 @@ class PointCloudSectorMonitor(Node):
             valid_points = self._last_valid_points
             distances = dict(self._last_distances)
             counts = dict(self._last_sector_counts)
+            sources = dict(self._last_sector_sources)
             receive_times = list(self._receive_times)
             last_error = self._last_error
 
@@ -221,7 +251,7 @@ class PointCloudSectorMonitor(Node):
             f'valid_points={valid_points}/{total_points} '
             + ' '.join(
                 f'{name}={self._format_distance(distances[name])}'
-                f'(n={counts[name]})'
+                f'(n={counts[name]},src={sources[name]})'
                 for name in SECTOR_NAMES
             )
         )

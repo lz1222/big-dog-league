@@ -95,10 +95,26 @@ exit 大于 enter，障碍距离处于两者之间时保持原状态，避免边
 当前 `/utlidar/cloud_base` 的 `frame_id` 为 `base_link`，因此这些值不能直接
 等同于从物理雷达外壳起量的卷尺距离。
 `left`、`right` 输出墙面到 `base_link` 中线的横向净距 `|y|`。真机 45cm
-挡板在正侧方没有稳定回波，因此侧距同时接受
+挡板在正侧方没有稳定回波，因此侧距在正侧点不足时接受
 `side_projection_angle_min..max` 范围内、位于
 `side_projection_x_min..max` 前向窗口中的斜视墙点。一个斜前点可同时支持
 斜前障碍距离和侧墙净距，但 `valid_points` 只计一次。
+
+`front_angle` 只定义正前总角宽，`diagonal_angle_max` 和
+`side_angle_max` 独立定义斜前、正侧边界。真实正侧点达到
+`side_min_points` 时优先使用；否则斜前候选点必须沿 x 方向达到
+`side_projection_min_x_span`，并在横向
+`side_projection_lateral_tolerance` 内形成墙面簇，才可投影为侧墙。该检查用于
+拒绝近似固定 x 的前挡板边缘，避免它在拐角前被误报为左右两侧同时只有约14cm。
+
+低矮挡板可能在相邻点云帧中交替缺少左、右侧回波。B1 使用
+`side_hold_frames` 对每侧最近有效距离做短时保留，并通过
+`sector_sources=held_direct/held_projected` 和 `sector_hold_frames` 明确标记。
+近墙回波消失时，远处挡板仍可能产生有限距离而不是 `n/a`；因此超过
+`side_rise_tolerance` 的突然变远也要连续确认，保留期间来源标记为
+`held_rise_direct/held_rise_projected`。更近的有效量测会立即覆盖缓存；连续缺测
+或变远超过上限、点云断流或解析失败都会清空缓存，因此该机制不能跨传感器失效
+继续提供旧墙距。
 
 进入 `BLOCKED` 后比较：
 
@@ -121,6 +137,8 @@ right_score = min(right_front, right)
 | 参数 | 作用 |
 |---|---|
 | `front_angle` | 正前扇区总角宽；窄通道过大会混入两侧挡板 |
+| `diagonal_angle_max` | 斜前扇区相对正前的最大绝对角度 |
+| `side_angle_max` | 正侧扇区最大绝对角度，之后视为后方 |
 | `front_block_enter/exit` | 正前方障碍进入/退出阈值 |
 | `diagonal_block_enter/exit` | 左前、右前障碍进入/退出阈值 |
 | `blocked_confirm_frames` | 障碍成立所需连续点云帧 |
@@ -134,7 +152,11 @@ right_score = min(right_front, right)
 | `min_finite_points` | 每帧允许的最低非 NaN/Inf 点数 |
 | `side_projection_angle_min/max` | 可投影为侧墙的斜前角度窗口 |
 | `side_projection_x_min/max` | 侧墙投影使用的前向 x 窗口 |
+| `side_projection_min_x_span` | 投影点必须覆盖的最小纵向 x 跨度 |
+| `side_projection_lateral_tolerance` | 同一投影墙面簇允许的横向厚度 |
 | `side_min_points` | 输出单侧墙距离所需的最少点数 |
+| `side_hold_frames` | 单侧稀疏缺测时保留最近有效值的最大帧数 |
+| `side_rise_tolerance` | 无需持续帧确认即可接受的单帧侧距增大量 |
 
 最终阈值必须使用 B0 五方向纸箱测试和实际停止距离确定。
 
@@ -153,6 +175,14 @@ right_score = min(right_front, right)
   左右侧距最小值分别为 `0.242m` 和 `0.219m`，两路新鲜度均通过。
 - 同一位置使用45度配置时，`front` 会在约 `0.65..1.20m` 间跳变并持续
   `BLOCKED`。因此B1真机配置改用20度，并增加窄通道侧墙回归测试。
+
+2026-07-31 首次左转人工干跑在 `CORNER_APPROACH` 进入
+`FAULT_STOP/corner_side_clearance_unsafe`。故障后样本中 `front` 约
+`0.47m`，左右侧距同时降到约 `0.14m`，但居中误差接近零。代码审计确认旧实现
+会把约 `x=0.47m` 的前挡板边缘投影为左右侧墙，且20度 `front_angle` 会连带
+把直接侧扇区压缩到30至50度。现已解耦扇区边界、优先直接侧墙并增加投影 x
+跨度检查。该修复必须通过本次 rosbag 回放和原位静态复测后，才能重新开始
+人工行走，当前不记录为真机 PASS。
 
 以上只确认静止距离的稳定性和变化方向。`base_link` 到物理雷达的精确安装
 偏移、动态接近拐角、五次转向和全程零碰撞仍需继续真机验证。

@@ -5,7 +5,8 @@ maze_navigation_dry_run:
     navigation_status_topic: /maze/navigation/dry_run_status
     input_stale_timeout_sec: 0.80
     evaluation_rate: 20.0
-    print_rate: 2.0
+    # 人工操控终端 D 需要及时看到转角和暂停确认状态。
+    print_rate: 10.0
 
     # 固定拓扑只约束大方向，实际转角和居中仍由雷达与 Odom 闭环。
     route_directions: [LEFT, LEFT, RIGHT, RIGHT, LEFT]
@@ -27,6 +28,8 @@ maze_navigation_dry_run:
 
     # 每项状态转换所需连续 B1 帧数。
     sensor_confirm_frames: 3
+    # 单帧侧距缺失先输出零诊断速度，第2帧仍缺失才锁定故障。
+    side_missing_confirm_frames: 2
     corner_confirm_frames: 3
     turn_confirm_frames: 3
     reacquire_confirm_frames: 5
@@ -69,10 +72,11 @@ maze_navigation_dry_run:
     turn_tolerance_deg: 4.0
     reacquire_yaw_tolerance_deg: 7.0
 
-    # 超时一律进入 FAULT_STOP；反向因无后扇区只能保留为诊断候选。
-    corner_timeout_sec: 6.0
-    turn_timeout_sec: 8.0
-    reacquire_timeout_sec: 5.0
+    # 人工干跑允许操控员分段松杆观察；空间不足和STALE仍会立即锁止。
+    # 接入自主运动前必须按实测速度重新缩短这些人工超时值。
+    corner_timeout_sec: 30.0
+    turn_timeout_sec: 30.0
+    reacquire_timeout_sec: 30.0
     reverse_timeout_sec: 1.0
 
 maze_navigation_simulator:
