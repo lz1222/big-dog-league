@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import math
+from typing import Any, Dict, Optional
 
 
 SEQUENCER_STATES = frozenset((
@@ -23,7 +24,9 @@ class WhiteBarStageCommandEvent:
     """One sequencer outcome for a ROS topic adapter."""
 
     action: str
-    command_payload: dict | None
+    # Foxy 使用 Python 3.8，不能在模块导入时求值 PEP 604 的 ``dict | None``。
+    # 保持 payload 允许为空的既有协议，改用 3.8 可执行的 typing 写法。
+    command_payload: Optional[Dict[str, Any]]
     run_id: str
     sequence: int
     requested_stage: str

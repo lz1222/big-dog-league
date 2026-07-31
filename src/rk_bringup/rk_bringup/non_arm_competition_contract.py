@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import math
 import os
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 
 DEFAULT_IMAGE_TOPIC = '/camera/camera/color/image_raw'
@@ -76,7 +76,7 @@ class ReadinessCheck:
     detail: str
     critical: bool = True
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self) -> Dict[str, Any]:
         """返回可安全编码成 JSON 的检查结果。"""
         return {
             'name': self.name,
@@ -108,7 +108,7 @@ def hardware_processes_allowed(
     )
 
 
-def smoke_test_helper_status(path: Any) -> tuple[bool, str]:
+def smoke_test_helper_status(path: Any) -> Tuple[bool, str]:
     """验证 smoke helper 是带固定标识、可执行且绝对路径的 ELF。
 
     读取限制防止 readiness 因异常大文件阻塞；任何软链接、脚本、无标识 ELF
@@ -174,7 +174,7 @@ def validate_timeout_relationships(
     line_course_parameters: Mapping[str, Any],
     *,
     margin_seconds: float = 3.0,
-) -> tuple[float, float, float]:
+) -> Tuple[float, float, float]:
     """验证白横线执行器与路线节点的超时层级，失败时 fail-closed。"""
     if not math.isfinite(float(margin_seconds)) or margin_seconds < 0.0:
         raise ValueError('margin_seconds must be finite and nonnegative')
@@ -238,7 +238,7 @@ def is_zero_twist(values: Iterable[Any], epsilon: float = 0.001) -> bool:
     )
 
 
-def json_object(raw: Any) -> dict[str, Any] | None:
+def json_object(raw: Any) -> Optional[Dict[str, Any]]:
     """安全解析状态 topic 的 JSON object，错误输入不抛给控制循环。"""
     import json
 
@@ -251,7 +251,9 @@ def json_object(raw: Any) -> dict[str, Any] | None:
     return decoded if isinstance(decoded, dict) else None
 
 
-def status_is_terminal_or_idle(status: Mapping[str, Any] | None) -> bool:
+def status_is_terminal_or_idle(
+    status: Optional[Mapping[str, Any]],
+) -> bool:
     """只有明确的 idle/terminal 状态才允许 readiness 放行。"""
     if not isinstance(status, Mapping):
         return False
@@ -268,7 +270,7 @@ def status_is_terminal_or_idle(status: Mapping[str, Any] | None) -> bool:
     }
 
 
-def route_is_wait_start(state: Mapping[str, Any] | None) -> bool:
+def route_is_wait_start(state: Optional[Mapping[str, Any]]) -> bool:
     """确认任务尚未启动，避免 readiness 对进行中任务错误放行。"""
     if not isinstance(state, Mapping):
         return False

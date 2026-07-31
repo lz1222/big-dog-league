@@ -1,6 +1,7 @@
 """Static and pure-unit guards for the formal non-arm competition launch."""
 
 import ast
+import importlib
 from pathlib import Path
 import sys
 
@@ -12,6 +13,12 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PACKAGE_ROOT.parents[1]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
+for package_name in ('rk_navigation', 'rk_mission', 'rk_locomotion'):
+    package_root = WORKSPACE_ROOT / 'src' / package_name
+    if str(package_root) not in sys.path:
+        # 直接 pytest 与 colcon test 均须导入当前源码，避免安装覆盖层过期时
+        # 把 Python 3.8 注解兼容检查错误地落在旧版本模块上。
+        sys.path.insert(0, str(package_root))
 
 from rk_bringup.non_arm_competition_contract import (  # noqa: E402
     DEFAULT_IMAGE_TOPIC,
@@ -33,6 +40,46 @@ FORMAL_CONFIG = (
 )
 FORMAL_LAUNCH = (
     PACKAGE_ROOT / 'launch' / 'competition_non_arm.launch.py'
+)
+PYTHON38_COMPATIBILITY_FILES = (
+    PACKAGE_ROOT / 'rk_bringup' / 'non_arm_competition_contract.py',
+    PACKAGE_ROOT / 'rk_bringup' / 'competition_readiness_node.py',
+    PACKAGE_ROOT / 'rk_bringup' / 'non_arm_smoke_publisher.py',
+    WORKSPACE_ROOT / 'src/rk_navigation/rk_navigation/line_follower_node.py',
+    WORKSPACE_ROOT / 'src/rk_navigation/rk_navigation/start_ready_core.py',
+    WORKSPACE_ROOT / 'src/rk_mission/rk_mission/inspection_action_core.py',
+    WORKSPACE_ROOT / 'src/rk_mission/rk_mission/line_course_mission_node.py',
+    WORKSPACE_ROOT / 'src/rk_mission/rk_mission/non_arm_route_phase_core.py',
+    WORKSPACE_ROOT / 'src/rk_mission/rk_mission/white_bar_action_core.py',
+    WORKSPACE_ROOT / 'src/rk_mission/rk_mission/white_bar_action_executor_node.py',
+    WORKSPACE_ROOT / 'src/rk_mission/rk_mission/white_bar_stage_command_core.py',
+    WORKSPACE_ROOT / 'src/rk_mission/rk_mission/white_bar_stage_command_publisher_node.py',
+    WORKSPACE_ROOT / 'src/rk_locomotion/rk_locomotion/front_jump_supervisor.py',
+    WORKSPACE_ROOT / 'src/rk_locomotion/rk_locomotion/gait_control_node.py',
+    WORKSPACE_ROOT / 'src/rk_safety/rk_safety/command_mux_node.py',
+    WORKSPACE_ROOT / 'src/rk_navigation/test/test_start_ready_core.py',
+    WORKSPACE_ROOT / 'src/rk_mission/test/test_inspection_action_core.py',
+    WORKSPACE_ROOT / 'src/rk_mission/test/test_non_arm_route_phase_core.py',
+    WORKSPACE_ROOT / 'src/rk_mission/test/test_white_bar_action_core.py',
+    WORKSPACE_ROOT / 'src/rk_mission/test/test_white_bar_stage_command_core.py',
+    WORKSPACE_ROOT / 'src/rk_locomotion/test/test_front_jump_supervisor.py',
+)
+PYTHON38_CORE_IMPORTS = (
+    'rk_bringup.non_arm_competition_contract',
+    'rk_bringup.competition_readiness_node',
+    'rk_bringup.non_arm_smoke_publisher',
+    'rk_navigation.start_ready_core',
+    'rk_navigation.line_follower_node',
+    'rk_mission.inspection_action_core',
+    'rk_mission.non_arm_route_phase_core',
+    'rk_mission.white_bar_action_core',
+    'rk_mission.white_bar_stage_command_core',
+    'rk_mission.line_course_mission_node',
+    'rk_mission.white_bar_action_executor_node',
+    'rk_mission.white_bar_stage_command_publisher_node',
+    'rk_locomotion.front_jump_supervisor',
+    'rk_locomotion.gait_control_node',
+    'rk_safety.command_mux_node',
 )
 
 
@@ -59,6 +106,47 @@ def node_executables_from_launch():
     return executables
 
 
+def annotation_nodes(tree):
+    """提取模块、函数和参数标注，供 Python 3.8 静态兼容检查复用。"""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign):
+            yield node.annotation
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.returns is not None:
+                yield node.returns
+            arguments = (
+                list(node.args.posonlyargs)
+                + list(node.args.args)
+                + list(node.args.kwonlyargs)
+            )
+            if node.args.vararg is not None:
+                arguments.append(node.args.vararg)
+            if node.args.kwarg is not None:
+                arguments.append(node.args.kwarg)
+            for argument in arguments:
+                if argument.annotation is not None:
+                    yield argument.annotation
+
+
+def python38_annotation_violation(annotation):
+    """拒绝 Python 3.8 会在导入时求值失败的现代标注表达式。"""
+    for candidate in ast.walk(annotation):
+        if (
+            isinstance(candidate, ast.BinOp)
+            and isinstance(candidate.op, ast.BitOr)
+        ):
+            return 'PEP 604 union'
+        if (
+            isinstance(candidate, ast.Subscript)
+            and isinstance(candidate.value, ast.Name)
+            and candidate.value.id in {'list', 'dict', 'tuple', 'set'}
+        ):
+            return 'PEP 585 built-in generic {}'.format(
+                candidate.value.id
+            )
+    return ''
+
+
 def test_formal_timeout_chain_exceeds_each_front_jump_profile_by_margin():
     """配置漂移不能把 executor/mission 超时缩短到 FrontJump 内。"""
     config = read_formal_config()
@@ -69,7 +157,6 @@ def test_formal_timeout_chain_exceeds_each_front_jump_profile_by_margin():
     start_total, finish_total, executor_timeout = (
         validate_timeout_relationships(gait, executor, mission)
     )
-
     assert start_total == pytest.approx(17.0)
     assert finish_total == pytest.approx(17.0)
     assert executor_timeout == pytest.approx(22.0)
@@ -80,6 +167,34 @@ def test_formal_timeout_chain_exceeds_each_front_jump_profile_by_margin():
     assert mission['front_jump_finish_worst_case_duration_sec'] == (
         pytest.approx(finish_total)
     )
+
+
+def test_python38_formal_sources_use_legacy_runtime_safe_annotations():
+    """Foxy/Python 3.8 导入前拒绝 PEP 585/604 标注，避免 Humble 掩盖错误。"""
+    violations = []
+    for source_path in PYTHON38_COMPATIBILITY_FILES:
+        source = source_path.read_text(encoding='utf-8')
+        tree = ast.parse(
+            source,
+            filename=str(source_path),
+        )
+        for annotation in annotation_nodes(tree):
+            reason = python38_annotation_violation(annotation)
+            if reason:
+                violations.append(
+                    '{}:{} {}'.format(
+                        source_path.relative_to(WORKSPACE_ROOT),
+                        annotation.lineno,
+                        reason,
+                    )
+                )
+    assert not violations, '\n'.join(violations)
+
+
+def test_python38_core_modules_remain_importable_after_annotation_scan():
+    """正式链核心模块必须实际导入，不能仅依赖静态扫描。"""
+    for module_name in PYTHON38_CORE_IMPORTS:
+        assert importlib.import_module(module_name) is not None
 
 
 def test_timeout_chain_rejects_exact_margin_or_shorter_values():

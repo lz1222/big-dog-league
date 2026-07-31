@@ -3944,6 +3944,28 @@ class GaitControlNode(Node):
         self._ros_cleanup_allowed.clear()
         self.request_shutdown()
 
+    def destroy_node(self):
+        """先销毁 ActionServer，再交给 Node 释放其余 ROS 实体。
+
+        Foxy 的 ActionServer 在 Node/Context 已释放后才由 ``__del__`` 回收时
+        会触发 InvalidHandle。正式 main 已先排空 worker；这里仍将 server 引用
+        清空并显式 destroy，使普通节点销毁和测试夹具均保持 ActionServer ->
+        Node -> Context 的确定顺序。
+        """
+        self.request_shutdown()
+        action_server = self.action_server
+        self.action_server = None
+        if action_server is not None:
+            try:
+                action_server.destroy()
+            except Exception:
+                # Context 已关闭时 Foxy/Humble 都可能拒绝访问 native handle。
+                # 此分支不掩盖有效 context 下的错误；仅避免已经失效的 handle
+                # 在析构阶段再次报错，同时所有 worker 仍由 main 的 drain 处理。
+                if self.context.ok():
+                    raise
+        return super().destroy_node()
+
     def drain_shutdown_step(self, *, allow_ros):
         """Perform a bounded cleanup retry outside the on-shutdown callback."""
 
