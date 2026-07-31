@@ -26,12 +26,14 @@ setup(
         'console_scripts': [
             'mission_state_machine_node = rk_mission.mission_state_machine_node:main',
             'line_course_mission_node = '
-            'rk_mission.mission_state_machine_node:line_course_main',
+            'rk_mission.line_course_mission_node:main',
             'white_bar_action_executor = '
             'rk_mission.white_bar_action_executor_node:main',
             'white_bar_stage_command_publisher = '
             'rk_mission.white_bar_stage_command_publisher_node:main',
             'sign_action_executor_node = rk_mission.sign_action_executor_node:main',
+            'inspection_action_executor = '
+            'rk_mission.inspection_action_executor_node:main',
             'national_mission_node = rk_mission.national_mission_node:main',
         ],
     },

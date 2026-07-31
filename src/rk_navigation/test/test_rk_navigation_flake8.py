@@ -13,13 +13,16 @@
 # limitations under the License.
 
 from ament_flake8.main import main_with_errors
+from pathlib import Path
 import pytest
 
 
 @pytest.mark.flake8
 @pytest.mark.linter
 def test_flake8():
-    rc, errors = main_with_errors(argv=[])
+    # 直接从工作区运行 pytest 时，仍只检查本 ROS 包，避免误扫排除模块。
+    package_root = Path(__file__).resolve().parents[1]
+    rc, errors = main_with_errors(argv=[str(package_root)])
     assert rc == 0, \
         'Found %d code style errors / warnings:\n' % len(errors) + \
         '\n'.join(errors)

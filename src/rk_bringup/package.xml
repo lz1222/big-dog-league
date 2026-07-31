@@ -1,7 +1,7 @@
 <package format="3">
   <name>rk_bringup</name>
   <version>0.0.1</version>
-  <description>Launch files for the RK inspection robot mock system.</description>
+  <description>Bringup and acceptance tooling for the RK inspection robot.</description>
   <maintainer email="2605128876@qq.com">ZhenLi</maintainer>
   <license>MIT</license>
 
@@ -10,19 +10,24 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rk_perception</exec_depend>
   <exec_depend>rk_navigation</exec_depend>
-  <exec_depend>rk_config</exec_depend>
   <exec_depend>rk_locomotion</exec_depend>
   <exec_depend>rk_go2_sdk_bridge</exec_depend>
-  <exec_depend>rk_unitree_driver</exec_depend>
-  <exec_depend>rk_tools</exec_depend>
+  <!--
+    非机械臂正式 launch 不使用 rk_config、rk_unitree_driver 或 rk_tools。
+    它们只由保留的旧 mock/避障/键盘入口在运行时按需解析；不将它们列为
+    bringup 的通用运行依赖，才能让正式验收的隔离 packages-select overlay
+    不意外引入排除范围的包。
+  -->
   <exec_depend>rk_mission</exec_depend>
   <exec_depend>rk_safety</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>rk_interfaces</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>rqt_image_view</exec_depend>
 

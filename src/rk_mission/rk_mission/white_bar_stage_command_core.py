@@ -58,19 +58,26 @@ class WhiteBarStageCommandSequencer:
             'command_ack_timeout_sec'
         )
         if type(max_command_retries) is not int or max_command_retries < 0:
-            raise ValueError('max_command_retries must be a nonnegative integer')
+            raise ValueError(
+                'max_command_retries must be a nonnegative integer'
+            )
         self.max_command_retries = max_command_retries
         self.finish_milestone_state = finish_milestone_state
         self._reset_to_idle()
 
     def mission_start(self, now=0.0):
-        """Start a new sequencing cycle without inventing a run identifier."""
+        """Start one sequencing cycle; duplicate start must not reset it."""
         self._set_now(now)
+        if self.state != 'IDLE':
+            return self._event('STATUS', 'mission_start_duplicate_ignored')
         self._reset_for_new_mission()
         return self._event('STATUS', 'mission_start_waiting_for_run')
 
     def mission_stop(self, now=0.0):
-        """Forget the active run without sending a conflicting reset command."""
+        """清除活动 run，不发送冲突的复位命令。
+
+        受控停机期间可重复调用，保证 stop 幂等。
+        """
         self._set_now(now)
         self._reset_to_idle()
         return self._event('STATUS', 'mission_stop_reset_to_idle')
@@ -109,14 +116,39 @@ class WhiteBarStageCommandSequencer:
         return self._event('STATUS', 'stage_status_not_current_ack')
 
     def on_line_course_state(self, payload, now=0.0):
-        """Latch only the configured red-action milestone for the active run."""
+        """只锁存活动 run 的红圈里程碑。
+
+        不以白线数量推断。
+        """
         self._set_now(now)
         line_state = self._validated_line_course_state(payload)
         if line_state is None:
             return self._event('STATUS', 'line_course_state_invalid')
         if self.state == 'IDLE':
-            return self._event('STATUS', 'line_course_state_ignored_not_started')
+            return self._event(
+                'STATUS',
+                'line_course_state_ignored_not_started',
+            )
         if not line_state['mission_started']:
+            # /mission/start 为广播；两个回调的先后没有保证。
+            # 进入 WAIT_RUN 时仍可能收到旧 WAIT_START。
+            # 必须等待新 started/run 状态，不能误故障。
+            if self.state == 'WAIT_RUN' and not self.run_id:
+                return self._event(
+                    'STATUS',
+                    'line_course_state_waiting_for_mission_start',
+                )
+            if (
+                line_state['state'] == 'WAIT_START'
+                and not line_state['white_bar_stage_run_id']
+            ):
+                # /mission/stop 与 line-course 状态发布也是两个独立回调。看到
+                # 明确的无 run WAIT_START 代表受控复位，不能把正常停机报成 fault。
+                self._reset_to_idle()
+                return self._event(
+                    'STATUS',
+                    'line_course_mission_stop_observed',
+                )
             return self._fault('line_course_mission_not_started')
         if line_state['state'] == 'EMERGENCY_STOP':
             return self._fault('line_course_emergency_stop')
@@ -124,15 +156,26 @@ class WhiteBarStageCommandSequencer:
             line_state['state'] == 'FINAL_STOP'
             and not self.finish_completed
         ):
-            return self._fault('line_course_final_stop_before_finish_completed')
+            return self._fault(
+                'line_course_final_stop_before_finish_completed'
+            )
         if not self.run_id:
             return self._event('STATUS', 'line_course_state_waiting_for_run')
         if not line_state['white_bar_stage_run_id']:
-            return self._event('STATUS', 'line_course_state_ignored_empty_run_id')
+            return self._event(
+                'STATUS',
+                'line_course_state_ignored_empty_run_id',
+            )
         if line_state['white_bar_stage_run_id'] != self.run_id:
-            return self._event('STATUS', 'line_course_state_run_id_mismatch')
+            return self._event(
+                'STATUS',
+                'line_course_state_run_id_mismatch',
+            )
         if line_state['state'] != self.finish_milestone_state:
-            return self._event('STATUS', 'line_course_state_not_finish_milestone')
+            return self._event(
+                'STATUS',
+                'line_course_state_not_finish_milestone',
+            )
 
         self.finish_milestone_seen = True
         if self.start_completed and self.state == 'WAIT_FINISH_MILESTONE':
@@ -147,7 +190,10 @@ class WhiteBarStageCommandSequencer:
         self._set_now(now)
         if self.state not in ('START_PENDING', 'FINISH_PENDING'):
             return self._event('NONE', 'no_pending_command')
-        if self._pending_started_at is None or self._pending_last_sent_at is None:
+        if (
+            self._pending_started_at is None
+            or self._pending_last_sent_at is None
+        ):
             return self._fault('pending_command_clock_missing')
         if now - self._pending_started_at >= self.command_ack_timeout_sec:
             return self._fault('command_ack_timeout')
@@ -193,7 +239,10 @@ class WhiteBarStageCommandSequencer:
                     2,
                     'start_completed_after_finish_milestone'
                 )
-            return self._event('STATUS', 'start_completed_waiting_for_milestone')
+            return self._event(
+                'STATUS',
+                'start_completed_waiting_for_milestone',
+            )
         if self.state == 'START_PENDING':
             self._clear_pending()
             self.state = 'START_ACKED'
@@ -204,7 +253,10 @@ class WhiteBarStageCommandSequencer:
         if status['motion_name'] == 'start_jump':
             return self._fault('finish_stage_mapped_to_start_jump')
         if status['motion_name'] not in ('', 'finish_jump'):
-            return self._event('STATUS', 'finish_stage_motion_not_acknowledged')
+            return self._event(
+                'STATUS',
+                'finish_stage_motion_not_acknowledged',
+            )
         if status['state'] == 'FINISH_COMPLETED':
             self._clear_pending()
             self.finish_completed = True
@@ -215,7 +267,10 @@ class WhiteBarStageCommandSequencer:
             self._clear_pending()
             self.state = 'FINISH_ACKED'
             return self._event('STATUS', 'finish_command_acknowledged')
-        return self._event('STATUS', 'finish_command_acknowledged_already')
+        return self._event(
+            'STATUS',
+            'finish_command_acknowledged_already',
+        )
 
     def _is_start_status(self, status):
         state = status['state']
@@ -231,7 +286,10 @@ class WhiteBarStageCommandSequencer:
             return False
         if status['last_sequence'] < 2:
             return False
-        return state == 'FINISH_COMPLETED' or status['active_stage'] == 'FINISH'
+        return (
+            state == 'FINISH_COMPLETED'
+            or status['active_stage'] == 'FINISH'
+        )
 
     def _begin_command(self, stage, sequence, reason):
         self.sequence = sequence

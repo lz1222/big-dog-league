@@ -104,6 +104,39 @@ def test_mission_start_enters_wait_run_without_a_command():
     assert event.command_payload is None
 
 
+def test_start_callback_race_waits_for_line_course_to_start_not_faulted():
+    """同一 /mission/start 的跨节点回调没有顺序，旧 WAIT_START 必须可忽略。"""
+    sequencer = _sequencer()
+    sequencer.mission_start(1.0)
+
+    event = sequencer.on_line_course_state(
+        _line_state(mission_started=False, run_id=''),
+        1.01,
+    )
+
+    assert event.action == 'STATUS'
+    assert event.state == 'WAIT_RUN'
+    assert event.reason == 'line_course_state_waiting_for_mission_start'
+    command = sequencer.on_stage_status(_stage_status(), 1.02)
+    assert command.action == 'SEND_COMMAND'
+    assert command.command_payload['stage'] == 'START'
+
+
+def test_line_course_stop_state_resets_active_sequencer_without_fault():
+    """mission stop 的 WAIT_START 状态不能被跨回调顺序误判为阶段违规。"""
+    sequencer = _sequencer()
+    _start_pending(sequencer)
+
+    event = sequencer.on_line_course_state(
+        _line_state(state='WAIT_START', mission_started=False, run_id=''),
+        0.1,
+    )
+
+    assert event.action == 'STATUS'
+    assert event.state == 'IDLE'
+    assert event.reason == 'line_course_mission_stop_observed'
+
+
 def test_stage_status_before_mission_start_is_ignored():
     sequencer = _sequencer()
 
