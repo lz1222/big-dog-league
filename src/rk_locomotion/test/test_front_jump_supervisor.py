@@ -1404,10 +1404,21 @@ def guard_operation(identity='json-1'):
     }
 
 
+def secure_guard_path(tmp_path, filename='guard.json'):
+    """为正常 Guard 测试建立与生产规则一致的专用安全父目录。"""
+    directory = tmp_path / 'secure-guard-{}'.format(uuid.uuid4().hex)
+    directory.mkdir(mode=0o700)
+    # pytest 的 tmp_path 权限会随宿主系统和 pytest 版本变化；显式设置并验证
+    # 仅测试夹具，使生产端对既有不安全目录的 fail-closed 语义保持不变。
+    os.chmod(str(directory), 0o700)
+    assert stat_mode(directory) == 0o700
+    return directory / filename
+
+
 def test_cleanup_guard_atomic_round_trip_permissions_and_unique_fault_id(
     tmp_path,
 ):
-    guard_path = tmp_path / 'runtime' / 'front_jump_guard.json'
+    guard_path = secure_guard_path(tmp_path, 'front_jump_guard.json')
     guard = PersistentCleanupGuard(
         guard_path,
         boot_id_reader=lambda: 'boot-a',
@@ -1432,7 +1443,7 @@ def stat_mode(path):
 
 def test_cleanup_guard_rejects_old_fault_id(tmp_path):
     guard = PersistentCleanupGuard(
-        tmp_path / 'guard.json',
+        secure_guard_path(tmp_path),
         boot_id_reader=lambda: 'boot-a',
     )
     current = guard.begin_dirty(guard_operation())
@@ -1445,7 +1456,7 @@ def test_cleanup_guard_rejects_old_fault_id(tmp_path):
 
 def test_cleanup_guard_never_overwrites_an_armed_fault_id(tmp_path):
     guard = PersistentCleanupGuard(
-        tmp_path / 'guard.json',
+        secure_guard_path(tmp_path),
         boot_id_reader=lambda: 'boot-a',
     )
     first = guard.begin_dirty(guard_operation('json-first'))
@@ -1474,7 +1485,7 @@ def test_cleanup_guard_corrupt_or_unknown_schema_fails_closed(
     tmp_path,
     payload,
 ):
-    guard_path = tmp_path / 'guard.json'
+    guard_path = secure_guard_path(tmp_path)
     guard_path.write_bytes(payload)
     os.chmod(str(guard_path), 0o600)
     guard = PersistentCleanupGuard(
@@ -1512,7 +1523,7 @@ def test_cleanup_guard_nested_type_errors_fail_closed(
     tmp_path,
     mutate,
 ):
-    guard_path = tmp_path / 'guard.json'
+    guard_path = secure_guard_path(tmp_path)
     guard = PersistentCleanupGuard(
         guard_path,
         boot_id_reader=lambda: 'boot-a',
@@ -1536,10 +1547,10 @@ def test_cleanup_guard_nested_type_errors_fail_closed(
 
 
 def test_cleanup_guard_rejects_symbolic_link(tmp_path):
-    real_path = tmp_path / 'real.json'
+    link_path = secure_guard_path(tmp_path)
+    real_path = link_path.parent / 'real.json'
     real_path.write_text('{}', encoding='utf-8')
     os.chmod(str(real_path), 0o600)
-    link_path = tmp_path / 'guard.json'
     link_path.symlink_to(real_path)
     guard = PersistentCleanupGuard(
         link_path,
@@ -1565,7 +1576,7 @@ def test_cleanup_guard_rejects_symbolic_link_directory(tmp_path):
 
 
 def test_cleanup_guard_rejects_nonregular_file(tmp_path):
-    guard_path = tmp_path / 'guard.json'
+    guard_path = secure_guard_path(tmp_path)
     guard_path.mkdir(mode=0o700)
     guard = PersistentCleanupGuard(
         guard_path,
@@ -1583,7 +1594,7 @@ def test_cleanup_guard_atomic_replace_failure_preserves_previous_record(
     import rk_locomotion.front_jump_supervisor as supervisor_module
 
     guard = PersistentCleanupGuard(
-        tmp_path / 'guard.json',
+        secure_guard_path(tmp_path),
         boot_id_reader=lambda: 'boot-a',
     )
     original = guard.begin_dirty(guard_operation())
@@ -1701,7 +1712,7 @@ def test_guard_process_update_failure_reaps_without_unlock(tmp_path):
             return self.poll() is not None
 
     guard = FailProcessIdentityGuard(
-        tmp_path / 'guard.json',
+        secure_guard_path(tmp_path),
         boot_id_reader=lambda: 'boot-a',
     )
     harness = successful_harness(
@@ -1730,7 +1741,7 @@ def test_guard_clear_failure_relocks_and_preserves_dirty_evidence(tmp_path):
             raise OSError('guard unlink failed')
 
     guard = UnclearableGuard(
-        tmp_path / 'guard.json',
+        secure_guard_path(tmp_path),
         boot_id_reader=lambda: 'boot-a',
     )
     harness = successful_harness(cleanup_guard=guard)
@@ -1785,7 +1796,7 @@ def test_cleanup_permission_error_keeps_guard_and_lock(tmp_path):
 
     harness = successful_harness(
         cleanup_guard=PersistentCleanupGuard(
-            tmp_path / 'guard.json',
+            secure_guard_path(tmp_path),
             boot_id_reader=lambda: 'boot-a',
         ),
     )
@@ -2053,8 +2064,11 @@ def load_ros_integration_types():
     }
 
 
-def make_ros_gait_node(tmp_path, context, runner):
+def make_ros_gait_node(tmp_path, context, runner, guard_path=None):
+    """创建 ROS gait 测试节点，并为正常流程注入安全的 Guard 路径。"""
     ros = load_ros_integration_types()
+    if guard_path is None:
+        guard_path = secure_guard_path(tmp_path)
     suffix = uuid.uuid4().hex
     prefix = '/front_jump_test_{}'.format(suffix)
     topics = {
@@ -2108,9 +2122,7 @@ def make_ros_gait_node(tmp_path, context, runner):
             '/fake/front_jump_helper'
         ),
         'front_jump.sdk_network_interface': 'fake0',
-        'front_jump.cleanup_guard_path': str(
-            tmp_path / 'runtime' / 'guard.json'
-        ),
+        'front_jump.cleanup_guard_path': str(guard_path),
         'front_jump.shutdown_drain_timeout_sec': 1.0,
     }
     parameters = [
@@ -2140,6 +2152,11 @@ def spin_until(executor, predicate, timeout=3.0):
 
 
 def destroy_ros_test_graph(context, executor, *nodes):
+    """按 worker/ActionServer/Node/Context 顺序释放 ROS 测试图。"""
+    for node in nodes:
+        request_shutdown = getattr(node, 'request_shutdown', None)
+        if callable(request_shutdown):
+            request_shutdown()
     try:
         executor.shutdown(timeout_sec=1.0)
     except Exception:
@@ -2669,6 +2686,27 @@ def test_context_shutdown_callback_only_requests_local_shutdown(tmp_path):
         context.try_shutdown()
 
 
+def test_destroy_node_releases_action_server_before_context_shutdown(tmp_path):
+    """ActionServer 必须在 Node/Context 前显式释放，避免 Foxy 析构晚到。"""
+    ros = load_ros_integration_types()
+    context = ros['Context']()
+    ros['rclpy'].init(context=context)
+    ros, node, unused_topics = make_ros_gait_node(
+        tmp_path,
+        context,
+        RosInjectedRunner(),
+    )
+    action_server = node.action_server
+    assert action_server is not None
+    try:
+        node.destroy_node()
+        assert node.action_server is None
+    finally:
+        # server 已在 destroy_node() 内 destroy；先释放测试强引用，再关闭 context。
+        del action_server
+        context.try_shutdown()
+
+
 def test_context_invalid_cleanup_mode_reaps_helper_without_unlock(
     tmp_path,
 ):
@@ -2761,6 +2799,9 @@ def test_shutdown_is_not_drained_while_cleanup_retry_is_pending(tmp_path):
         active_context = None
         active_process = None
         cleanup_pending = True
+
+        def wake(self):
+            """模拟真实 supervisor 的无阻塞唤醒接口，供节点销毁路径调用。"""
 
     try:
         node.front_jump_supervisor = PendingCleanupSupervisor()
@@ -2903,7 +2944,7 @@ def test_full_boot_guard_needs_live_estop_and_final_zero_checks(
     tmp_path,
 ):
     ros = load_ros_integration_types()
-    guard_path = tmp_path / 'runtime' / 'guard.json'
+    guard_path = secure_guard_path(tmp_path)
     old_guard = PersistentCleanupGuard(
         guard_path,
         boot_id_reader=lambda: 'prior-compute-boot',
@@ -2917,6 +2958,7 @@ def test_full_boot_guard_needs_live_estop_and_final_zero_checks(
         tmp_path,
         context,
         runner,
+        guard_path=guard_path,
     )
     try:
         assert node._full_boot_recovery_guard_id == fault_id
@@ -2943,7 +2985,7 @@ def test_full_boot_guard_needs_live_estop_and_final_zero_checks(
 
 def test_same_boot_node_restart_never_auto_clears_dirty_guard(tmp_path):
     ros = load_ros_integration_types()
-    guard_path = tmp_path / 'runtime' / 'guard.json'
+    guard_path = secure_guard_path(tmp_path)
     boot_id = Path('/proc/sys/kernel/random/boot_id').read_text(
         encoding='ascii'
     ).strip()
@@ -2958,6 +3000,7 @@ def test_same_boot_node_restart_never_auto_clears_dirty_guard(tmp_path):
         tmp_path,
         context,
         RosInjectedRunner(),
+        guard_path=guard_path,
     )
     try:
         estop = ros['Bool']()
@@ -2977,7 +3020,7 @@ def test_same_boot_node_restart_never_auto_clears_dirty_guard(tmp_path):
 
 def test_same_boot_restart_restores_every_persisted_fault_type(tmp_path):
     ros = load_ros_integration_types()
-    guard_path = tmp_path / 'runtime' / 'guard.json'
+    guard_path = secure_guard_path(tmp_path)
     boot_id = Path('/proc/sys/kernel/random/boot_id').read_text(
         encoding='ascii'
     ).strip()
@@ -2994,6 +3037,7 @@ def test_same_boot_restart_restores_every_persisted_fault_type(tmp_path):
         tmp_path,
         context,
         RosInjectedRunner(),
+        guard_path=guard_path,
     )
     try:
         assert set(node._safety_faults) >= {
@@ -3116,7 +3160,7 @@ def test_old_timed_nonzero_jump_path_is_absent():
 
 
 def test_guard_update_rechecks_permissions_owner_and_target_identity(tmp_path):
-    guard_path = tmp_path / 'runtime' / 'guard.json'
+    guard_path = secure_guard_path(tmp_path)
     guard = PersistentCleanupGuard(
         guard_path,
         boot_id_reader=lambda: 'boot-a',
@@ -3154,7 +3198,7 @@ def test_guard_update_rechecks_permissions_owner_and_target_identity(tmp_path):
         guard.update(lambda record: None)
     assert replacement.read_bytes() == original
 
-    clear_path = tmp_path / 'runtime-clear' / 'guard.json'
+    clear_path = secure_guard_path(tmp_path, 'clear-guard.json')
     clear_guard = PersistentCleanupGuard(
         clear_path,
         boot_id_reader=lambda: 'boot-a',
@@ -3374,13 +3418,19 @@ def test_real_context_shutdown_reaps_ignoring_group_no_ros_output(tmp_path):
         ros_cleanup_allowed=context.ok,
     )
 
-    def request_context_shutdown():
-        # rclpy Humble's callback registry invokes regular functions once
-        # while resolving them.  Return None so it never mistakes the bool
-        # from request_stop() for a second callback.
-        supervisor.request_stop('context_shutdown')
+    class ShutdownCallback:
+        """持有 supervisor 的绑定回调，兼容 Foxy Context 的 WeakMethod。"""
 
-    context.on_shutdown(request_context_shutdown)
+        def __init__(self, target):
+            self.target = target
+
+        def invoke(self):
+            # Foxy 的 Context.on_shutdown 只接受绑定方法；保持 holder 的强引用
+            # 直到 finally 完成，避免 WeakMethod 在 shutdown 前失效。
+            self.target.request_stop('context_shutdown')
+
+    shutdown_callback = ShutdownCallback(supervisor)
+    context.on_shutdown(shutdown_callback.invoke)
 
     def feed_safety_evidence():
         while not finished.is_set() and context.ok():

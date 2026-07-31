@@ -125,6 +125,48 @@ gait Action server、inspection executor 和 command mux 的 ROS 内部流程。
 闭环、最终 `FINAL_STOP` 和唯一最终速度发布者。单元测试覆盖三种精确映射和
 fail-closed 的拒绝/超时/取消分支。
 
+## Foxy / Python 3.8 测试兼容性复核
+
+非机械臂正式链及其测试禁止在模块导入时依赖 Python 3.9+ 的内置泛型或
+Python 3.10+ 的 `X | None` 标注。`test_non_arm_competition_contract.py` 会扫描
+正式链的运行时标注，并实际导入核心模块；该检查不能被 Humble 的
+`compileall` 替代。
+
+`PersistentCleanupGuard` 的生产约束没有因测试移植而放宽：最终父目录必须为
+当前用户的 `0700`，guard 必须为普通文件且权限为 `0600`，符号链接和不安全的
+既有目录仍会 fail-closed。测试在 pytest 临时目录下另建并显式验证 `0700` 的
+专用子目录；它不修改 pytest 提供的父目录。gait 测试关闭顺序为停止 worker、
+显式销毁 ActionServer、销毁 Node、最后关闭 Context，以避免 Foxy 在析构阶段
+访问已失效 handle。
+
+在机器人 Foxy 上，先完成下面的软件测试（不启动 launch、不发送动作）后再进行
+后续分项验收：
+
+```bash
+cd ~/桌面/rk_inspection_ws
+source /opt/ros/foxy/setup.bash
+colcon build --symlink-install --packages-select \
+  rk_interfaces rk_perception rk_navigation rk_mission rk_locomotion \
+  rk_safety rk_go2_sdk_bridge rk_bringup
+source install/setup.bash
+colcon test --packages-select \
+  rk_interfaces rk_perception rk_navigation rk_mission rk_locomotion \
+  rk_safety rk_go2_sdk_bridge rk_bringup
+colcon test-result --verbose
+python3 -m compileall -q \
+  src/rk_bringup src/rk_mission src/rk_navigation src/rk_locomotion src/rk_safety
+python3.8 - <<'PY'
+import rk_bringup.non_arm_competition_contract
+import rk_navigation.start_ready_core
+import rk_mission.inspection_action_core
+import rk_mission.non_arm_route_phase_core
+import rk_mission.white_bar_action_core
+import rk_mission.white_bar_stage_command_core
+import rk_locomotion.front_jump_supervisor
+print('FOXY_PYTHON38_CORE_IMPORTS=PASS')
+PY
+```
+
 ## 机器人 Foxy 构建与分项实机验收
 
 在机器人上同步 VM 源码后执行：
