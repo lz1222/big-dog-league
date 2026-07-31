@@ -124,6 +124,9 @@ class MazePerceptionDryRun(Node):
             rise_tolerance_m=self._nonnegative_float_parameter(
                 'side_rise_tolerance', 0.08
             ),
+            continuity_tolerance_m=self._nonnegative_float_parameter(
+                'side_continuity_tolerance', 0.04
+            ),
         )
 
         # 决策引擎只产生建议字符串，持续帧和滞回参数在此注入。

@@ -40,6 +40,8 @@ maze_perception_dry_run:
     # 更近障碍始终立即生效，点云断流时立即清空缓存。
     side_hold_frames: 2
     side_rise_tolerance: 0.08
+    # 仅允许短墙候选延续相近的已确认侧距，并且不得据此增大净空。
+    side_continuity_tolerance: 0.04
 
     # 进入阈值小于退出阈值，形成滞回并减少临界距离附近的抖动。
     front_block_enter: 0.65

@@ -135,6 +135,25 @@ class SectorExtractorTest(unittest.TestCase):
         self.assertEqual(result['sources']['left'], 'none')
         self.assertEqual(result['sources']['right'], 'none')
 
+    def test_short_wall_is_exposed_only_as_continuity_candidate(self):
+        """纵向跨度不足的真实短墙不能直接输出，但可提供连续性证据。"""
+        extractor = self._narrow_front_extractor()
+        result = extractor.extract(
+            [
+                (0.50, -0.21, 0.10),
+                (0.52, -0.22, 0.10),
+                (0.54, -0.23, 0.10),
+                (0.56, -0.22, 0.10),
+            ]
+        )
+
+        self.assertIsNone(result['distances']['right'])
+        candidates = result['side_continuity_candidates']['right']
+        self.assertTrue(candidates)
+        self.assertLess(candidates[0]['x_span'], 0.12)
+        self.assertGreater(candidates[0]['distance'], 0.20)
+        self.assertLess(candidates[0]['distance'], 0.24)
+
     def test_front_wall_cluster_does_not_pollute_projected_side_wall(self):
         """前墙和斜视侧墙混合时，只能选择沿x延伸的侧墙簇。"""
         extractor = self._narrow_front_extractor()
@@ -330,8 +349,100 @@ class SideDistanceStabilizerTest(unittest.TestCase):
         self.assertEqual(output['sources']['left'], 'projected')
         self.assertEqual(output['hold_frames']['left'], 0)
 
+    def test_matching_short_wall_can_continue_beyond_hold_window(self):
+        """当前帧持续看见同一短墙时，不应按盲缺测耗尽缓存。"""
+        self.stabilizer.update(
+            self._extraction(0.25, 0.21, 'direct', 'projected')
+        )
+
+        output = None
+        for _ in range(6):
+            output = self.stabilizer.update(
+                self._extraction(
+                    0.25,
+                    None,
+                    'direct',
+                    'none',
+                    right_continuity=(self._candidate(0.22, 8, 0.06),),
+                )
+            )
+
+        self.assertAlmostEqual(output['distances']['right'], 0.21)
+        self.assertEqual(output['counts']['right'], 8)
+        self.assertEqual(output['sources']['right'], 'continued_projected')
+        self.assertEqual(output['hold_frames']['right'], 0)
+
+    def test_short_wall_cannot_bootstrap_without_confirmed_cache(self):
+        """固定x候选不能在启动或传感器复位后自行成为侧墙距离。"""
+        output = self.stabilizer.update(
+            self._extraction(
+                0.25,
+                None,
+                'direct',
+                'none',
+                right_continuity=(self._candidate(0.22, 8, 0.06),),
+            )
+        )
+
+        self.assertIsNone(output['distances']['right'])
+        self.assertEqual(output['sources']['right'], 'none')
+
+    def test_unrelated_front_edge_cannot_continue_side_wall(self):
+        """与缓存相差过大的前挡板边缘仍须走缺测锁止路径。"""
+        self.stabilizer.update(
+            self._extraction(0.25, 0.22, 'direct', 'projected')
+        )
+        front_edge = (self._candidate(0.14, 12, 0.03),)
+
+        self.stabilizer.update(
+            self._extraction(
+                0.25, None, 'direct', 'none',
+                right_continuity=front_edge,
+            )
+        )
+        self.stabilizer.update(
+            self._extraction(
+                0.25, None, 'direct', 'none',
+                right_continuity=front_edge,
+            )
+        )
+        output = self.stabilizer.update(
+            self._extraction(
+                0.25, None, 'direct', 'none',
+                right_continuity=front_edge,
+            )
+        )
+
+        self.assertIsNone(output['distances']['right'])
+        self.assertEqual(output['sources']['right'], 'none')
+
+    def test_continuity_never_increases_reported_clearance(self):
+        """短墙稍远时保留较小缓存值，不能乐观扩大安全空间。"""
+        self.stabilizer.update(
+            self._extraction(0.25, 0.21, 'direct', 'projected')
+        )
+        output = self.stabilizer.update(
+            self._extraction(
+                0.25,
+                None,
+                'direct',
+                'none',
+                right_continuity=(self._candidate(0.24, 10, 0.08),),
+            )
+        )
+
+        self.assertAlmostEqual(output['distances']['right'], 0.21)
+        self.assertEqual(output['sources']['right'], 'continued_projected')
+
     @staticmethod
-    def _extraction(left, right, left_source, right_source):
+    def _extraction(
+        left,
+        right,
+        left_source,
+        right_source,
+        left_continuity=(),
+        right_continuity=(),
+    ):
         return {
             'distances': {
                 'front': 1.0,
@@ -354,9 +465,22 @@ class SideDistanceStabilizerTest(unittest.TestCase):
                 'left': left_source,
                 'right': right_source,
             },
+            'side_continuity_candidates': {
+                'left': list(left_continuity),
+                'right': list(right_continuity),
+            },
             'valid_points': 20,
             'finite_points': 30,
             'total_points': 30,
+        }
+
+    @staticmethod
+    def _candidate(distance, count, x_span):
+        """构造仅供稳定器测试使用的短墙候选。"""
+        return {
+            'distance': distance,
+            'count': count,
+            'x_span': x_span,
         }
 
 

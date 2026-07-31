@@ -131,6 +131,7 @@ python3 scripts/odom_yaw_monitor.py \
 | `side_projection_min_x_span` | 点云 | m，`> 0` | 排除固定 x 前挡板的最小投影跨度 |
 | `side_projection_lateral_tolerance` | 点云 | m，`> 0` | 同一投影侧墙簇允许的横向厚度 |
 | `side_min_points` | 点云 | 正整数 | 单侧墙距离所需最少点数 |
+| `side_continuity_tolerance` | 点云 | m，`>= 0` | 短墙候选延续已确认侧距允许的横向差值 |
 | `stale_timeout` | 两者 | s，`> 0` | 超过此消息间隔后显示 `STALE` |
 | `print_rate` | 两者 | Hz，`> 0` | 状态日志输出频率 |
 | `stationary_linear_speed_threshold` | 里程计 | m/s，`>= 0` | 静止判定线速度上限 |

@@ -107,6 +107,12 @@ exit 大于 enter，障碍距离处于两者之间时保持原状态，避免边
 `side_projection_lateral_tolerance` 内形成墙面簇，才可投影为侧墙。该检查用于
 拒绝近似固定 x 的前挡板边缘，避免它在拐角前被误报为左右两侧同时只有约14cm。
 
+拐角处真实侧墙的可见纵向长度可能暂时小于
+`side_projection_min_x_span`。此类横向成簇的点只作为短墙连续性候选：必须先有
+强确认侧墙，候选与缓存距离之差不超过 `side_continuity_tolerance` 才能延续，
+并且延续结果只能保持或减小原净距，不能扩大安全空间。短墙候选不能在启动、
+点云断流或缓存清空后自行生成侧距，来源标记为 `continued_projected`。
+
 低矮挡板可能在相邻点云帧中交替缺少左、右侧回波。B1 使用
 `side_hold_frames` 对每侧最近有效距离做短时保留，并通过
 `sector_sources=held_direct/held_projected` 和 `sector_hold_frames` 明确标记。
@@ -157,6 +163,7 @@ right_score = min(right_front, right)
 | `side_min_points` | 输出单侧墙距离所需的最少点数 |
 | `side_hold_frames` | 单侧稀疏缺测时保留最近有效值的最大帧数 |
 | `side_rise_tolerance` | 无需持续帧确认即可接受的单帧侧距增大量 |
+| `side_continuity_tolerance` | 短墙候选延续已确认侧距时允许的横向差值 |
 
 最终阈值必须使用 B0 五方向纸箱测试和实际停止距离确定。
 

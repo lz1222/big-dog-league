@@ -106,6 +106,11 @@ class SectorExtractor:
             'left': [],
             'right': [],
         }
+        # 短侧墙候选不直接成为净距，只交给后续带历史约束的稳定器确认。
+        side_continuity_candidates = {
+            'left': [],
+            'right': [],
+        }
         primary_point_indexes = set()
         total_points = 0
         finite_points = 0
@@ -162,6 +167,7 @@ class SectorExtractor:
         # 正侧点优先；正侧点不足时才使用具有足够 x 跨度的斜前投影。
         # 前挡板通常近似固定 x，因此不会再被投影成左右两侧的假近障。
         selected_projection_indexes = set()
+        continuity_projection_indexes = set()
         side_sources = {}
         for name in ('left', 'right'):
             direct_values = sector_values[name]
@@ -170,7 +176,7 @@ class SectorExtractor:
                 continue
 
             candidates = projected_side_candidates[name]
-            selected_candidates = (
+            selected_candidates, short_clusters = (
                 self._select_projected_side_candidates(candidates)
             )
             if selected_candidates:
@@ -185,6 +191,26 @@ class SectorExtractor:
                 side_sources[name] = 'projected'
             else:
                 side_sources[name] = 'none'
+                # 拐角处侧墙可见纵向长度会暂时小于强确认门限。保留所有
+                # 横向成簇的短墙候选，由稳定器与最近强确认墙距比较；这里
+                # 不能直接输出距离，否则固定 x 的前挡板边缘会被误用。
+                for cluster, robust_x_span in short_clusters:
+                    lateral_values = [
+                        lateral_distance
+                        for _, _, lateral_distance in cluster
+                    ]
+                    side_continuity_candidates[name].append({
+                        'distance': self._percentile(
+                            lateral_values,
+                            self.distance_percentile,
+                        ),
+                        'count': len(cluster),
+                        'x_span': robust_x_span,
+                    })
+                    continuity_projection_indexes.update(
+                        point_index
+                        for point_index, _, _ in cluster
+                    )
 
         # 使用百分位距离，避免单个飞点像“最小值”一样触发误报。
         counts = {
@@ -214,9 +240,12 @@ class SectorExtractor:
                 'left': side_sources['left'],
                 'right': side_sources['right'],
             },
+            'side_continuity_candidates': side_continuity_candidates,
             # 投影点会同时参与斜前障碍和侧墙距离，统计时只计一次。
             'valid_points': len(
-                primary_point_indexes | selected_projection_indexes
+                primary_point_indexes
+                | selected_projection_indexes
+                | continuity_projection_indexes
             ),
             'finite_points': finite_points,
             'total_points': total_points,
@@ -274,12 +303,13 @@ class SectorExtractor:
         return None
 
     def _select_projected_side_candidates(self, candidates):
-        """选择横向成簇且沿 x 延伸的侧墙点，排除固定 x 前墙。"""
+        """返回强侧墙簇及仅可用于历史连续性确认的短墙簇。"""
         if len(candidates) < self.side_min_points:
-            return ()
+            return (), ()
 
         best_cluster = ()
         best_score = None
+        short_clusters = []
         tolerance = self.side_projection_lateral_tolerance
         # 两组错半格的横向桶避免墙面刚好落在分桶边界，同时保持 O(n)。
         for offset in (0.0, 0.5 * tolerance):
@@ -300,6 +330,10 @@ class SectorExtractor:
                     - self._percentile(x_values, 10.0)
                 )
                 if robust_x_span < self.side_projection_min_x_span:
+                    short_clusters.append((
+                        tuple(cluster),
+                        robust_x_span,
+                    ))
                     continue
 
                 # 优先使用支持点更多、纵向跨度更大的稳定墙面簇。
@@ -307,7 +341,7 @@ class SectorExtractor:
                 if best_score is None or score > best_score:
                     best_cluster = tuple(cluster)
                     best_score = score
-        return best_cluster
+        return best_cluster, tuple(short_clusters)
 
     @staticmethod
     def _percentile(values, percentile):
@@ -434,7 +468,12 @@ class SectorExtractor:
 class SideDistanceStabilizer:
     """保守稳定稀疏侧墙量测，并显式标记保留来源和帧龄。"""
 
-    def __init__(self, hold_frames, rise_tolerance_m=0.08):
+    def __init__(
+        self,
+        hold_frames,
+        rise_tolerance_m=0.08,
+        continuity_tolerance_m=0.04,
+    ):
         self.hold_frames = int(hold_frames)
         if self.hold_frames < 0:
             raise ValueError('side hold frames must be nonnegative')
@@ -445,6 +484,14 @@ class SideDistanceStabilizer:
         ):
             raise ValueError(
                 'side rise tolerance must be finite and nonnegative'
+            )
+        self.continuity_tolerance_m = float(continuity_tolerance_m)
+        if (
+            not math.isfinite(self.continuity_tolerance_m)
+            or self.continuity_tolerance_m < 0.0
+        ):
+            raise ValueError(
+                'side continuity tolerance must be finite and nonnegative'
             )
         self.reset()
 
@@ -461,6 +508,9 @@ class SideDistanceStabilizer:
         distances = dict(extraction.get('distances', {}))
         counts = dict(extraction.get('counts', {}))
         sources = dict(extraction.get('sources', {}))
+        continuity_candidates = dict(
+            extraction.get('side_continuity_candidates', {})
+        )
         hold_ages = {name: 0 for name in SECTOR_NAMES}
 
         for name in ('left', 'right'):
@@ -502,9 +552,28 @@ class SideDistanceStabilizer:
                 )
                 continue
 
+            cached = self._cached_distances[name]
+            continuity = self._matching_continuity_candidate(
+                cached,
+                continuity_candidates.get(name, ()),
+            )
+            if continuity is not None:
+                # 短墙只能延续已确认侧墙，且不得据此增大安全净空。
+                # 每帧都有当前点云支持，因此不消耗盲保留帧数。
+                continued_distance = min(
+                    cached,
+                    continuity['distance'],
+                )
+                distances[name] = continued_distance
+                counts[name] = continuity['count']
+                sources[name] = 'continued_projected'
+                self._cached_distances[name] = continued_distance
+                self._cached_sources[name] = 'projected'
+                self._unconfirmed_frames[name] = 0
+                continue
+
             self._unconfirmed_frames[name] += 1
             age = self._unconfirmed_frames[name]
-            cached = self._cached_distances[name]
             if cached is not None and age <= self.hold_frames:
                 distances[name] = cached
                 counts[name] = 0
@@ -524,6 +593,45 @@ class SideDistanceStabilizer:
         result['sources'] = sources
         result['hold_frames'] = hold_ages
         return result
+
+    def _matching_continuity_candidate(self, cached, candidates):
+        """选择与强确认墙距一致的短墙候选，禁止无历史值自启动。"""
+        if cached is None:
+            return None
+
+        best_candidate = None
+        best_score = None
+        for candidate in candidates:
+            try:
+                distance = float(candidate['distance'])
+                count = int(candidate['count'])
+                x_span = float(candidate['x_span'])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(
+                    'invalid side continuity candidate'
+                ) from error
+            if (
+                not math.isfinite(distance)
+                or distance < 0.0
+                or count <= 0
+                or not math.isfinite(x_span)
+                or x_span < 0.0
+            ):
+                raise ValueError('invalid side continuity candidate')
+
+            difference = abs(distance - cached)
+            if difference > self.continuity_tolerance_m:
+                continue
+            # 距离最接近历史墙面优先，其次选择支持点和纵向跨度更多的簇。
+            score = (difference, -count, -x_span)
+            if best_score is None or score < best_score:
+                best_candidate = {
+                    'distance': distance,
+                    'count': count,
+                    'x_span': x_span,
+                }
+                best_score = score
+        return best_candidate
 
     def _accept_measurement(self, name, distance, source):
         """接受已确认量测，并重新开始该侧的保守确认窗口。"""
