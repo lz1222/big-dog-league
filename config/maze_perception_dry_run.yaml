@@ -14,8 +14,9 @@ maze_perception_dry_run:
     body_y_min: -0.25
     body_y_max: 0.25
 
-    # 扇区几何、有效量程及距离百分位；百分位可抑制单个飞点。
-    front_angle: 45.0
+    # 57cm 窄通道使用20度正前扇区，避免侧墙回波混入front；
+    # 该值已完成两处静态距离变化验证，但尚未代表完整动态迷宫PASS。
+    front_angle: 20.0
     min_range: 0.05
     front_max_range: 3.00
     side_max_range: 2.00
@@ -50,7 +51,8 @@ maze_perception_dry_run:
     min_cloud_points: 1
     min_finite_points: 1
     evaluation_rate: 20.0
-    print_rate: 2.0
+    # B2连续帧和Yaw微调需要约10Hz的B1诊断快照。
+    print_rate: 10.0
 
 maze_perception_simulator:
   ros__parameters:

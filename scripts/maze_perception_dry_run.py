@@ -72,7 +72,9 @@ class MazePerceptionDryRun(Node):
                 'body_y_max', 0.25
             ),
             front_angle_deg=self._finite_float_parameter(
-                'front_angle', 45.0
+                # 57cm 窄通道中，45度扇区会把两侧挡板混入正前方；
+                # 20度值来自两处已知距离的真机静态标定。
+                'front_angle', 20.0
             ),
             min_range=self._nonnegative_float_parameter(
                 'min_range', 0.05
@@ -144,7 +146,8 @@ class MazePerceptionDryRun(Node):
             'evaluation_rate', 20.0
         )
         self.print_rate = self._positive_float_parameter(
-            'print_rate', 2.0
+            # B2持续帧判断需要约10Hz的B1 JSON；该频率仍仅发布诊断。
+            'print_rate', 10.0
         )
         self.min_cloud_points = self._positive_int_parameter(
             'min_cloud_points', 1

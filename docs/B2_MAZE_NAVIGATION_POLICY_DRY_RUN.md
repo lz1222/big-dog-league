@@ -126,12 +126,16 @@ cd ~/big-dog-league
 
 python3 scripts/maze_perception_dry_run.py \
   --ros-args \
-  --params-file config/maze_perception_dry_run.yaml \
-  -p print_rate:=10.0
+  --params-file config/maze_perception_dry_run.yaml
 ```
 
-B1 默认 `print_rate=2Hz` 只适合人工看日志。B2 的持续帧和 Yaw 微调至少需要
-约 `10Hz` 的 B1 JSON 快照，因此真机干跑时必须使用上面的覆盖参数。
+B2 的持续帧和 Yaw 微调至少需要约 `10Hz` 的 B1 JSON 快照，因此真机配置
+已将 `print_rate` 固定为10Hz。当前Foxy环境不应在加载参数文件后再用同名
+`-p` 猜测覆盖结果；启动后应使用 `ros2 param get` 核对最终值。
+
+2026-07-31 入口静态标定后，B1配置已将 `front_angle` 从45度改为20度；
+45度会在57cm窄通道中把侧墙回波混入 `front`。B2的前方阈值使用
+`base_link` 下的B1距离，不直接使用从物理雷达外壳量得的卷尺距离。
 
 终端2：
 

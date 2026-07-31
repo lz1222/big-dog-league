@@ -53,6 +53,10 @@ python3 scripts/maze_perception_dry_run.py \
   --params-file config/maze_perception_dry_run.yaml
 ```
 
+真机配置使用 `front_angle=20deg` 和 `print_rate=10Hz`。启动后可通过
+`ros2 param get /maze_perception_dry_run front_angle` 与 `print_rate` 核对；
+不要在当前Foxy环境中同时加载参数文件并依赖同名 `-p` 覆盖。
+
 查看结构化状态：
 
 ```bash
@@ -87,7 +91,9 @@ state=STALE advice=STOP
 `front_block_enter/exit` 控制正前方，`diagonal_block_enter/exit` 控制左右前方。
 exit 大于 enter，障碍距离处于两者之间时保持原状态，避免边界抖动。
 
-`front`、`left_front`、`right_front` 输出雷达原点到障碍的径向距离。
+`front`、`left_front`、`right_front` 输出点云坐标原点到障碍的径向距离。
+当前 `/utlidar/cloud_base` 的 `frame_id` 为 `base_link`，因此这些值不能直接
+等同于从物理雷达外壳起量的卷尺距离。
 `left`、`right` 输出墙面到 `base_link` 中线的横向净距 `|y|`。真机 45cm
 挡板在正侧方没有稳定回波，因此侧距同时接受
 `side_projection_angle_min..max` 范围内、位于
@@ -114,6 +120,7 @@ right_score = min(right_front, right)
 
 | 参数 | 作用 |
 |---|---|
+| `front_angle` | 正前扇区总角宽；窄通道过大会混入两侧挡板 |
 | `front_block_enter/exit` | 正前方障碍进入/退出阈值 |
 | `diagonal_block_enter/exit` | 左前、右前障碍进入/退出阈值 |
 | `blocked_confirm_frames` | 障碍成立所需连续点云帧 |
@@ -135,6 +142,20 @@ right_score = min(right_front, right)
 `-45..+60 deg`，`|angle| >= 60 deg` 的点数为 0；左右墙斜前回波的横向
 距离约为右侧 `0.22..0.25m`、左侧 `0.24..0.26m`。以上仅证明投影方法有
 可用输入，不代表动态迷宫测试通过。
+
+2026-07-31 在57cm入口通道完成了 `front_angle=20deg` 两点静态验证：
+
+- 第一位置从物理雷达外壳到前挡板约 `0.93m`，B1在 `base_link` 下稳定输出
+  `1.196..1.207m`，状态保持 `CLEAR`。
+- 使用固定参考点向前移动，卷尺距离约由 `0.93m` 变为 `0.80m`；51个B1
+  样本的 `front` 为最小 `1.025m`、中位 `1.037m`、最大 `1.051m`。
+- B1中位距离变化约 `0.162m`，与人工约 `0.13m` 的变化相差约 `0.032m`；
+  左右侧距最小值分别为 `0.242m` 和 `0.219m`，两路新鲜度均通过。
+- 同一位置使用45度配置时，`front` 会在约 `0.65..1.20m` 间跳变并持续
+  `BLOCKED`。因此B1真机配置改用20度，并增加窄通道侧墙回归测试。
+
+以上只确认静止距离的稳定性和变化方向。`base_link` 到物理雷达的精确安装
+偏移、动态接近拐角、五次转向和全程零碰撞仍需继续真机验证。
 
 ## 6. 模拟测试
 

@@ -107,6 +107,48 @@ class SectorExtractorTest(unittest.TestCase):
                 side_projection_x_min=0.40,
             )
 
+    def test_narrow_front_sector_rejects_corridor_side_walls(self):
+        """20度正前扇区不能把57cm通道的侧墙误判为前挡板。"""
+        extractor = SectorExtractor(
+            z_min=-0.15,
+            z_max=0.50,
+            body_x_min=-0.45,
+            body_x_max=0.45,
+            body_y_min=-0.25,
+            body_y_max=0.25,
+            front_angle_deg=20.0,
+            min_range=0.05,
+            front_max_range=3.0,
+            side_max_range=2.0,
+            distance_percentile=10.0,
+            side_projection_angle_min_deg=15.0,
+            side_projection_angle_max_deg=60.0,
+            side_projection_x_min=0.45,
+            side_projection_x_max=1.50,
+            side_min_points=3,
+        )
+        points = [
+            # 正前挡板在base_link前方1.20m。
+            (1.20, -0.10, 0.10),
+            (1.20, 0.00, 0.10),
+            (1.20, 0.10, 0.10),
+            # 两侧墙距中线约0.24m，不得进入正负10度的front。
+            (0.50, 0.24, 0.10),
+            (0.60, 0.24, 0.10),
+            (0.70, 0.24, 0.10),
+            (0.50, -0.24, 0.10),
+            (0.60, -0.24, 0.10),
+            (0.70, -0.24, 0.10),
+        ]
+
+        result = extractor.extract(points)
+
+        self.assertEqual(result['counts']['front'], 3)
+        self.assertGreater(result['distances']['front'], 1.19)
+        self.assertLess(result['distances']['front'], 1.21)
+        self.assertEqual(result['counts']['left'], 3)
+        self.assertEqual(result['counts']['right'], 3)
+
 
 if __name__ == '__main__':
     unittest.main()
