@@ -82,6 +82,22 @@ class MazePerceptionDryRun(Node):
             distance_percentile=self._finite_float_parameter(
                 'distance_percentile', 10.0
             ),
+            # 真机侧墙回波集中在斜前方，投影参数用于估算横向净距。
+            side_projection_angle_min_deg=self._finite_float_parameter(
+                'side_projection_angle_min', 15.0
+            ),
+            side_projection_angle_max_deg=self._finite_float_parameter(
+                'side_projection_angle_max', 60.0
+            ),
+            side_projection_x_min=self._finite_float_parameter(
+                'side_projection_x_min', 0.45
+            ),
+            side_projection_x_max=self._finite_float_parameter(
+                'side_projection_x_max', 1.50
+            ),
+            side_min_points=self._positive_int_parameter(
+                'side_min_points', 3
+            ),
         )
 
         # 决策引擎只产生建议字符串，持续帧和滞回参数在此注入。

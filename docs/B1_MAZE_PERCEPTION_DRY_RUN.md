@@ -87,6 +87,13 @@ state=STALE advice=STOP
 `front_block_enter/exit` 控制正前方，`diagonal_block_enter/exit` 控制左右前方。
 exit 大于 enter，障碍距离处于两者之间时保持原状态，避免边界抖动。
 
+`front`、`left_front`、`right_front` 输出雷达原点到障碍的径向距离。
+`left`、`right` 输出墙面到 `base_link` 中线的横向净距 `|y|`。真机 45cm
+挡板在正侧方没有稳定回波，因此侧距同时接受
+`side_projection_angle_min..max` 范围内、位于
+`side_projection_x_min..max` 前向窗口中的斜视墙点。一个斜前点可同时支持
+斜前障碍距离和侧墙净距，但 `valid_points` 只计一次。
+
 进入 `BLOCKED` 后比较：
 
 ```text
@@ -97,8 +104,9 @@ right_score = min(right_front, right)
 选择空间较大的一侧。两侧都小于 `turn_min_clearance` 时建议 `STOP`。已选转向
 会保持，直到另一侧至少多出 `turn_switch_margin`，避免左右反复切换。
 
-点云区域没有返回时距离为 `null/n/a`，决策中按该区域最大量程处理。消息失效
-与区域无返回是两个不同状态。
+点云区域没有返回时距离为 `null/n/a`。B1 的抽象转向建议仍将单个无回波区域
+按最大量程处理；B2 不采用这一乐观假设，在走廊内缺少必需侧距时等待或进入
+`FAULT_STOP`。消息失效与单个区域无返回仍是两个不同状态。
 
 ## 5. 参数标定
 
@@ -117,8 +125,16 @@ right_score = min(right_front, right)
 | `odom_stale_timeout` | odometry 超时后进入 `STALE` |
 | `min_cloud_points` | 每帧允许的最低原始点数 |
 | `min_finite_points` | 每帧允许的最低非 NaN/Inf 点数 |
+| `side_projection_angle_min/max` | 可投影为侧墙的斜前角度窗口 |
+| `side_projection_x_min/max` | 侧墙投影使用的前向 x 窗口 |
+| `side_min_points` | 输出单侧墙距离所需的最少点数 |
 
 最终阈值必须使用 B0 五方向纸箱测试和实际停止距离确定。
+
+2026-07-30 真机静止采样中，30 帧有效高度点的水平角只覆盖约
+`-45..+60 deg`，`|angle| >= 60 deg` 的点数为 0；左右墙斜前回波的横向
+距离约为右侧 `0.22..0.25m`、左侧 `0.24..0.26m`。以上仅证明投影方法有
+可用输入，不代表动态迷宫测试通过。
 
 ## 6. 模拟测试
 

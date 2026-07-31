@@ -21,6 +21,14 @@ maze_perception_dry_run:
     side_max_range: 2.00
     distance_percentile: 10.0
 
+    # 真机低矮挡板在正侧方无稳定回波，使用斜前点的 |y| 估算侧墙净距。
+    # x_min 不得小于 body_x_max，避免把机身或腿部回波投影成墙面。
+    side_projection_angle_min: 15.0
+    side_projection_angle_max: 60.0
+    side_projection_x_min: 0.45
+    side_projection_x_max: 1.50
+    side_min_points: 3
+
     # 进入阈值小于退出阈值，形成滞回并减少临界距离附近的抖动。
     front_block_enter: 0.65
     front_block_exit: 0.80

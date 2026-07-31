@@ -132,6 +132,76 @@ class MazeNavigationPolicyTest(unittest.TestCase):
             'corridor_side_clearance_unsafe',
         )
 
+    def test_missing_side_prevents_initial_sensor_confirmation(self):
+        observation = self._observation(
+            turn_rad=0.0,
+            distances={
+                'front': 2.0,
+                'left_front': 1.0,
+                'right_front': 1.0,
+                'left': None,
+                'right': None,
+            },
+        )
+
+        output = self._step(observation)
+        output = self._step(observation)
+
+        self.assertEqual(output['state'], 'WAIT_SENSOR')
+        self.assertEqual(
+            output['reason'],
+            'side_distance_confirmation_pending',
+        )
+        self.assertEqual(output['desired_vx'], 0.0)
+
+    def test_missing_side_after_start_latches_fault_stop(self):
+        self._confirm_sensors()
+        observation = self._observation(
+            turn_rad=0.0,
+            distances={
+                'front': 2.0,
+                'left_front': 1.0,
+                'right_front': 1.0,
+                'left': None,
+                'right': 0.285,
+            },
+        )
+
+        output = self._step(observation)
+
+        self.assertEqual(output['state'], STATE_FAULT_STOP)
+        self.assertEqual(
+            output['reason'],
+            'corridor_side_distance_missing',
+        )
+
+    def test_missing_opposite_side_never_authorizes_turn(self):
+        distances = self._turn_distances(DIRECTION_LEFT)
+        distances['left'] = None
+        distances['right'] = None
+
+        self.assertFalse(
+            self.policy.moving_turn_sweep_safe(
+                DIRECTION_LEFT,
+                distances,
+            )
+        )
+
+    def test_expected_opening_side_can_start_turn(self):
+        self._confirm_sensors()
+        distances = self._turn_distances(DIRECTION_LEFT)
+        distances['left'] = None
+        observation = self._observation(
+            turn_rad=0.0,
+            sensor_state='BLOCKED',
+            distances=distances,
+        )
+
+        self._step(observation)
+        output = self._step(observation)
+
+        self.assertEqual(output['state'], STATE_TURN_LEFT)
+
     def test_turn_timeout_enters_fault_stop(self):
         self.policy = MazeNavigationPolicy(
             replace(self.config, turn_timeout_sec=0.5),

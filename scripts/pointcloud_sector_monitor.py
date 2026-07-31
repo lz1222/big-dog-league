@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""B0 点云五区域监视器，只读取传感器并输出诊断日志。"""
+
 import math
 import threading
 import time
@@ -17,18 +19,14 @@ from rclpy.qos import (
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 
-
-SECTOR_NAMES = (
-    'front',
-    'left_front',
-    'right_front',
-    'left',
-    'right',
+from maze_perception_core import (
+    SECTOR_NAMES,
+    SectorExtractor,
 )
 
 
 class PointCloudSectorMonitor(Node):
-    """Report robust obstacle distances without publishing motion commands."""
+    """输出稳健障碍距离，不创建任何运动命令发布器。"""
 
     def __init__(self):
         super().__init__('pointcloud_sector_monitor')
@@ -65,13 +63,49 @@ class PointCloudSectorMonitor(Node):
         self.distance_percentile = self._finite_float_parameter(
             'distance_percentile', 10.0
         )
+        self.side_projection_angle_min = self._finite_float_parameter(
+            'side_projection_angle_min', 15.0
+        )
+        self.side_projection_angle_max = self._finite_float_parameter(
+            'side_projection_angle_max', 60.0
+        )
+        self.side_projection_x_min = self._finite_float_parameter(
+            'side_projection_x_min', 0.45
+        )
+        self.side_projection_x_max = self._finite_float_parameter(
+            'side_projection_x_max', 1.50
+        )
+        self.side_min_points = self._positive_int_parameter(
+            'side_min_points', 3
+        )
         self.stale_timeout = self._positive_float_parameter(
             'stale_timeout', 0.50
         )
         self.print_rate = self._positive_float_parameter('print_rate', 2.0)
 
-        self._validate_parameters()
-        self._front_angle_rad = math.radians(self.front_angle_deg)
+        # B0 与 B1 共用同一提取器，避免标定工具和决策输入定义漂移。
+        self.extractor = SectorExtractor(
+            z_min=self.z_min,
+            z_max=self.z_max,
+            body_x_min=self.body_x_min,
+            body_x_max=self.body_x_max,
+            body_y_min=self.body_y_min,
+            body_y_max=self.body_y_max,
+            front_angle_deg=self.front_angle_deg,
+            min_range=self.min_range,
+            front_max_range=self.front_max_range,
+            side_max_range=self.side_max_range,
+            distance_percentile=self.distance_percentile,
+            side_projection_angle_min_deg=(
+                self.side_projection_angle_min
+            ),
+            side_projection_angle_max_deg=(
+                self.side_projection_angle_max
+            ),
+            side_projection_x_min=self.side_projection_x_min,
+            side_projection_x_max=self.side_projection_x_max,
+            side_min_points=self.side_min_points,
+        )
 
         self._lock = threading.Lock()
         self._receive_times = deque(maxlen=100)
@@ -138,49 +172,13 @@ class PointCloudSectorMonitor(Node):
                 self._missing_fields_reported = True
             return
 
-        sector_values = {
-            name: []
-            for name in SECTOR_NAMES
-        }
-
         try:
             points = point_cloud2.read_points(
                 msg,
                 field_names=('x', 'y', 'z'),
                 skip_nans=False,
             )
-            for point in points:
-                x = float(point[0])
-                y = float(point[1])
-                z = float(point[2])
-
-                if not (
-                    math.isfinite(x)
-                    and math.isfinite(y)
-                    and math.isfinite(z)
-                ):
-                    continue
-                if z < self.z_min or z > self.z_max:
-                    continue
-                if self._inside_body_filter(x, y):
-                    continue
-
-                distance = math.hypot(x, y)
-                if distance < self.min_range:
-                    continue
-
-                sector = self._classify_sector(math.atan2(y, x))
-                if sector is None:
-                    continue
-
-                max_range = (
-                    self.side_max_range
-                    if sector in ('left', 'right')
-                    else self.front_max_range
-                )
-                if distance > max_range:
-                    continue
-                sector_values[sector].append(distance)
+            result = self.extractor.extract(points)
         except (IndexError, TypeError, ValueError) as error:
             text = f'failed to read PointCloud2: {error}'
             with self._lock:
@@ -188,22 +186,10 @@ class PointCloudSectorMonitor(Node):
             self.get_logger().error(text)
             return
 
-        distances = {
-            name: self._percentile(
-                sector_values[name],
-                self.distance_percentile,
-            )
-            for name in SECTOR_NAMES
-        }
-        counts = {
-            name: len(sector_values[name])
-            for name in SECTOR_NAMES
-        }
-
         with self._lock:
-            self._last_valid_points = sum(counts.values())
-            self._last_distances = distances
-            self._last_sector_counts = counts
+            self._last_valid_points = result['valid_points']
+            self._last_distances = result['distances']
+            self._last_sector_counts = result['counts']
             self._last_error = ''
             self._missing_fields_reported = False
 
@@ -247,45 +233,6 @@ class PointCloudSectorMonitor(Node):
         else:
             self.get_logger().info(text)
 
-    def _inside_body_filter(self, x, y):
-        return (
-            self.body_x_min <= x <= self.body_x_max
-            and self.body_y_min <= y <= self.body_y_max
-        )
-
-    def _classify_sector(self, angle):
-        half_width = 0.5 * self._front_angle_rad
-        front_side_boundary = 1.5 * self._front_angle_rad
-        side_rear_boundary = 2.5 * self._front_angle_rad
-
-        if -half_width <= angle <= half_width:
-            return 'front'
-        if half_width < angle <= front_side_boundary:
-            return 'left_front'
-        if -front_side_boundary <= angle < -half_width:
-            return 'right_front'
-        if front_side_boundary < angle <= side_rear_boundary:
-            return 'left'
-        if -side_rear_boundary <= angle < -front_side_boundary:
-            return 'right'
-        return None
-
-    @staticmethod
-    def _percentile(values, percentile):
-        if not values:
-            return None
-        ordered = sorted(values)
-        rank = (len(ordered) - 1) * float(percentile) / 100.0
-        lower_index = int(math.floor(rank))
-        upper_index = int(math.ceil(rank))
-        if lower_index == upper_index:
-            return ordered[lower_index]
-        fraction = rank - lower_index
-        return (
-            ordered[lower_index] * (1.0 - fraction)
-            + ordered[upper_index] * fraction
-        )
-
     @staticmethod
     def _frequency_hz(receive_times):
         if len(receive_times) < 2:
@@ -306,22 +253,6 @@ class PointCloudSectorMonitor(Node):
         if frequency_hz is None:
             return 'n/a'
         return f'{frequency_hz:.2f}'
-
-    def _validate_parameters(self):
-        if self.z_max <= self.z_min:
-            raise ValueError('z_max must be greater than z_min')
-        if self.body_x_max <= self.body_x_min:
-            raise ValueError('body_x_max must be greater than body_x_min')
-        if self.body_y_max <= self.body_y_min:
-            raise ValueError('body_y_max must be greater than body_y_min')
-        if not 0.0 < self.front_angle_deg <= 72.0:
-            raise ValueError('front_angle must be in (0, 72] degrees')
-        if self.front_max_range <= self.min_range:
-            raise ValueError('front_max_range must be greater than min_range')
-        if self.side_max_range <= self.min_range:
-            raise ValueError('side_max_range must be greater than min_range')
-        if not 0.0 < self.distance_percentile <= 100.0:
-            raise ValueError('distance_percentile must be in (0, 100]')
 
     def _string_parameter(self, name, default):
         value = str(self.declare_parameter(name, default).value)
@@ -345,6 +276,13 @@ class PointCloudSectorMonitor(Node):
         value = self._finite_float_parameter(name, default)
         if value < 0.0:
             raise ValueError(f'{name} must be nonnegative')
+        return value
+
+    def _positive_int_parameter(self, name, default):
+        """声明并读取正整数参数。"""
+        value = int(self.declare_parameter(name, default).value)
+        if value <= 0:
+            raise ValueError(f'{name} must be positive')
         return value
 
 

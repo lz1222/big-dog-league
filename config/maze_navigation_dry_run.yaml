@@ -10,7 +10,8 @@ maze_navigation_dry_run:
     # 固定拓扑只约束大方向，实际转角和居中仍由雷达与 Odom 闭环。
     route_directions: [LEFT, LEFT, RIGHT, RIGHT, LEFT]
 
-    # 已测场地和机器人外形；默认假设 base_link 位于机身几何中心。
+    # 外轮廓为 1.80m × 1.40m；下列 corridor_width_m 是最窄通道净宽，
+    # 不能误填为迷宫整体纵深。默认假设 base_link 位于机身几何中心。
     robot_length_m: 0.70
     robot_width_m: 0.31
     robot_height_m: 0.40

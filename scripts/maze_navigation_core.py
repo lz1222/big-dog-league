@@ -393,38 +393,50 @@ class MazeNavigationPolicy:
         side_name, diagonal_name, opposite_name = self._turn_sector_names(
             direction
         )
-        front = self._effective_distance(
-            distances.get('front'),
-            self.config.front_max_range_m,
+        front = self._explicit_distance(distances.get('front'))
+        turn_side = self._explicit_distance(distances.get(side_name))
+        turn_diagonal = self._explicit_distance(
+            distances.get(diagonal_name)
         )
-        turn_side = self._effective_distance(
-            distances.get(side_name),
-            self.config.side_max_range_m,
+        opposite = self._explicit_distance(
+            distances.get(opposite_name)
         )
-        turn_diagonal = self._effective_distance(
-            distances.get(diagonal_name),
-            self.config.front_max_range_m,
-        )
-        opposite = self._effective_distance(
-            distances.get(opposite_name),
-            self.config.side_max_range_m,
-        )
+
+        # 目标侧无墙回波可表示拐角开口，但前方、目标斜前和对侧墙
+        # 必须有显式量测，不能再把多个 n/a 乐观地当作最大净空。
+        if (
+            front is None
+            or turn_diagonal is None
+            or opposite is None
+        ):
+            return False
 
         required_open = (
             self.sweep_radius_m
             + self.config.footprint_safety_margin_m
         )
-        return (
-            front >= self.front_collision_distance_m
-            and turn_side >= max(
+        turn_side_open = (
+            turn_side is None
+            or turn_side >= max(
                 required_open,
                 self.config.turn_open_distance_m,
             )
+        )
+        return (
+            front >= self.front_collision_distance_m
+            and turn_side_open
             and turn_diagonal >= self.front_collision_distance_m
             and opposite >= self.side_collision_distance_m
         )
 
     def _handle_wait_sensor(self, observation, now):
+        if self._missing_required_side(observation.distances):
+            # 启动阶段先等待稳定侧墙几何，不把偶发缺测计入确认帧。
+            self._sensor_streak = 0
+            self.reason = 'side_distance_confirmation_pending'
+            self._set_command(0.0, 0.0)
+            return self.snapshot(now)
+
         self._sensor_streak += 1
         self.reason = (
             f'sensor_confirmation_{self._sensor_streak}/'
@@ -443,11 +455,31 @@ class MazeNavigationPolicy:
 
     def _handle_corridor_follow(self, observation, now):
         distances = observation.distances
-        if not self._side_clearance_safe(distances):
+        front = self._front_distance(distances)
+        allowed_missing = ()
+        if (
+            not self.route_complete()
+            and front <= self.config.corner_approach_distance_m
+        ):
+            # 接近已知拐角时，预期转向侧墙消失可作为开口候选；
+            # 对侧墙仍必须可观测，避免把整片点云缺失误判为空旷。
+            allowed_missing = (self._turn_sector_names(
+                self.expected_turn()
+            )[0],)
+
+        if self._missing_required_side(
+            distances,
+            allowed_missing,
+        ):
+            self._enter_fault('corridor_side_distance_missing', now)
+            return self.snapshot(now)
+        if not self._side_clearance_safe(
+            distances,
+            allowed_missing,
+        ):
             self._enter_fault('corridor_side_clearance_unsafe', now)
             return self.snapshot(now)
 
-        front = self._front_distance(distances)
         if front <= self.config.front_emergency_distance_m:
             self._transition(
                 STATE_REVERSE_RECOVERY,
@@ -499,13 +531,24 @@ class MazeNavigationPolicy:
             return self.snapshot(now)
 
         distances = observation.distances
-        if not self._side_clearance_safe(distances):
-            self._enter_fault('corner_side_clearance_unsafe', now)
-            return self.snapshot(now)
-
         direction = self.expected_turn()
         if direction is None:
             self._enter_fault('corner_without_expected_turn', now)
+            return self.snapshot(now)
+
+        turn_side = self._turn_sector_names(direction)[0]
+        allowed_missing = (turn_side,)
+        if self._missing_required_side(
+            distances,
+            allowed_missing,
+        ):
+            self._enter_fault('corner_side_distance_missing', now)
+            return self.snapshot(now)
+        if not self._side_clearance_safe(
+            distances,
+            allowed_missing,
+        ):
+            self._enter_fault('corner_side_clearance_unsafe', now)
             return self.snapshot(now)
 
         front = self._front_distance(distances)
@@ -540,6 +583,13 @@ class MazeNavigationPolicy:
         if self._turn_elapsed(now) > self.config.turn_timeout_sec:
             self._enter_fault('turn_timeout', now)
             return self.snapshot(now)
+        direction = self.expected_turn()
+        if not self._turn_clearance_observable(
+            direction,
+            observation.distances,
+        ):
+            self._enter_fault('turn_clearance_missing', now)
+            return self.snapshot(now)
         if not self._instant_clearance_safe(observation.distances):
             self._enter_fault('turn_clearance_unsafe', now)
             return self.snapshot(now)
@@ -568,6 +618,13 @@ class MazeNavigationPolicy:
     def _handle_fine_align(self, observation, now):
         if self._turn_elapsed(now) > self.config.turn_timeout_sec:
             self._enter_fault('turn_fine_align_timeout', now)
+            return self.snapshot(now)
+        direction = self.expected_turn()
+        if not self._turn_clearance_observable(
+            direction,
+            observation.distances,
+        ):
+            self._enter_fault('fine_align_clearance_missing', now)
             return self.snapshot(now)
         if not self._instant_clearance_safe(observation.distances):
             self._enter_fault('fine_align_clearance_unsafe', now)
@@ -624,6 +681,9 @@ class MazeNavigationPolicy:
         if self._state_age(now) > self.config.reacquire_timeout_sec:
             self._enter_fault('corridor_reacquire_timeout', now)
             return self.snapshot(now)
+        if self._missing_required_side(observation.distances):
+            self._enter_fault('reacquire_side_distance_missing', now)
+            return self.snapshot(now)
         if not self._side_clearance_safe(observation.distances):
             self._enter_fault('reacquire_side_clearance_unsafe', now)
             return self.snapshot(now)
@@ -634,8 +694,8 @@ class MazeNavigationPolicy:
         )
         yaw_error = self._turn_error(observation.turn_rad)
         centered = (
-            center_error is None
-            or abs(center_error) <= self.config.center_tolerance_m
+            center_error is not None
+            and abs(center_error) <= self.config.center_tolerance_m
         )
         yaw_aligned = (
             yaw_error is not None
@@ -680,11 +740,25 @@ class MazeNavigationPolicy:
         if self._state_age(now) > self.config.reverse_timeout_sec:
             self._enter_fault('reverse_recovery_timeout', now)
             return self.snapshot(now)
-        if not self._side_clearance_safe(observation.distances):
+        direction = self.expected_turn()
+        allowed_missing = ()
+        if direction is not None:
+            allowed_missing = (
+                self._turn_sector_names(direction)[0],
+            )
+        if self._missing_required_side(
+            observation.distances,
+            allowed_missing,
+        ):
+            self._enter_fault('reverse_side_distance_missing', now)
+            return self.snapshot(now)
+        if not self._side_clearance_safe(
+            observation.distances,
+            allowed_missing,
+        ):
             self._enter_fault('reverse_side_clearance_unsafe', now)
             return self.snapshot(now)
 
-        direction = self.expected_turn()
         front = self._front_distance(observation.distances)
         sweep_safe = (
             direction is not None
@@ -808,15 +882,43 @@ class MazeNavigationPolicy:
             self.config.front_max_range_m,
         )
 
-    def _side_clearance_safe(self, distances):
+    def _side_clearance_safe(self, distances, allowed_missing=()):
+        """检查侧向碰撞净距；只有显式允许的开口侧可缺测。"""
         for name in ('left', 'right'):
             distance = self._explicit_distance(distances.get(name))
-            if (
-                distance is not None
-                and distance < self.side_collision_distance_m
-            ):
+            if distance is None:
+                if name in allowed_missing:
+                    continue
+                return False
+            if distance < self.side_collision_distance_m:
                 return False
         return True
+
+    @staticmethod
+    def _missing_required_side(distances, allowed_missing=()):
+        """返回是否缺少当前状态必须可观测的侧墙距离。"""
+        for name in ('left', 'right'):
+            if name in allowed_missing:
+                continue
+            distance = MazeNavigationPolicy._explicit_distance(
+                distances.get(name)
+            )
+            if distance is None:
+                return True
+        return False
+
+    def _turn_clearance_observable(self, direction, distances):
+        """转弯时要求前方、目标斜前和对侧墙均有实测距离。"""
+        if direction not in VALID_DIRECTIONS:
+            return False
+        _, diagonal_name, opposite_name = self._turn_sector_names(
+            direction
+        )
+        required_names = ('front', diagonal_name, opposite_name)
+        return all(
+            self._explicit_distance(distances.get(name)) is not None
+            for name in required_names
+        )
 
     def _instant_clearance_safe(self, distances):
         front = self._explicit_distance(distances.get('front'))

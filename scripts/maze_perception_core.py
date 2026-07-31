@@ -41,6 +41,11 @@ class SectorExtractor:
         front_max_range,
         side_max_range,
         distance_percentile,
+        side_projection_angle_min_deg=15.0,
+        side_projection_angle_max_deg=60.0,
+        side_projection_x_min=0.45,
+        side_projection_x_max=1.50,
+        side_min_points=3,
     ):
         self.z_min = float(z_min)
         self.z_max = float(z_max)
@@ -53,8 +58,23 @@ class SectorExtractor:
         self.front_max_range = float(front_max_range)
         self.side_max_range = float(side_max_range)
         self.distance_percentile = float(distance_percentile)
+        self.side_projection_angle_min_deg = float(
+            side_projection_angle_min_deg
+        )
+        self.side_projection_angle_max_deg = float(
+            side_projection_angle_max_deg
+        )
+        self.side_projection_x_min = float(side_projection_x_min)
+        self.side_projection_x_max = float(side_projection_x_max)
+        self.side_min_points = int(side_min_points)
         self._validate()
         self._front_angle_rad = math.radians(self.front_angle_deg)
+        self._side_projection_angle_min_rad = math.radians(
+            self.side_projection_angle_min_deg
+        )
+        self._side_projection_angle_max_rad = math.radians(
+            self.side_projection_angle_max_deg
+        )
 
     def extract(self, points):
         """返回各扇区距离、点数以及点云基本质量统计。"""
@@ -64,6 +84,7 @@ class SectorExtractor:
         }
         total_points = 0
         finite_points = 0
+        accepted_points = 0
 
         for point in points:
             # total/finite 统计用于区分空点云与含 NaN/Inf 的损坏点云。
@@ -86,35 +107,56 @@ class SectorExtractor:
             if distance < self.min_range:
                 continue
 
-            sector = self._classify_sector(math.atan2(y, x))
-            if sector is None:
-                continue
+            angle = math.atan2(y, x)
+            sector = self._classify_sector(angle)
+            accepted = False
 
-            max_range = (
-                self.side_max_range
-                if sector in ('left', 'right')
-                else self.front_max_range
-            )
-            if distance > max_range:
-                continue
-            sector_values[sector].append(distance)
+            if sector in ('front', 'left_front', 'right_front'):
+                if distance <= self.front_max_range:
+                    sector_values[sector].append(distance)
+                    accepted = True
+            elif sector in ('left', 'right'):
+                # 正侧方量测本来就等于横向净距，统一使用 |y|。
+                lateral_distance = abs(y)
+                if lateral_distance <= self.side_max_range:
+                    sector_values[sector].append(lateral_distance)
+                    accepted = True
+
+            projected_side = self._classify_projected_side(x, y, angle)
+            if projected_side is not None and projected_side != sector:
+                # Go2 真机的低矮挡板回波集中在斜前方；投影到 y 轴后
+                # 才是走廊居中和机身侧向安全检查需要的墙面净距。
+                lateral_distance = abs(y)
+                if lateral_distance <= self.side_max_range:
+                    sector_values[projected_side].append(lateral_distance)
+                    accepted = True
+
+            if accepted:
+                accepted_points += 1
 
         # 使用百分位距离，避免单个飞点像“最小值”一样触发误报。
-        distances = {
-            name: self._percentile(
-                sector_values[name],
-                self.distance_percentile,
-            )
-            for name in SECTOR_NAMES
-        }
         counts = {
             name: len(sector_values[name])
             for name in SECTOR_NAMES
         }
+        distances = {}
+        for name in SECTOR_NAMES:
+            # 侧墙投影必须有多点支持；稀疏单点不能被当作可靠墙面。
+            if (
+                name in ('left', 'right')
+                and counts[name] < self.side_min_points
+            ):
+                distances[name] = None
+                continue
+            distances[name] = self._percentile(
+                sector_values[name],
+                self.distance_percentile,
+            )
         return {
             'distances': distances,
             'counts': counts,
-            'valid_points': sum(counts.values()),
+            # 投影点会同时参与斜前障碍和侧墙距离，统计时只计一次。
+            'valid_points': accepted_points,
             'finite_points': finite_points,
             'total_points': total_points,
         }
@@ -140,6 +182,27 @@ class SectorExtractor:
         if front_side_boundary < angle <= side_rear_boundary:
             return 'left'
         if -side_rear_boundary <= angle < -front_side_boundary:
+            return 'right'
+        return None
+
+    def _classify_projected_side(self, x, y, angle):
+        """识别可投影为左右墙净距的前向斜视点。"""
+        if not (
+            self.side_projection_x_min
+            <= x
+            <= self.side_projection_x_max
+        ):
+            return None
+        absolute_angle = abs(angle)
+        if not (
+            self._side_projection_angle_min_rad
+            <= absolute_angle
+            <= self._side_projection_angle_max_rad
+        ):
+            return None
+        if y > 0.0:
+            return 'left'
+        if y < 0.0:
             return 'right'
         return None
 
@@ -174,6 +237,10 @@ class SectorExtractor:
             self.front_max_range,
             self.side_max_range,
             self.distance_percentile,
+            self.side_projection_angle_min_deg,
+            self.side_projection_angle_max_deg,
+            self.side_projection_x_min,
+            self.side_projection_x_max,
         )
         if not all(math.isfinite(value) for value in values):
             raise ValueError('sector parameters must be finite')
@@ -197,6 +264,31 @@ class SectorExtractor:
             )
         if not 0.0 < self.distance_percentile <= 100.0:
             raise ValueError('distance_percentile must be in (0, 100]')
+        if not (
+            0.0
+            <= self.side_projection_angle_min_deg
+            < self.side_projection_angle_max_deg
+            <= 90.0
+        ):
+            raise ValueError(
+                'side projection angles must satisfy '
+                '0 <= min < max <= 90 degrees'
+            )
+        if self.side_projection_x_min < self.body_x_max:
+            raise ValueError(
+                'side_projection_x_min must not be less than '
+                'body_x_max'
+            )
+        if (
+            self.side_projection_x_max
+            <= self.side_projection_x_min
+        ):
+            raise ValueError(
+                'side_projection_x_max must be greater than '
+                'side_projection_x_min'
+            )
+        if self.side_min_points <= 0:
+            raise ValueError('side_min_points must be positive')
 
 
 class DryRunDecisionEngine:

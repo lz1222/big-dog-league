@@ -103,11 +103,12 @@ python3 scripts/odom_yaw_monitor.py \
 | `front` | `-22.5 .. +22.5 deg` | `0 deg` | `front_max_range` |
 | `left_front` | `+22.5 .. +67.5 deg` | `+45 deg` | `front_max_range` |
 | `right_front` | `-67.5 .. -22.5 deg` | `-45 deg` | `front_max_range` |
-| `left` | `+67.5 .. +112.5 deg` | `+90 deg` | `side_max_range` |
-| `right` | `-112.5 .. -67.5 deg` | `-90 deg` | `side_max_range` |
+| `left` | 正侧方或可配置左斜前投影窗 | 左侧墙 | `side_max_range` |
+| `right` | 正侧方或可配置右斜前投影窗 | 右侧墙 | `side_max_range` |
 
-扇区距离是该区域所有有效径向距离的 `distance_percentile`，不是单个最小
-点。后方点不参与这五个区域。
+前方和斜前距离是有效径向距离的 `distance_percentile`。左右距离为正侧方
+点或斜前墙点投影后的横向净距 `|y|` 百分位。这样可兼容真机对 45cm 挡板
+缺少 `±90 deg` 回波的情况；后方点不参与这五个区域。
 
 ### 4.1 参数说明
 
@@ -123,6 +124,9 @@ python3 scripts/odom_yaw_monitor.py \
 | `front_max_range` | 点云 | m，`> 0` | 前、左前、右前最大距离 |
 | `side_max_range` | 点云 | m，`> 0` | 左、右最大距离 |
 | `distance_percentile` | 点云 | `%`，`0 < value <= 100` | 每个扇区的距离百分位数 |
+| `side_projection_angle_min/max` | 点云 | deg | 侧墙斜前投影角度窗 |
+| `side_projection_x_min/max` | 点云 | m | 侧墙投影前向 x 窗口 |
+| `side_min_points` | 点云 | 正整数 | 单侧墙距离所需最少点数 |
 | `stale_timeout` | 两者 | s，`> 0` | 超过此消息间隔后显示 `STALE` |
 | `print_rate` | 两者 | Hz，`> 0` | 状态日志输出频率 |
 | `stationary_linear_speed_threshold` | 里程计 | m/s，`>= 0` | 静止判定线速度上限 |
@@ -174,15 +178,16 @@ abs(monitor_distance - measured_distance) <= 0.10 m
 
 ### 5.5 Left
 
-1. 将纸箱中心放在 `+90 deg` 射线上。
-2. 确认主要命中 `left`。
-3. 比较 `left` 与卷尺距离。
+1. 先将纸箱中心放在 `+90 deg` 射线上，检查直接侧向回波。
+2. 再把纸箱作为平行左墙放在斜前投影窗口内。
+3. 确认 `left` 输出的是纸箱到 `base_link` 中线的横向净距，不是斜距。
+4. 检查点数至少达到 `side_min_points`。
 
 ### 5.6 Right
 
-1. 将纸箱中心放在 `-90 deg` 射线上。
-2. 确认主要命中 `right`。
-3. 比较 `right` 与卷尺距离。
+1. 先将纸箱中心放在 `-90 deg` 射线上，检查直接侧向回波。
+2. 再把纸箱作为平行右墙放在斜前投影窗口内。
+3. 确认 `right` 输出的是横向净距，并检查最小点数门槛。
 
 ## 6. 地面过滤标定
 
