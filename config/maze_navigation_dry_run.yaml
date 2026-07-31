@@ -30,6 +30,8 @@ maze_navigation_dry_run:
     sensor_confirm_frames: 3
     # 单帧侧距缺失先输出零诊断速度，第2帧仍缺失才锁定故障。
     side_missing_confirm_frames: 2
+    # 单帧侧向余量不足也先停住，第2帧仍不足才锁止；0.185m门限不变。
+    side_unsafe_confirm_frames: 2
     corner_confirm_frames: 3
     turn_confirm_frames: 3
     reacquire_confirm_frames: 5
@@ -72,11 +74,11 @@ maze_navigation_dry_run:
     turn_tolerance_deg: 4.0
     reacquire_yaw_tolerance_deg: 7.0
 
-    # 人工干跑允许操控员分段松杆观察；空间不足和STALE仍会立即锁止。
-    # 接入自主运动前必须按实测速度重新缩短这些人工超时值。
-    corner_timeout_sec: 30.0
-    turn_timeout_sec: 30.0
-    reacquire_timeout_sec: 30.0
+    # 人工干跑包含尺量、日志核对和操控员确认，等待期间节点不会发送运动命令。
+    # 这里保留30分钟故障上限，接入自主运动前必须按实测速度重新缩短。
+    corner_timeout_sec: 1800.0
+    turn_timeout_sec: 1800.0
+    reacquire_timeout_sec: 1800.0
     reverse_timeout_sec: 1.0
 
 maze_navigation_simulator:
@@ -98,5 +100,7 @@ maze_operator_monitor:
     navigation_status_topic: /maze/navigation/dry_run_status
     refresh_rate: 5.0
     status_stale_timeout_sec: 1.50
+    # 默认步态点动实测约8至15cm；按上界提示，避免低估前方余量消耗。
+    manual_step_distance_cm: 15.0
     use_color: true
     beep_on_action_change: true

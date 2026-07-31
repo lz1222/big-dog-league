@@ -47,7 +47,8 @@ class MazeOperatorPromptCoreTest(unittest.TestCase):
     def test_corridor_follow_prompts_short_forward_step(self):
         view = self._view('CORRIDOR_FOLLOW', 'corridor_centering')
         self.assertEqual(view.action_code, 'FORWARD_STEP')
-        self.assertIn('2 至 5cm', view.instruction)
+        self.assertIn('约 8cm', view.instruction)
+        self.assertIn('禁止连续点动', view.instruction)
 
     def test_missing_confirmation_overrides_state_with_stop(self):
         view = self._view(
@@ -57,6 +58,24 @@ class MazeOperatorPromptCoreTest(unittest.TestCase):
         self.assertEqual(view.action_code, 'STOP')
         self.assertIn('保持静止', view.instruction)
         self.assertIn('暂停确认 1/2', view.reason_label)
+
+    def test_unsafe_clearance_confirmation_requires_immediate_hold(self):
+        view = self._view(
+            'CORRIDOR_FOLLOW',
+            'corridor_side_clearance_unsafe_confirmation_1/2',
+        )
+        self.assertEqual(view.action_code, 'STOP')
+        self.assertIn('立即松开', view.instruction)
+        self.assertIn('危险帧确认 1/2', view.reason_label)
+
+    def test_manual_step_distance_is_configurable(self):
+        view = build_operator_view(
+            self._payload('CORRIDOR_FOLLOW', 'corridor_centering'),
+            0.1,
+            1.5,
+            manual_step_distance_cm=6.5,
+        )
+        self.assertIn('约 6.5cm', view.instruction)
 
     def test_corner_approach_waiting_opening_requires_stop(self):
         view = self._view(

@@ -93,13 +93,27 @@ class OperatorView:
     reason_label: str
 
 
-def build_operator_view(payload, stream_age_sec, stale_timeout_sec):
+def build_operator_view(
+    payload,
+    stream_age_sec,
+    stale_timeout_sec,
+    manual_step_distance_cm=8.0,
+):
     """将一帧 B2 JSON 转换为保守的中文人工操作提示。"""
     if not isinstance(payload, dict):
         return _stop_view(
             '等待 B2 状态',
             '保持静止；确认 B1、B2 和终端 D 均已启动。',
             '尚未收到有效的 B2 JSON',
+            severity='warning',
+        )
+
+    step_distance = _finite_number(manual_step_distance_cm)
+    if step_distance is None or step_distance <= 0.0:
+        return _stop_view(
+            '人工点动标定无效',
+            '保持静止；检查 manual_step_distance_cm 参数。',
+            '无法生成可执行的人工前进提示',
             severity='warning',
         )
 
@@ -139,6 +153,13 @@ def build_operator_view(payload, stream_age_sec, stale_timeout_sec):
             reason_label,
             severity='warning',
         )
+    if 'clearance_unsafe_confirmation_' in reason:
+        return _stop_view(
+            state_label,
+            '立即松开遥控器并保持静止；等待下一帧确认侧向安全余量。',
+            reason_label,
+            severity='danger',
+        )
 
     if state == 'WAIT_SENSOR':
         return OperatorView(
@@ -152,11 +173,15 @@ def build_operator_view(payload, stream_age_sec, stale_timeout_sec):
     if state == 'CORRIDOR_FOLLOW':
         if bool(payload.get('route_complete')):
             instruction = (
-                '短促前进 2 至 5cm，每次松杆观察；等待雷达确认出口。'
+                '执行一次最短可控前进点动'
+                f'（当前标定约 {step_distance:g}cm），随即松杆观察；'
+                '等待雷达确认出口。'
             )
         else:
             instruction = (
-                '短促前进 2 至 5cm，每次松杆观察；根据左右侧距保持居中。'
+                '执行一次最短可控前进点动'
+                f'（当前标定约 {step_distance:g}cm），随即松杆观察；'
+                '禁止连续点动，并根据左右侧距保持居中。'
             )
         return OperatorView(
             'normal',
@@ -178,7 +203,9 @@ def build_operator_view(payload, stream_age_sec, stale_timeout_sec):
             'caution',
             'FORWARD_FINE',
             '更小步前进',
-            '每次仅前进 1 至 3cm，随即松杆；等待明确的 TURN_LEFT 或 TURN_RIGHT。',
+            '仅执行一次最短可控前进点动'
+            f'（当前标定约 {step_distance:g}cm），随即松杆；'
+            '等待明确的 TURN_LEFT 或 TURN_RIGHT。',
             state_label,
             reason_label,
         )
@@ -207,7 +234,9 @@ def build_operator_view(payload, stream_age_sec, stale_timeout_sec):
             'caution',
             'REACQUIRE',
             '缓慢进入新通道',
-            '短促前进 1 至 3cm并小幅居中；出现下一段 CORRIDOR_FOLLOW 后松杆停止。',
+            '仅执行一次最短可控前进点动'
+            f'（当前标定约 {step_distance:g}cm）并小幅居中；'
+            '出现下一段 CORRIDOR_FOLLOW 后松杆停止。',
             state_label,
             reason_label,
         )
@@ -249,6 +278,10 @@ def translate_reason(reason):
         base_reason, count = text.rsplit('_confirmation_', 1)
         base_label = REASON_LABELS.get(base_reason, base_reason)
         return f'{base_label}，暂停确认 {count}'
+    if 'clearance_unsafe_confirmation_' in text:
+        base_reason, count = text.rsplit('_confirmation_', 1)
+        base_label = REASON_LABELS.get(base_reason, base_reason)
+        return f'{base_label}，危险帧确认 {count}'
     prefixes = (
         ('sensor_confirmation_', '传感器连续确认 '),
         ('fine_align_confirmation_', '目标角连续确认 '),

@@ -48,6 +48,10 @@ class MazeOperatorMonitor(Node):
             'status_stale_timeout_sec',
             1.50,
         )
+        self.manual_step_distance_cm = self._positive_float_parameter(
+            'manual_step_distance_cm',
+            8.0,
+        )
         self.use_color = bool(
             self.declare_parameter('use_color', True).value
         ) and sys.stdout.isatty()
@@ -78,6 +82,7 @@ class MazeOperatorMonitor(Node):
             'Maze operator monitor ready: '
             f'topic={self.status_topic}, '
             f'stale_timeout={self.status_stale_timeout_sec:.2f}s; '
+            f'manual_step={self.manual_step_distance_cm:g}cm; '
             'read-only Chinese prompts'
         )
         self._render(force=True)
@@ -115,6 +120,7 @@ class MazeOperatorMonitor(Node):
             self._payload,
             stream_age,
             self.status_stale_timeout_sec,
+            self.manual_step_distance_cm,
         )
         signature = (
             view.action_code,

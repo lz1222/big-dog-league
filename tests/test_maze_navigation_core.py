@@ -113,7 +113,7 @@ class MazeNavigationPolicyTest(unittest.TestCase):
             )
         )
 
-    def test_side_space_insufficient_enters_fault_stop(self):
+    def test_side_space_insufficient_stops_then_enters_fault(self):
         self._confirm_sensors()
         unsafe = self._observation(
             turn_rad=0.0,
@@ -125,12 +125,43 @@ class MazeNavigationPolicyTest(unittest.TestCase):
                 'right': 0.40,
             },
         )
+        pending = self._step(unsafe)
+        self.assertEqual(pending['state'], STATE_CORRIDOR_FOLLOW)
+        self.assertEqual(pending['desired_vx'], 0.0)
+        self.assertEqual(pending['desired_wz'], 0.0)
+        self.assertEqual(pending['side_unsafe_streak'], 1)
+        self.assertEqual(
+            pending['reason'],
+            'corridor_side_clearance_unsafe_confirmation_1/2',
+        )
+
         output = self._step(unsafe)
         self.assertEqual(output['state'], STATE_FAULT_STOP)
         self.assertEqual(
             output['reason'],
             'corridor_side_clearance_unsafe',
         )
+
+    def test_single_unsafe_side_frame_recovers_without_fault(self):
+        """步态摆动造成单帧低余量时先停住，下一安全帧恢复走廊状态。"""
+        self._confirm_sensors()
+        unsafe_distances = dict(
+            self._observation(turn_rad=0.0).distances
+        )
+        unsafe_distances['right'] = 0.184
+
+        pending = self._step(self._observation(
+            turn_rad=0.0,
+            distances=unsafe_distances,
+        ))
+        recovered = self._step(self._observation(turn_rad=0.0))
+
+        self.assertEqual(pending['desired_vx'], 0.0)
+        self.assertEqual(pending['side_unsafe_streak'], 1)
+        self.assertEqual(recovered['state'], STATE_CORRIDOR_FOLLOW)
+        self.assertEqual(recovered['reason'], 'corridor_centering')
+        self.assertEqual(recovered['side_unsafe_streak'], 0)
+        self.assertGreater(recovered['desired_vx'], 0.0)
 
     def test_missing_side_prevents_initial_sensor_confirmation(self):
         observation = self._observation(
