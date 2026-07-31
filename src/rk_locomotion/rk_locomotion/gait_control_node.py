@@ -463,6 +463,9 @@ class GaitControlNode(Node):
                     'front_jump.estop_state_stale_timeout'
                 )
             ),
+            software_smoke_mode=self._bool_parameter(
+                'front_jump.software_smoke_mode'
+            ),
         )
         self.front_jump_final_cmd_topic = self._front_jump_string_parameter(
             'front_jump.final_cmd_topic'
@@ -904,6 +907,8 @@ class GaitControlNode(Node):
             'front_jump.cmd_mux_status_topic': '/control/cmd_mux_status',
             'front_jump.estop_state_topic': '/safety/estop_state',
             'front_jump.estop_state_stale_timeout': 0.20,
+            # software smoke 只能运行带测试身份标记的无网络 ELF helper。
+            'front_jump.software_smoke_mode': False,
             'front_jump.cleanup_guard_path': (
                 '~/rk_line_runtime/front_jump_cleanup_guard.json'
             ),

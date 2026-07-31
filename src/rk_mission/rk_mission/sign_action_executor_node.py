@@ -269,19 +269,10 @@ class SignActionExecutorNode(Node):
             for index, step in enumerate(sequence):
                 step_name = f'step_{index + 1}'
                 wait_sec = self._optional_float(step.get('wait_sec'))
-                if wait_sec is not None:
-                    self._publish_status(
-                        key,
-                        'RUNNING',
-                        step_name,
-                        True,
-                        f'wait {wait_sec:.2f}s'
-                    )
-                    time.sleep(max(0.0, wait_sec))
-                    continue
-
                 sdk_action = str(step.get('sdk_action', '')).strip()
                 if sdk_action:
+                    # 一个 step 同时给出 sdk_action/wait_sec 时，wait 是动作后的
+                    # 保持时间；先 wait 会直接 continue 并错误跳过 SDK 动作。
                     self._publish_status(
                         key,
                         'RUNNING',
@@ -297,8 +288,28 @@ class SignActionExecutorNode(Node):
                         True,
                         'sdk action finished'
                     )
+                    if wait_sec is not None:
+                        self._publish_status(
+                            key,
+                            'RUNNING',
+                            step_name,
+                            True,
+                            f'wait {wait_sec:.2f}s after sdk action'
+                        )
+                        time.sleep(max(0.0, wait_sec))
                     if self.command_gap_sec > 0.0:
                         time.sleep(self.command_gap_sec)
+                    continue
+
+                if wait_sec is not None:
+                    self._publish_status(
+                        key,
+                        'RUNNING',
+                        step_name,
+                        True,
+                        f'wait {wait_sec:.2f}s'
+                    )
+                    time.sleep(max(0.0, wait_sec))
                     continue
 
                 command = dict(step)
@@ -344,32 +355,26 @@ class SignActionExecutorNode(Node):
         if not action:
             raise RuntimeError('sdk_action step has empty sdk_action')
 
-        wait_sec = self._optional_float(step.get('wait_sec'))
-        if wait_sec is None:
-            wait_sec = 0.0
-
-        timeout_sec = max(
-            1.0,
-            wait_sec + self.sdk_action_timeout_padding_sec
-        )
+        # wait_sec 已由调用方作为 SDK 动作后的停留时间处理，helper 必须立刻
+        # 返回实际 SDK 动作结果，不能把等待误当作动作本身的一部分。
+        timeout_sec = max(1.0, self.sdk_action_timeout_padding_sec)
         command = [
             self._resolve_sdk_action_executable(),
             self.sdk_network_interface,
             action,
-            f'{wait_sec:.3f}',
+            '0.000',
         ]
 
         if self.dry_run:
             self.get_logger().info(
                 '[DRY_RUN] SDK action: ' + ' '.join(command)
             )
-            time.sleep(max(0.0, wait_sec))
             return
 
         self.get_logger().warn(
             f'Running SDK sign action: action={action}, '
             f'interface={self.sdk_network_interface}, '
-            f'wait={wait_sec:.2f}s, timeout={timeout_sec:.2f}s'
+            f'helper_wait=0.00s, timeout={timeout_sec:.2f}s'
         )
         try:
             completed = subprocess.run(

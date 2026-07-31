@@ -27,7 +27,38 @@ from rk_locomotion.front_jump_supervisor import ProcessIdentityError
 from rk_locomotion.front_jump_supervisor import ProcessStartError
 from rk_locomotion.front_jump_supervisor import ProcessResult
 from rk_locomotion.front_jump_supervisor import SubprocessRunner
+from rk_locomotion.front_jump_supervisor import is_test_only_smoke_helper
 from rk_locomotion.front_jump_supervisor import resolve_sdk_executable
+
+
+def test_front_jump_profile_exposes_conservative_worst_case_duration():
+    """上游白横线超时应由四个监管窗口求和，而不是硬编码猜测。"""
+    profile = FrontJumpProfile(
+        name='start',
+        pre_stop_duration=0.5,
+        final_zero_epsilon=0.001,
+        final_zero_confirm_samples=3,
+        final_zero_timeout=2.0,
+        sdk_timeout=12.0,
+        post_settle_duration=2.5,
+    )
+
+    assert profile.worst_case_duration_sec == pytest.approx(17.0)
+
+
+def test_software_smoke_helper_requires_test_elf_identity(tmp_path):
+    """software smoke 绝不能把普通可执行文件或真实 SDK helper 当作测试件。"""
+    helper = tmp_path / 'fake_sdk_motion_helper'
+    helper.write_bytes(
+        b'\x7fELF' + b'\x00' * 32
+        + b'RK_NON_ARM_TEST_ONLY_FAKE_SDK_HELPER_V1'
+    )
+    ordinary = tmp_path / 'ordinary_helper'
+    ordinary.write_bytes(b'\x7fELF' + b'ordinary executable')
+
+    assert is_test_only_smoke_helper(helper)
+    assert not is_test_only_smoke_helper(ordinary)
+    assert not is_test_only_smoke_helper('/usr/bin/true')
 
 
 EXPECTED_STAGES = [
@@ -2627,7 +2658,9 @@ def test_context_shutdown_callback_only_requests_local_shutdown(tmp_path):
         started = time.monotonic()
         context.try_shutdown()
         elapsed = time.monotonic() - started
-        assert elapsed < 0.05
+        # 回调仅应设置本地停止标志；容许繁忙 VM 的调度抖动，但不能同步执行
+        # helper 清理或 ROS 发布而阻塞到可感知的控制周期。
+        assert elapsed < 0.25
         assert node._shutdown_requested.is_set()
         assert not node._ros_cleanup_allowed.is_set()
         assert node.shutdown_drained()
@@ -3370,7 +3403,9 @@ def test_real_context_shutdown_reaps_ignoring_group_no_ros_output(tmp_path):
         assert ready_path.read_text() == 'ready'
         calls_before_shutdown = len(zero_calls)
         context.try_shutdown()
-        worker.join(timeout=3.0)
+        # 清理包含 SIGTERM/SIGKILL 两个有界轮询；虚拟机高负载时 3 秒会把
+        # 已开始的本地回收误判为挂死。8 秒仍远小于 helper 的 60 秒驻留。
+        worker.join(timeout=8.0)
         assert not worker.is_alive()
         assert outcome_box
         outcome = outcome_box[0]

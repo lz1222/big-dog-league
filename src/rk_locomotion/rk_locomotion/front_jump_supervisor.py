@@ -25,6 +25,9 @@ import uuid
 
 _INTERFACE_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,14}$')
 _OUTPUT_CAPTURE_LIMIT_BYTES = 65536
+_TEST_ONLY_SMOKE_HELPER_MARKER = (
+    b'RK_NON_ARM_TEST_ONLY_FAKE_SDK_HELPER_V1'
+)
 _FEEDBACK_PROGRESS = {
     'acquire_gait_lock': 0.05,
     'publish_locomotion_zero': 0.10,
@@ -38,6 +41,24 @@ _FEEDBACK_PROGRESS = {
 
 class FrontJumpConfigurationError(ValueError):
     """Raised when a FrontJump parameter or runtime dependency is invalid."""
+
+
+def is_test_only_smoke_helper(path):
+    """只认可带固定标识的 ELF，防止 smoke 误调用真实 Unitree helper。
+
+    该检查不是通用的二进制信任机制；它仅把 software smoke 的最小边界
+    固化为随仓库测试源码编译的无网络 ELF。任何读取失败、脚本或无标识文件
+    都按不可信处理，由调用方 fail-closed。
+    """
+    try:
+        candidate = Path(str(path))
+        with candidate.open('rb') as stream:
+            contents = stream.read(_OUTPUT_CAPTURE_LIMIT_BYTES)
+    except (OSError, TypeError, ValueError):
+        return False
+    return contents.startswith(b'\x7fELF') and (
+        _TEST_ONLY_SMOKE_HELPER_MARKER in contents
+    )
 
 
 class CleanupGuardError(RuntimeError):
@@ -818,6 +839,20 @@ class FrontJumpProfile:
             ),
         )
 
+    @property
+    def worst_case_duration_sec(self):
+        """返回软件监管各等待窗口的保守总时长。
+
+        此值供上游 Action 超时配置校验使用；它不是实体跳跃完成证明，
+        只覆盖 pre-stop、最终零速确认、SDK 调用和动作后静置窗口。
+        """
+        return (
+            self.pre_stop_duration
+            + self.final_zero_timeout
+            + self.sdk_timeout
+            + self.post_settle_duration
+        )
+
 
 @dataclass(frozen=True)
 class FrontJumpConfig:
@@ -828,6 +863,8 @@ class FrontJumpConfig:
     zero_publish_rate_hz: float
     final_cmd_stale_timeout: float
     estop_state_stale_timeout: float
+    # smoke 只允许仓库测试 ELF，绝不允许调用 Unitree SDK helper。
+    software_smoke_mode: bool = False
 
     def __post_init__(self):
         executable = _nonempty_string(
@@ -869,6 +906,10 @@ class FrontJumpConfig:
                 positive=True,
             ),
         )
+        if not isinstance(self.software_smoke_mode, bool):
+            raise FrontJumpConfigurationError(
+                'software_smoke_mode must be a boolean'
+            )
 
 
 @dataclass(frozen=True)
@@ -2267,20 +2308,28 @@ class FrontJumpSupervisor:
         with self._condition:
             context.helper_path = executable
 
-        try:
-            interface_index = self._interface_index(
-                self.config.sdk_network_interface
-            )
-            if (
-                isinstance(interface_index, bool)
-                or not isinstance(interface_index, int)
-                or interface_index <= 0
-            ):
-                raise ValueError('network interface index is invalid')
-        except (OSError, TypeError, ValueError):
-            raise _FlowExit(
-                'abort', context.stage, 'sdk_network_interface_not_found'
-            )
+        if self.config.software_smoke_mode:
+            if not is_test_only_smoke_helper(executable):
+                raise _FlowExit(
+                    'abort',
+                    context.stage,
+                    'software_smoke_helper_identity_rejected',
+                )
+        else:
+            try:
+                interface_index = self._interface_index(
+                    self.config.sdk_network_interface
+                )
+                if (
+                    isinstance(interface_index, bool)
+                    or not isinstance(interface_index, int)
+                    or interface_index <= 0
+                ):
+                    raise ValueError('network interface index is invalid')
+            except (OSError, TypeError, ValueError):
+                raise _FlowExit(
+                    'abort', context.stage, 'sdk_network_interface_not_found'
+                )
 
         argv = [
             executable,

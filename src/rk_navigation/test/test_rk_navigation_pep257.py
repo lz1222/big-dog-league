@@ -13,11 +13,18 @@
 # limitations under the License.
 
 from ament_pep257.main import main
+from pathlib import Path
 import pytest
 
 
 @pytest.mark.linter
 @pytest.mark.pep257
 def test_pep257():
-    rc = main(argv=['.', 'test'])
+    # 中文文档字符串采用中文标点；这些规则只接受英文句末标点/祈使语气，
+    # 会把合规的中文说明误报为失败。显式保留 ament 的缺失文档默认忽略项。
+    package_root = Path(__file__).resolve().parents[1]
+    rc = main(argv=[
+        str(package_root), 'test',
+        '--ignore=D100,D101,D102,D103,D104,D105,D107,D203,D212,D213,D400,D401,D403,D415',
+    ])
     assert rc == 0, 'Found code style errors / warnings'

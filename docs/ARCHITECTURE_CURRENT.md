@@ -1,25 +1,78 @@
-# 当前实际架构（National Competition Baseline）
+# 当前实际架构（非机械臂正式比赛链更新）
 
 ## 审计范围与结论
 
-本文记录 `codex/national-control-architecture` 分支、基线提交 `ded2631` 之上的
-当前源码和 launch 组合。它描述“现在有什么、实际怎样连”，不把规划文档、
-mock 成功或尚未接线的 adapter 当成已实现功能。
+本文记录当前源码和 launch 组合。它描述“现在有什么、实际怎样连”，不把规划
+文档、mock 成功或尚未接线的 adapter 当成已实现功能。下文保留的旧 launch 清单
+是兼容性/风险审计，不会覆盖本轮正式非机械臂入口的实际范围。
 
 当前最重要的架构事实是：
 
 - 仓库已有一条真实 D435i 巡线到 Go2 SDK UDP 的子系统链。
 - 该真实巡线链已经加入 `command_mux_node`；比赛子系统中只有 mux 发布最终
   `/navigation/cmd_vel`。
-- 完整比赛状态机只有 mock launch 把 perception、locomotion、arm 和 mission 组合起来。
-- 仓库仍没有把完整 mission、真实 gait action、真实 arm、真实 sign/item
-  perception 和 mux 组合起来的真实全赛程 launch。
+- `competition_non_arm.launch.py` 已将真实巡线/警示牌感知、路线状态机、白横线
+  stage/executor、真实 gait Action、inspection executor、mux 与生产 UDP 后端组合为
+  非机械臂正式入口。
+- 完整机械臂、避障与楼梯赛程仍没有被该入口实现或验收；旧 mock launch 仍只用于
+  接口/时序测试，不能作为实体比赛完成证明。
 - standalone mock/debug/tool launch 显式保留直发最终速度；它们不得与真实比赛
   控制栈并行。
+
+## 0. 本轮正式非机械臂比赛链
+
+正式入口为 `src/rk_bringup/launch/competition_non_arm.launch.py`，配套参数为
+`src/rk_bringup/config/non_arm_competition_params.yaml`，运维入口为
+`start_non_arm_competition.sh`、`mission_start.sh`、`mission_stop.sh` 与
+`stop_line_system.sh`。启动只完成只读 graph/readiness 检查，绝不自动发布
+`/mission/start`；`mission_start.sh` 在 readiness 成功后只发布一次 start 并确认
+`WAIT_START -> START_STAGE` 与稳定的 `run_id`。
+
+```mermaid
+flowchart LR
+    Camera[D435i RGB]
+    Tracker[real_line_tracker_node]
+    Sign[real_sign_detector_node]
+    Follower[line_follower_node]
+    Route[line_course_mission_node]
+    White[white stage and executor]
+    Gait[gait_control_node ExecuteMotion]
+    Inspect[inspection_action_executor]
+    Mux[command_mux_node]
+    Final[/navigation/cmd_vel]
+    Udp[cmd_vel_udp_forwarder and go2_sdk_udp_server]
+
+    Camera --> Tracker --> Follower --> Route --> Mux --> Final --> Udp
+    Tracker --> Route
+    Route --> White --> Gait
+    Sign --> Inspect --> Route
+    Gait -. FrontJump software Action path .-> White
+```
+
+起点和终点白横线均通过显式 stage command 触发唯一的
+`/locomotion/execute_motion` Action：`gait_control_node` 的 FrontJump supervisor
+先取得 gait lock、持续要求最终零速、受监督地调用 helper，再释放 lock。统一超时
+契约为 FrontJump 最坏软件时长 17 秒、executor 22 秒、line-course 26 秒；层级
+漂移会被单元测试拒绝。
+
+production 模式启动 RealSense、UDP server 与 forwarder；`software_smoke_mode=true`
+强制不启动它们，并只接受带 `RK_NON_ARM_TEST_ONLY_FAKE_SDK_HELPER_V1` 标识的临时
+ELF。smoke 仍运行真实 line follower、路线、白横线 executor、gait Action、
+inspection executor 和 mux，且只允许 mux 发布最终 `/navigation/cmd_vel`。详细的
+命令、独立 overlay 与 `/proc` helper 身份检查见
+`docs/NON_ARM_COMPETITION_ACCEPTANCE.md`。
+
+本入口明确不包含机械臂/抓取/中转/放置、避障区/迷宫/避障路线、楼梯区或
+`stairs` 动作；这些功能不能因此被报告为完成。以下仍是
+`NEEDS_HARDWARE_EVIDENCE`：D435i 现场视觉、UDP 真实收发、两次实体 FrontJump、
+三种 SDK 姿态、mission stop/estop 后实体持续静止，以及赛场光照下的阶段门控。
 
 ## 1. 当前可启动的数据流
 
 ### 1.1 真实巡线子系统
+
+本节描述保留的旧 `competition_line_nav.launch.py` 巡线入口；正式非机械臂比赛
+入口及其白横线/inspection/真实 gait Action 接线以第 0 节为准。
 
 `src/rk_bringup/launch/competition_line_nav.launch.py` 和 `start_line_system.sh` 实际组成以下链路：
 
@@ -167,9 +220,10 @@ mux 作为唯一最终发布者持续输出零。estop 置位和解除两种真�
 节点并失败退出。
 
 上述闭环已在 VM/Humble 的软件测试范围内验证，但机器人/Foxy 的 DDS 行为、
-UDP forwarder 二次限幅后的 payload、SDK 接收和实体停止尚未验收。完整
-mission/gait/arm 也尚未进入真实比赛 launch；standalone 直发入口和工具仍可能
-在误启动时形成第二个最终 publisher。
+UDP forwarder 二次限幅后的 payload、SDK 接收和实体停止仍是
+`NEEDS_HARDWARE_EVIDENCE`。非机械臂正式路线/gait 已进入
+`competition_non_arm.launch.py`；完整机械臂、避障和楼梯赛程仍未进入该正式
+入口。standalone 直发入口和工具仍可能在误启动时形成第二个最终 publisher。
 
 ## 3. 完整比赛状态机
 
@@ -218,7 +272,10 @@ PRECHECK
 
 `auto_start=true` 时，节点启动约一秒后会自行向 `/mission/run` 发送 goal。真实比赛启动时必须明确配置该边界，不能把节点启动等同于裁判允许起跑。
 
-## 4. `line_course_mission` 状态机
+## 4. 旧 `line_course_mission` 快照与正式阶段门控
+
+本节图和源码定位是旧 line-nav 行为审计，不是 `competition_non_arm` 的路线
+状态机。正式入口以第 0 节的显式 START/inspection/FINISH/final-zone 阶段为准。
 
 状态集合：
 
@@ -259,7 +316,10 @@ stateDiagram-v2
     APPROACH_STOP_ZONE --> EMERGENCY_STOP: stale or approach timeout
 ```
 
-优先级为停止区、红圈、白横线、角点，最后才转发 suggested cmd。`FINAL_STOP` 和 `EMERGENCY_STOP` 均持续发布零。红圈动作直接启动 `go2_sdk_motion_action` 子进程；白横线只等待外部 `/mission/white_bar_action_done`，仓库中没有发布者。
+上图中的红圈直接 helper 与“无白横线完成发布者”仅描述当时旧实现。正式非机械臂
+路径由 request-driven inspection executor 完成警示牌闭环，并由
+`white_bar_stage_command_publisher` 和 `white_bar_action_executor` 完成 START/FINISH
+白横线 Action；终点蓝区只能在 FINISH 对齐后的 `FINAL_ZONE_ARMED` 计数。
 
 源码：`mission_state_machine_node.py:800-923,1138-1519,1542-1598`。
 
@@ -267,8 +327,10 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> WAIT_START
-    WAIT_START --> LINE_FOLLOW: /mission/start=true
+[*] --> WAIT_START
+WAIT_START --> START_READY: /mission/start=true
+START_READY --> LINE_FOLLOW: fresh stable LineTrack
+START_READY --> STOP: stale/nonfinite/timeout
     LINE_FOLLOW --> SHORT_LOST: line lost while not turning
     LINE_FOLLOW --> TURN_LOST_KEEP: line lost while turning
     SHORT_LOST --> LINE_FOLLOW: line recovered
@@ -283,7 +345,10 @@ stateDiagram-v2
     STOP --> LINE_FOLLOW: mission active and fresh trackable line
 ```
 
-任一运行状态遇到 LineTrack 消息超时或非有限数据会进入 `STOP`。收到 `/mission/stop` 会回到 `WAIT_START`。收到 `/gait/control_lock=true` 时暂停 suggested output。该状态机没有“到达某评分点”或“路线完成”状态，会持续跟线或找线，直到外部 stop 或故障条件。
+收到 `/mission/start` 后必须先在 `START_READY` 连续确认新鲜、有限、可见且误差
+受限的 LineTrack，期间 suggested cmd 为零；超时或异常会进入 `STOP`。任一运行状态
+遇到 LineTrack 消息超时或非有限数据也会进入 `STOP`，`/mission/stop` 回到
+`WAIT_START`，`/gait/control_lock=true` 暂停 suggested output。
 
 源码：`src/rk_navigation/rk_navigation/line_follower_node.py:15-38,322-472,474-710`。
 
@@ -293,8 +358,8 @@ stateDiagram-v2
 
 | motion name | 当前映射 | 实际完成条件 |
 | --- | --- | --- |
-| `start_jump` | `JUMP_START_OBSTACLE` | 两段定时前进、停顿和恢复等待；不调用 FrontJump SDK |
-| `finish_jump` | `JUMP_END_OBSTACLE` | 与起点相同的定时速度序列；不调用 FrontJump SDK |
+| `start_jump` | `FrontJumpSupervisor` | 预停、最终 mux 零速确认、受监督 helper 和 post-settle；软件成功不等于实体跨越证明 |
+| `finish_jump` | `FrontJumpSupervisor` | 与起点相同的受监督 FrontJump 软件路径；软件成功不等于实体跨越证明 |
 | `stairs_up_down` | 无映射 | action abort：unsupported motion name |
 | `avoid_zone` | `PRACTICAL_OBSTACLE_ZONE` | 配置的直行/转弯序列完成，带可选 depth/scan stop 条件 |
 | `follow_to_*` / `return_to_*` | `WAIT_NAVIGATION_SEGMENT` | 默认等待 3 秒后成功；没有到达判据 |
@@ -350,7 +415,7 @@ adapter 发布 JSON 后只按 `duration_sec` 等待并返回成功；没有 ACK 
 | --- | --- | --- | --- |
 | external `realsense2_camera_node` | D435i | RGB/depth ROS topics | 真实相机驱动，依赖机器人环境安装 |
 | `real_line_tracker_node` | `/camera/color/image_raw` | `LineTrack`、红圈、蓝停止区、白横线、角点候选及可选 debug image | 实图像算法；本审计无硬件验证结论 |
-| `real_sign_detector_node` | RGB image | `/perception/sign_detections` | QR/模板/颜色识别；只在独立 debug launch 中使用 |
+| `real_sign_detector_node` | RGB image | `/perception/sign_detections` | QR/模板/颜色识别；正式非机械臂入口和独立 debug launch 都会使用 |
 | `mock_line_tracker_node` | timer | 固定可见线 | mock |
 | `mock_sign_detector_node` | timer | 固定平台/警示牌 | mock |
 | `mock_item_tag_node` | timer | 固定两个 item tags | mock |
@@ -380,13 +445,12 @@ adapter 发布 JSON 后只按 `duration_sec` 等待并返回成功；没有 ACK 
 ### 未完成 placeholder
 
 - `stairs_up_down`
-- 白横线 action producer
 - `arm_task_node` DryRun backend
 - D1 的真实关节/夹爪/stop backend
 - new arm vendor bridge subscriber、ACK 和真实标定点位
 - gait recovery/body-height/jump-pose/IMU 稳定性 backend
 - 真实 item-tag/object-XY producer
-- 完整真实国赛 launch
+- 含机械臂、避障和楼梯区的完整真实国赛 launch
 
 ### 重复实现
 
@@ -409,8 +473,9 @@ adapter 发布 JSON 后只按 `duration_sec` 等待并返回成功；没有 ACK 
 
 ## 11. 启动时的所有权约束
 
-真实巡线子系统已建立 mux 唯一发布者基础。在形成正式全赛程 launch 前，仍
-至少应满足：
+本轮正式非机械臂入口已落实 mux 唯一发布者、唯一 motion Action、真实/测试
+感知互斥和 start/readiness 边界。未来若扩展为含机械臂、避障和楼梯区的完整
+全赛程 launch，仍至少应满足：
 
 1. `/navigation/cmd_vel` 正常运行时只有一个最终发布者
    `command_mux_node`；standalone/test/helper 不得并行。
@@ -426,5 +491,6 @@ adapter 发布 JSON 后只按 `duration_sec` 等待并返回成功；没有 ACK 
 10. 正常停机必须走 mux service 和 mux 零速确认；出现
     `EMERGENCY FALLBACK` 时必须记录为绕过所有权架构，而非正常验收通过。
 
-`command_mux` 完成不改变完整状态机、巡线参数或动作实现，也不证明跳跃、台阶、
-机械臂、白横线、UDP 硬件执行或 170 分任务已经验证。
+`command_mux` 完成不改变完整状态机、巡线参数或动作实现。当前软件链已经覆盖
+非机械臂白横线 Action，但不证明实体跳跃、UDP 硬件执行、台阶、机械臂或完整
+170 分任务已经验证。

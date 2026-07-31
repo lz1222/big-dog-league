@@ -46,7 +46,7 @@ def test_unavailable_server_times_out_without_done():
     )
 
     assert event.status == 'TIMEOUT'
-    assert event.cancel_goal
+    assert not event.cancel_goal
     assert not event.publish_done
 
 
@@ -91,21 +91,50 @@ def test_result_success_true_publishes_done():
 def test_running_action_timeout_enters_timeout():
     core, request, _, _ = _running_core()
 
-    event = core.timeout(request.request_id)
+    pending = core.timeout(request.request_id)
+    event = core.action_result(
+        request.request_id,
+        action_completed_normally=False,
+        result_success=False,
+    )
 
+    assert pending.status == 'CANCELING'
+    assert pending.cancel_goal
     assert event.status == 'TIMEOUT'
-    assert event.cancel_goal
     assert not event.publish_done
+    assert not core.active
 
 
 def test_mission_stop_cancels_running_action():
-    core, _, _, _ = _running_core()
+    core, request, _, _ = _running_core()
 
-    event = core.mission_stop()
+    pending = core.mission_stop()
+    event = core.action_result(
+        request.request_id,
+        action_completed_normally=False,
+        result_success=False,
+    )
 
+    assert pending.status == 'CANCELING'
+    assert pending.cancel_goal
     assert event.status == 'CANCELED'
-    assert event.cancel_goal
     assert not event.publish_done
+    assert not core.active
+
+
+def test_stop_before_goal_accept_waits_for_rejected_goal_callback():
+    """GOAL_SENT 的 stop 不得在 Action 响应到达前伪造 CANCELED。"""
+    core = WhiteBarActionExecutorCore()
+    request = core.request('start_jump')
+    core.server_ready(request.request_id)
+
+    pending = core.mission_stop()
+    terminal = core.goal_rejected(request.request_id)
+
+    assert pending.status == 'CANCELING'
+    assert core.active is False
+    assert terminal.status == 'CANCELED'
+    assert not terminal.publish_done
 
 
 def test_old_done_is_ignored_before_current_request():

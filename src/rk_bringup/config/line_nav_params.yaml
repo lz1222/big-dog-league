@@ -249,7 +249,8 @@ line_course_mission_node:
     white_bar_min_confidence: 0.55
     white_bar_approach_speed: 0.03
     white_bar_stop_y_ratio: 0.70
-    white_bar_action_timeout_sec: 5.0
+    # FrontJump 最坏软件时长为 17s；路线层须大于 executor 22s 加 3s 边界。
+    white_bar_action_timeout_sec: 26.0
     white_bar_motion_name: ''
     allow_finish_only_test: false
 
@@ -271,8 +272,9 @@ white_bar_action_executor:
     status_topic: /mission/white_bar_action_status
     mission_stop_topic: /mission/stop
     action_name: /locomotion/execute_motion
-    server_wait_timeout_sec: 2.0
-    action_timeout_sec: 5.0
+    # 与正式非机械臂链保持同一超时契约，避免 legacy launch 提前取消动作。
+    server_wait_timeout_sec: 5.0
+    action_timeout_sec: 22.0
 
 white_bar_stage_command_publisher:
   ros__parameters:
