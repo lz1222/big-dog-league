@@ -73,6 +73,9 @@ TEST_ONLY_SMOKE_HELPER_MARKER = (
     b'RK_NON_ARM_TEST_ONLY_FAKE_SDK_HELPER_V1'
 )
 STATUS_HEARTBEAT_SEC = 0.5
+# 锁 heartbeat 周期必须明显短于仲裁器 source_timeout_sec(2.0s)，
+# 防止空闲时因消息静默触发 fail-closed 安全锁。
+LOCK_HEARTBEAT_SEC = 0.8
 
 
 def is_test_only_smoke_helper(path):
@@ -104,6 +107,9 @@ class InspectionActionExecutorNode(Node):
         self._last_cmd_mux_status = ''
         self._last_cmd_mux_status_time = None
         self._last_status_publish_time = 0.0
+        # 锁 heartbeat 追踪
+        self._last_lock_value = False
+        self._last_lock_publish_time = 0.0
         self._declare_parameters()
         self._read_parameters()
         self.core = InspectionActionCore(self.core_config)
@@ -206,7 +212,7 @@ class InspectionActionExecutorNode(Node):
         self.declare_parameter(
             'cmd_mux_status_topic', '/control/cmd_mux_status'
         )
-        self.declare_parameter('gait_control_lock_topic', '/gait/control_lock')
+        self.declare_parameter('gait_control_lock_topic', '/gait/control_lock_req/inspection')
 
         self.declare_parameter('sign_confirm_frames', 5)
         self.declare_parameter('sign_min_confidence', 0.70)
@@ -370,6 +376,9 @@ class InspectionActionExecutorNode(Node):
             event = self.core.tick(time.monotonic())
         self._handle_event(event)
         self._publish_status_heartbeat()
+        # 持续重发当前锁状态作为 heartbeat，确保仲裁器不会因静默超时
+        # 而进入 fail-closed 安全锁。
+        self._republish_gait_lock_heartbeat()
 
     def _select_best_warning_detection(self, msg):
         """选择本帧最高置信度的允许映射，未知或低置信候选全部忽略。"""
@@ -572,6 +581,21 @@ class InspectionActionExecutorNode(Node):
         message = Bool()
         message.data = bool(locked)
         self.gait_lock_publisher.publish(message)
+        self._last_lock_value = bool(locked)
+        self._last_lock_publish_time = time.monotonic()
+
+    def _republish_gait_lock_heartbeat(self):
+        """持续重发锁状态，确保 fail-closed 仲裁器不会因静默超时。"""
+        if not hasattr(self, '_last_lock_value'):
+            return
+        now = time.monotonic()
+        last_time = getattr(self, '_last_lock_publish_time', 0.0)
+        if now - last_time < LOCK_HEARTBEAT_SEC:
+            return
+        message = Bool()
+        message.data = self._last_lock_value
+        self.gait_lock_publisher.publish(message)
+        self._last_lock_publish_time = now
 
     def _publish_status_heartbeat(self):
         """低频重发当前状态，保证 readiness 晚订阅仍能得到新鲜证据。"""

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 
-DEFAULT_IMAGE_TOPIC = '/camera/camera/color/image_raw'
+DEFAULT_IMAGE_TOPIC = '/camera/color/image_raw'
 FINAL_CMD_TOPIC = '/navigation/cmd_vel'
 MOTION_ACTION_NAME = '/locomotion/execute_motion'
 # software smoke 只认可由本仓库 C 测试源码编译的 ELF；这不是生产 helper

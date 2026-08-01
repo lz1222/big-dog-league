@@ -15,7 +15,7 @@ START_UDP_FORWARDER="${RK_COMPETITION_START_UDP_FORWARDER:-true}"
 ENABLE_DEBUG_IMAGE="${RK_COMPETITION_ENABLE_DEBUG_IMAGE:-false}"
 SDK_NETWORK_INTERFACE="${RK_COMPETITION_SDK_NETWORK_INTERFACE:-eth0}"
 IMAGE_TOPIC="${RK_COMPETITION_IMAGE_TOPIC:-/camera/camera/color/image_raw}"
-SDK_SERVER="${RK_COMPETITION_SDK_SERVER:-/home/unitree/unitree_go2_sdk_test/build/go2_sdk_udp_server}"
+SDK_SERVER="${RK_COMPETITION_SDK_SERVER:-}"
 SDK_UDP_HOST="${RK_COMPETITION_SDK_UDP_HOST:-127.0.0.1}"
 SDK_UDP_PORT="${RK_COMPETITION_SDK_UDP_PORT:-15001}"
 STARTUP_TIMEOUT_SEC="${RK_COMPETITION_STARTUP_TIMEOUT_SEC:-25}"
@@ -155,10 +155,13 @@ LAUNCH_ARGS=(
     "enable_debug_image:=${ENABLE_DEBUG_IMAGE}"
     "sdk_network_interface:=${SDK_NETWORK_INTERFACE}"
     "image_topic:=${IMAGE_TOPIC}"
-    "sdk_server:=${SDK_SERVER}"
     "sdk_udp_host:=${SDK_UDP_HOST}"
     "sdk_udp_port:=${SDK_UDP_PORT}"
 )
+# sdk_server 仅在显式指定时覆盖 launch 文件中 FindPackagePrefix 默认值。
+if [ -n "${SDK_SERVER}" ]; then
+    LAUNCH_ARGS+=("sdk_server:=${SDK_SERVER}")
+fi
 QUOTED_ARGS="$(printf ' %q' "${LAUNCH_ARGS[@]}")"
 LAUNCH_COMMAND="source $(printf '%q' "$ENV_SCRIPT") && export ROS_LOG_DIR=$(printf '%q' "${LOG_DIR}/ros") && exec ros2 launch rk_bringup competition_non_arm.launch.py${QUOTED_ARGS}"
 
