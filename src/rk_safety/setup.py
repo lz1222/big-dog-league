@@ -24,6 +24,8 @@ setup(
     entry_points={
         'console_scripts': [
             'command_mux_node = rk_safety.command_mux_node:main',
+            'gait_lock_arbiter_node = '
+            'rk_safety.gait_lock_arbiter_node:main',
         ],
     },
 )

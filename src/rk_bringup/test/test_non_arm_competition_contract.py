@@ -243,7 +243,7 @@ def test_formal_launch_declares_all_required_nodes_without_excluded_nodes():
 def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
     source = FORMAL_LAUNCH.read_text(encoding='utf-8')
 
-    assert DEFAULT_IMAGE_TOPIC == '/camera/camera/color/image_raw'
+    assert DEFAULT_IMAGE_TOPIC == '/camera/color/image_raw'
     assert "LaunchConfiguration('image_topic')" in source
     assert "'image_topic': image_topic" in source
     assert "LaunchConfiguration('software_smoke_mode')" in source
@@ -590,6 +590,138 @@ def test_readiness_smoke_checks_are_gated_by_software_smoke_mode():
     assert 'elif self.hardware_mode:' in readiness_source, (
         'hardware checks must be under elif self.hardware_mode gate'
     )
+
+
+# ---------------------------------------------------------------------------
+# GID 唯一发布者门控单元测试
+# ---------------------------------------------------------------------------
+
+
+class _FakeEndpoint:
+    """模拟 rclpy TopicEndpointInfo 的最小假对象。"""
+
+    def __init__(self, gid, node_name, node_namespace=''):
+        self._gid = list(gid) if isinstance(gid, (bytes, bytearray)) else gid
+        self.node_name = node_name
+        self.node_namespace = node_namespace
+
+    @property
+    def endpoint_gid(self):
+        return list(self._gid)
+
+
+def _make_gid(*seed):
+    """构造 24 字节假 GID，以 seed 填充前几字节。"""
+    gid = [0] * 24
+    for i, val in enumerate(seed):
+        if i < 24:
+            gid[i] = val & 0xFF
+    return gid
+
+
+def test_gid_gate_single_endpoint_pass():
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    gid_a = _make_gid(1, 2, 3)
+    endpoints = [_FakeEndpoint(gid_a, 'test_node', '')]
+    ok, detail = CompetitionReadinessNode._single_gid_publisher_gate(
+        endpoints, 'test_node',
+    )
+    assert ok, detail
+
+
+def test_gid_gate_same_gid_duplicate_pass():
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    gid_a = _make_gid(1, 2, 3)
+    endpoints = [
+        _FakeEndpoint(gid_a, 'test_node', ''),
+        _FakeEndpoint(gid_a, 'test_node', ''),
+    ]
+    ok, detail = CompetitionReadinessNode._single_gid_publisher_gate(
+        endpoints, 'test_node',
+    )
+    assert ok, detail
+
+
+def test_gid_gate_two_different_gid_same_node_fail():
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    gid_a = _make_gid(1, 2, 3)
+    gid_b = _make_gid(4, 5, 6)
+    endpoints = [
+        _FakeEndpoint(gid_a, 'test_node', ''),
+        _FakeEndpoint(gid_b, 'test_node', ''),
+    ]
+    ok, detail = CompetitionReadinessNode._single_gid_publisher_gate(
+        endpoints, 'test_node',
+    )
+    assert not ok, 'two different GIDs must fail even if same node_name'
+    assert 'unique_gid_count=2' in detail, detail
+
+
+def test_gid_gate_two_different_gid_different_node_fail():
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    gid_a = _make_gid(1, 2, 3)
+    gid_b = _make_gid(4, 5, 6)
+    endpoints = [
+        _FakeEndpoint(gid_a, 'good_node', ''),
+        _FakeEndpoint(gid_b, 'bad_node', ''),
+    ]
+    ok, detail = CompetitionReadinessNode._single_gid_publisher_gate(
+        endpoints, 'good_node',
+    )
+    assert not ok, 'two different nodes must fail'
+    assert 'unique_gid_count=2' in detail, detail
+
+
+def test_gid_gate_wrong_namespace_fail():
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    gid_a = _make_gid(1, 2, 3)
+    endpoints = [_FakeEndpoint(gid_a, 'test_node', '/other')]
+    ok, detail = CompetitionReadinessNode._single_gid_publisher_gate(
+        endpoints, 'test_node', expected_namespace='',
+    )
+    assert not ok, 'wrong namespace must fail'
+
+
+def test_gid_gate_unreadable_gid_fail():
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+
+    class BrokenEndpoint:
+        node_name = 'test_node'
+        node_namespace = ''
+
+        @property
+        def endpoint_gid(self):
+            raise RuntimeError('gid unavailable')
+
+    endpoints = [BrokenEndpoint()]
+    ok, detail = CompetitionReadinessNode._single_gid_publisher_gate(
+        endpoints, 'test_node',
+    )
+    assert not ok, 'unreadable GID must fail'
+    assert 'gid_unreadable' in detail, detail
+
+
+def test_gid_gate_no_publishers_fail():
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    ok, detail = CompetitionReadinessNode._single_gid_publisher_gate(
+        [], 'test_node',
+    )
+    assert not ok, 'no publishers must fail'
+    assert 'raw_count=0' in detail, detail
 
 
 def test_gait_inspection_readiness_see_consistent_mode():

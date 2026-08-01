@@ -48,7 +48,7 @@ class RouteMarkerDetectorNode(Node):
 
     def _declare_parameters(self):
         defaults = {
-            'image_topic': '/camera/camera/color/image_raw',
+            'image_topic': '/camera/color/image_raw',
             'white_line_topic': '/perception/route_markers/white_line',
             'white_line_confidence_topic': (
                 '/perception/route_markers/white_line_confidence'

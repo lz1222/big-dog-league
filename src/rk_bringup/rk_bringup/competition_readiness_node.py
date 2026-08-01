@@ -11,6 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import time
 
 from geometry_msgs.msg import Twist
@@ -30,7 +31,6 @@ from rk_bringup.non_arm_competition_contract import (
     FORBIDDEN_FORMAL_NODE_MARKERS,
     MOTION_ACTION_NAME,
     ReadinessCheck,
-    endpoint_is_command_mux,
     is_zero_twist,
     json_object,
     route_is_wait_start,
@@ -129,7 +129,7 @@ class CompetitionReadinessNode(Node):
         defaults = {
             'hardware_mode': True,
             'software_smoke_mode': False,
-            'image_topic': '/camera/camera/color/image_raw',
+            'image_topic': '/camera/color/image_raw',
             'final_cmd_topic': FINAL_CMD_TOPIC,
             'line_track_topic': '/perception/line_track',
             'line_follower_status_topic': '/navigation/line_follow_status',
@@ -147,10 +147,9 @@ class CompetitionReadinessNode(Node):
             'estop_service_name': '/safety/estop',
             'motion_action_name': MOTION_ACTION_NAME,
             'cmd_mux_status_topic': '/control/cmd_mux_status',
-            'sdk_server': (
-                '/home/unitree/unitree_go2_sdk_test/build/'
-                'go2_sdk_udp_server'
-            ),
+            # 生产路径由 launch 文件通过 FindPackagePrefix 显式注入；
+            # 此默认值仅保证 launch 未覆盖时不无声回退到其他编译目录。
+            'sdk_server': 'rk_go2_sdk_bridge',
             'sdk_action_executable': '',
             'cleanup_guard_path': (
                 '~/.rk_non_arm_competition/front_jump_cleanup_guard.json'
@@ -268,6 +267,105 @@ class CompetitionReadinessNode(Node):
     def _has_publisher(self, topic):
         return bool(self.get_publishers_info_by_topic(topic))
 
+    @staticmethod
+    def _normalized_gid(endpoint):
+        """将 endpoint_gid 标准化为可哈希的 bytes，失败返回 None。"""
+        try:
+            raw = endpoint.endpoint_gid
+        except Exception:
+            return None
+        if raw is None:
+            return None
+        try:
+            if isinstance(raw, (bytes, bytearray)):
+                return bytes(raw)
+            return bytes(list(raw))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _unique_gid_publishers(topic_infos):
+        """按 GID 去重后的唯一发布者列表。
+
+        同一 GID 被 Foxy/CycloneDDS 重复返回时只保留一个。
+        无法读取 GID 的端点返回空列表（fail-closed）。
+        """
+        seen: set[bytes] = set()
+        unique = []
+        for endpoint in topic_infos:
+            gid = CompetitionReadinessNode._normalized_gid(endpoint)
+            if gid is None:
+                return []  # 无法确认 → 拒绝通过
+            if gid not in seen:
+                seen.add(gid)
+                unique.append(endpoint)
+        return unique
+
+    @staticmethod
+    def _single_gid_publisher_gate(
+        publisher_infos, expected_node_name, expected_namespace='',
+    ):
+        """返回 (ok, detail)。严格单 GID 发布者检查。
+
+        规则：
+        - 至少一个发布者端点
+        - 按 endpoint_gid 去重
+        - 去重后唯一 GID 数量必须严格等于 1
+        - 该唯一 GID 的 node_name 和 namespace 必须匹配预期
+        - 同一 GID 的重复 endpoint 可通过
+        - 两个不同 GID 即使节点名和 namespace 完全相同也必须拒绝
+        - GID 不可读时 fail-closed
+        """
+        if not publisher_infos:
+            return False, 'raw_count=0'
+
+        unique = CompetitionReadinessNode._unique_gid_publishers(
+            publisher_infos
+        )
+        if not unique:
+            return False, (
+                'gid_unreadable raw_count={}'.format(len(publisher_infos))
+            )
+
+        if len(unique) != 1:
+            node_names = sorted(set(
+                getattr(ep, 'node_name', '?') for ep in unique
+            ))
+            return False, (
+                'unique_gid_count={} raw_count={} nodes={}'.format(
+                    len(unique), len(publisher_infos),
+                    ','.join(node_names),
+                )
+            )
+
+        sole = unique[0]
+        node_name = getattr(sole, 'node_name', '')
+        namespace = str(getattr(sole, 'node_namespace', ''))
+        # Normalize root namespace
+        if namespace in ('', '/'):
+            namespace = ''
+
+        if node_name != expected_node_name:
+            return False, (
+                'unique_gid_count=1 raw_count={} node={} expected_node={}'.format(
+                    len(publisher_infos), node_name, expected_node_name,
+                )
+            )
+        if namespace != expected_namespace:
+            return False, (
+                'unique_gid_count=1 raw_count={} node={} namespace={}'
+                ' expected_namespace={}'.format(
+                    len(publisher_infos), node_name,
+                    repr(namespace), repr(expected_namespace),
+                )
+            )
+
+        return True, (
+            'unique_gid_count=1 raw_count={} node={} namespace={}'.format(
+                len(publisher_infos), node_name, repr(namespace),
+            )
+        )
+
     def _node_names(self):
         names = set()
         for name, namespace in self.get_node_names_and_namespaces():
@@ -297,7 +395,13 @@ class CompetitionReadinessNode(Node):
         return False
 
     def _file_is_executable(self, path):
-        return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+        """检查可执行文件：绝对路径直接用 os.access；相对命令名用 shutil.which。"""
+        if not path:
+            return False
+        resolved = shutil.which(path) if not os.path.isabs(path) else path
+        if not resolved:
+            return False
+        return os.path.isfile(resolved) and os.access(resolved, os.X_OK)
 
     def _cleanup_guard_is_clean(self):
         """读取 supervisor journal；不存在表示尚无 jump，允许启动。"""
@@ -342,22 +446,28 @@ class CompetitionReadinessNode(Node):
     def evaluate(self):
         """执行一次完整的只读检查，返回可序列化的检查列表。"""
         checks = []
+        # cmd_vel：按 GID 去重，必须恰好一个唯一发布者且为 command_mux_node。
         publisher_infos = self.get_publishers_info_by_topic(
             self.final_cmd_topic
         )
-        mux_publishers = [
-            endpoint for endpoint in publisher_infos
-            if endpoint_is_command_mux(endpoint)
-        ]
-        final_owner_ok = (
-            len(publisher_infos) == 1 and len(mux_publishers) == 1
+        cmd_ok, cmd_detail = self._single_gid_publisher_gate(
+            publisher_infos, 'command_mux_node',
         )
         checks.append(ReadinessCheck(
             'final_cmd_single_command_mux_publisher',
-            final_owner_ok,
-            'publisher_count={}, command_mux_count={}'.format(
-                len(publisher_infos), len(mux_publishers)
-            ),
+            cmd_ok, cmd_detail,
+        ))
+        # /gait/control_lock：按 GID 去重，必须恰好一个唯一发布者且为
+        # gait_lock_arbiter_node。
+        lock_publisher_infos = self.get_publishers_info_by_topic(
+            '/gait/control_lock'
+        )
+        lock_ok, lock_detail = self._single_gid_publisher_gate(
+            lock_publisher_infos, 'gait_lock_arbiter_node',
+        )
+        checks.append(ReadinessCheck(
+            'gait_control_lock_single_arbiter_publisher',
+            lock_ok, lock_detail,
         ))
         checks.append(ReadinessCheck(
             'execute_motion_action_server',

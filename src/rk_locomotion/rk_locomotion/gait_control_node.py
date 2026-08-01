@@ -865,7 +865,7 @@ class GaitControlNode(Node):
         parameters = {
             'cmd_vel_topic': '/control/locomotion_cmd',
             'status_topic': '/gait/status',
-            'control_lock_topic': '/gait/control_lock',
+            'control_lock_topic': '/gait/control_lock_req/gait',
             'debug_topic': '/gait/debug',
             'current_mode_topic': '/gait/current_mode',
             'command_json_topic': '/gait/command_json',
