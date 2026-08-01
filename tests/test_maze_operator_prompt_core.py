@@ -85,6 +85,22 @@ class MazeOperatorPromptCoreTest(unittest.TestCase):
         self.assertEqual(view.action_code, 'STOP')
         self.assertIn('不要提前转向', view.instruction)
 
+    def test_turn_start_confirmation_requires_hold(self):
+        view = self._view(
+            'CORNER_APPROACH',
+            'turn_start_confirmation_1/3',
+        )
+        self.assertEqual(view.action_code, 'STOP')
+        self.assertIn('连续确认', view.instruction)
+
+    def test_turn_prompt_is_blocked_when_sweep_is_unsafe(self):
+        payload = self._payload('TURN_LEFT', 'yaw_closed_loop_turn')
+        payload['moving_turn_sweep_safe'] = False
+        view = build_operator_view(payload, 0.1, 1.5)
+        self.assertEqual(view.action_code, 'STOP')
+        self.assertIn('包络不足', view.instruction)
+        self.assertIn('禁止继续转向', view.instruction)
+
     def test_turn_direction_prompts_are_explicit(self):
         left = self._view('TURN_LEFT', 'left_turn_started')
         right = self._view('TURN_RIGHT', 'right_turn_started')
@@ -132,6 +148,21 @@ class MazeOperatorPromptCoreTest(unittest.TestCase):
         self.assertIn('只读提示，不发送任何运动命令', dashboard)
         self.assertIn('诊断候选（不会发送）', dashboard)
         self.assertIn('已完成 0/5 次转向', dashboard)
+        self.assertIn('Odom启动累计', dashboard)
+        self.assertIn('含静止漂移', dashboard)
+        self.assertIn('本次进度 0.0deg', dashboard)
+
+    def test_dashboard_names_opposite_wall_center_reference(self):
+        """拐角开口波动时面板应明确当前只参考右墙。"""
+        payload = self._payload(
+            'CORNER_APPROACH',
+            'approaching_turn_start',
+        )
+        payload['center_reference'] = 'right_wall'
+        view = build_operator_view(payload, 0.1, 1.5)
+        dashboard = format_dashboard(payload, view, 0.1)
+        self.assertIn('居中（右墙参考）', dashboard)
+        self.assertIn('启动条件：安全', dashboard)
 
     def _view(self, state, reason='test_reason'):
         return build_operator_view(
@@ -159,9 +190,13 @@ class MazeOperatorPromptCoreTest(unittest.TestCase):
             },
             'yaw_rad': 0.0,
             'turn_rad': 0.0,
+            'turn_progress_deg': 0.0,
             'turn_error_deg': 90.0,
             'center_error_m': 0.0,
+            'center_reference': 'both_walls',
             'moving_turn_sweep_safe': True,
+            'turn_start_sweep_safe': True,
+            'active_turn_clearance_safe': True,
             'in_place_rotation_fits_corridor': False,
             'cloud_age_sec': 0.05,
             'odom_age_sec': 0.01,

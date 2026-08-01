@@ -43,6 +43,7 @@ class MazeNavigationPolicyTest(unittest.TestCase):
             MazePolicyConfig(),
             sensor_confirm_frames=2,
             corner_confirm_frames=2,
+            turn_start_confirm_frames=1,
             turn_confirm_frames=2,
             reacquire_confirm_frames=2,
             recovery_confirm_frames=2,
@@ -81,6 +82,82 @@ class MazeNavigationPolicyTest(unittest.TestCase):
         self.assertEqual(output['state'], STATE_CORRIDOR_FOLLOW)
         self.assertGreater(output['desired_wz'], 0.0)
         self.assertFalse(output['motion_output'])
+
+    def test_corner_approach_follows_opposite_wall(self):
+        """左侧开口波动时只用稳定右墙生成接近阶段修正量。"""
+        self._confirm_sensors()
+        near_opening = {
+            'front': 0.72,
+            'left_front': 0.78,
+            'right_front': 0.55,
+            'left': 0.25,
+            'right': 0.245,
+        }
+        self._step(self._observation(
+            turn_rad=0.0,
+            distances=near_opening,
+        ))
+        first = self._step(self._observation(
+            turn_rad=0.0,
+            distances=near_opening,
+        ))
+
+        far_opening = dict(near_opening)
+        far_opening['left'] = 0.70
+        second = self._step(self._observation(
+            turn_rad=0.0,
+            distances=far_opening,
+        ))
+
+        self.assertEqual(first['state'], 'CORNER_APPROACH')
+        self.assertEqual(first['center_reference'], 'right_wall')
+        self.assertAlmostEqual(first['center_error_m'], 0.005)
+        self.assertAlmostEqual(
+            first['desired_wz'],
+            second['desired_wz'],
+        )
+
+    def test_round10_opening_uses_right_wall_during_confirmation(self):
+        """首弯开口出现后，正式状态切换前也不得由左侧远墙反向拉偏。"""
+        self.policy = MazeNavigationPolicy(
+            replace(
+                self.config,
+                side_target_m=0.25,
+                corner_approach_distance_m=0.98,
+                corner_confirm_frames=3,
+            ),
+            ROUTE,
+        )
+        self._confirm_sensors()
+        opening = {
+            'front': 0.92,
+            'left_front': 1.00,
+            'right_front': 0.65,
+            'left': 0.34,
+            'right': 0.268,
+        }
+
+        first = self._step(self._observation(
+            turn_rad=0.0,
+            distances=opening,
+        ))
+        opening['left'] = 0.79
+        second = self._step(self._observation(
+            turn_rad=0.0,
+            distances=opening,
+        ))
+        third = self._step(self._observation(
+            turn_rad=0.0,
+            distances=opening,
+        ))
+
+        self.assertEqual(first['state'], STATE_CORRIDOR_FOLLOW)
+        self.assertEqual(first['center_reference'], 'right_wall')
+        self.assertAlmostEqual(first['center_error_m'], -0.018)
+        self.assertLess(first['desired_wz'], 0.0)
+        self.assertAlmostEqual(first['desired_wz'], second['desired_wz'])
+        self.assertEqual(third['state'], 'CORNER_APPROACH')
+        self.assertEqual(third['center_reference'], 'right_wall')
 
     def test_stale_after_start_latches_fault_stop(self):
         self._confirm_sensors()
@@ -295,6 +372,174 @@ class MazeNavigationPolicyTest(unittest.TestCase):
 
         self.assertEqual(output['state'], STATE_TURN_LEFT)
 
+    def test_turn_start_requires_consecutive_safe_sweep_frames(self):
+        """单帧开口噪声不得锁存转向，安全包络中断后必须重新计数。"""
+        self.policy = MazeNavigationPolicy(
+            replace(
+                self.config,
+                corner_confirm_frames=1,
+                turn_start_confirm_frames=3,
+            ),
+            ROUTE,
+        )
+        self._confirm_sensors()
+        safe = self._observation(
+            turn_rad=0.0,
+            sensor_state='BLOCKED',
+            distances=self._turn_distances(DIRECTION_LEFT),
+        )
+
+        first = self._step(safe)
+        self.assertEqual(first['state'], 'CORNER_APPROACH')
+        self.assertEqual(first['turn_start_streak'], 1)
+        self.assertEqual(first['desired_vx'], 0.0)
+
+        blocked_distances = self._turn_distances(DIRECTION_LEFT)
+        blocked_distances['left'] = 0.45
+        blocked = self._step(self._observation(
+            turn_rad=0.0,
+            sensor_state='BLOCKED',
+            distances=blocked_distances,
+        ))
+        self.assertEqual(blocked['state'], 'CORNER_APPROACH')
+        self.assertEqual(blocked['reason'], 'waiting_for_turn_opening')
+        self.assertEqual(blocked['turn_start_streak'], 0)
+
+        self._step(safe)
+        self._step(safe)
+        confirmed = self._step(safe)
+        self.assertEqual(confirmed['state'], STATE_TURN_LEFT)
+
+    def test_republished_cloud_does_not_confirm_turn_start(self):
+        """同一真机点云的周期重发不能伪装成三帧连续开口。"""
+        self.policy = MazeNavigationPolicy(
+            replace(
+                self.config,
+                corner_confirm_frames=1,
+                turn_start_confirm_frames=3,
+            ),
+            ROUTE,
+        )
+        self._confirm_sensors()
+        transient = self._observation(
+            turn_rad=0.0,
+            sensor_state='CLEAR',
+            cloud_sequence=100,
+            distances={
+                'front': 0.539,
+                'left_front': 0.746,
+                'right_front': None,
+                'left': 0.556,
+                'right': 0.252,
+            },
+        )
+
+        first = self._step(transient)
+        duplicate_1 = self._step(transient)
+        duplicate_2 = self._step(transient)
+
+        self.assertEqual(first['state'], 'CORNER_APPROACH')
+        self.assertEqual(first['turn_start_streak'], 1)
+        self.assertEqual(duplicate_1['turn_start_streak'], 1)
+        self.assertEqual(duplicate_2['turn_start_streak'], 1)
+
+        recovered = self._step(self._observation(
+            turn_rad=0.0,
+            cloud_sequence=101,
+            distances={
+                'front': 0.723,
+                'left_front': 0.810,
+                'right_front': 0.540,
+                'left': 0.472,
+                'right': 0.247,
+            },
+        ))
+        self.assertEqual(recovered['state'], 'CORNER_APPROACH')
+        self.assertEqual(recovered['turn_start_streak'], 0)
+        self.assertEqual(recovered['reason'], 'approaching_turn_start')
+
+    def test_cloud_sequence_regression_latches_fault(self):
+        """B1序号倒退表示发布端重启或乱序，运行中必须锁止。"""
+        self._confirm_sensors()
+        self._step(self._observation(
+            turn_rad=0.0,
+            cloud_sequence=10,
+        ))
+        output = self._step(self._observation(
+            turn_rad=0.0,
+            cloud_sequence=9,
+        ))
+        self.assertEqual(output['state'], STATE_FAULT_STOP)
+        self.assertEqual(output['reason'], 'cloud_sequence_regressed')
+
+    def test_active_turn_accepts_safe_wall_end_return(self):
+        """开口锁存后目标侧近墙端仍有静态余量时不得误报封路。"""
+        self._confirm_sensors()
+        start = self._observation(
+            turn_rad=0.0,
+            sensor_state='BLOCKED',
+            distances=self._turn_distances(DIRECTION_LEFT),
+        )
+        self._step(start)
+        started = self._step(start)
+        self.assertEqual(started['state'], STATE_TURN_LEFT)
+
+        wall_end = self._turn_distances(DIRECTION_LEFT)
+        wall_end.update({
+            'front': 0.72,
+            'left_front': 0.78,
+            'left': 0.25,
+            'right': 0.245,
+        })
+        output = self._step(self._observation(
+            turn_rad=0.10,
+            sensor_state='BLOCKED',
+            distances=wall_end,
+        ))
+
+        self.assertEqual(output['state'], STATE_TURN_LEFT)
+        self.assertEqual(output['reason'], 'yaw_closed_loop_turn')
+        self.assertFalse(output['turn_start_sweep_safe'])
+        self.assertTrue(output['active_turn_clearance_safe'])
+        self.assertTrue(output['moving_turn_sweep_safe'])
+        self.assertAlmostEqual(output['turn_progress_rad'], 0.10)
+        self.assertAlmostEqual(
+            output['turn_progress_deg'],
+            math.degrees(0.10),
+        )
+
+    def test_turn_sweep_loss_stops_then_latches_fault(self):
+        """转向中矩形扫掠包络丢失时首帧停住，连续第二帧锁止。"""
+        self._confirm_sensors()
+        turn_observation = self._observation(
+            turn_rad=0.0,
+            sensor_state='BLOCKED',
+            distances=self._turn_distances(DIRECTION_LEFT),
+        )
+        self._step(turn_observation)
+        output = self._step(turn_observation)
+        self.assertEqual(output['state'], STATE_TURN_LEFT)
+
+        blocked_distances = self._turn_distances(DIRECTION_LEFT)
+        blocked_distances['left'] = 0.17
+        blocked = self._observation(
+            turn_rad=0.1,
+            sensor_state='BLOCKED',
+            distances=blocked_distances,
+        )
+        pending = self._step(blocked)
+        fault = self._step(blocked)
+
+        self.assertEqual(pending['state'], STATE_TURN_LEFT)
+        self.assertEqual(pending['desired_vx'], 0.0)
+        self.assertEqual(pending['desired_wz'], 0.0)
+        self.assertEqual(
+            pending['reason'],
+            'turn_sweep_unsafe_confirmation_1/2',
+        )
+        self.assertEqual(fault['state'], STATE_FAULT_STOP)
+        self.assertEqual(fault['reason'], 'turn_sweep_unsafe')
+
     def test_turn_timeout_enters_fault_stop(self):
         self.policy = MazeNavigationPolicy(
             replace(self.config, turn_timeout_sec=0.5),
@@ -408,6 +653,7 @@ class MazeNavigationPolicyTest(unittest.TestCase):
         turn_rad,
         sensor_state='CLEAR',
         distances=None,
+        cloud_sequence=None,
     ):
         if distances is None:
             distances = {
@@ -427,6 +673,7 @@ class MazeNavigationPolicyTest(unittest.TestCase):
             ),
             turn_rad=turn_rad,
             distances=distances,
+            cloud_sequence=cloud_sequence,
         )
 
     @staticmethod

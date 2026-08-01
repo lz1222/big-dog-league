@@ -243,6 +243,7 @@ class MazeNavigationDryRun(Node):
 
         return MazeObservation(
             sensor_state=str(payload['state']),
+            cloud_sequence=payload.get('cloud_sequence'),
             cloud_age_sec=payload.get('cloud_age_sec'),
             odom_age_sec=payload.get('odom_age_sec'),
             yaw_rad=payload.get('yaw_rad'),

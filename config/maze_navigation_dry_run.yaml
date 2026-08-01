@@ -33,6 +33,8 @@ maze_navigation_dry_run:
     # 单帧侧向余量不足也先停住，第2帧仍不足才锁止；0.185m门限不变。
     side_unsafe_confirm_frames: 2
     corner_confirm_frames: 3
+    # 前距和矩形扫掠包络必须连续满足后，才能锁存TURN_LEFT/RIGHT。
+    turn_start_confirm_frames: 3
     turn_confirm_frames: 3
     reacquire_confirm_frames: 5
     recovery_confirm_frames: 3
@@ -50,16 +52,19 @@ maze_navigation_dry_run:
     min_turn_wz: 0.16
     max_fine_wz: 0.22
 
-    # 57cm 通道中心对应左右墙各约 0.285m。
+    # Round10入口人工四角居中时，1500帧B1侧距中位数为左0.252m、右0.246m；
+    # 使用约0.25m作为本机有效墙面回波目标，不直接套用几何半宽0.285m。
     center_kp: 1.20
     turn_kp: 1.10
     fine_turn_kp: 0.90
-    side_target_m: 0.285
+    side_target_m: 0.25
     center_tolerance_m: 0.07
 
     # 前方接近、开始移动转向、紧急余量和出口开放判断。
     front_slow_distance_m: 1.00
-    corner_approach_distance_m: 0.85
+    # Round10在front约0.92m时左侧开口已污染近墙回波；提前到0.98m切换
+    # 对侧墙参考，仍需持续帧确认后才正式进入CORNER_APPROACH。
+    corner_approach_distance_m: 0.98
     turn_start_distance_m: 0.62
     front_emergency_distance_m: 0.43
     recovery_front_clear_m: 0.72
@@ -74,11 +79,11 @@ maze_navigation_dry_run:
     turn_tolerance_deg: 4.0
     reacquire_yaw_tolerance_deg: 7.0
 
-    # 人工干跑包含尺量、日志核对和操控员确认，等待期间节点不会发送运动命令。
-    # 这里保留30分钟故障上限，接入自主运动前必须按实测速度重新缩短。
+    # 接近阶段包含尺量和日志核对，可长时间等待且不会发送运动命令。
+    # 转向与重捕获依赖Yaw，限制为120秒，避免静止漂移长期累积。
     corner_timeout_sec: 1800.0
-    turn_timeout_sec: 1800.0
-    reacquire_timeout_sec: 1800.0
+    turn_timeout_sec: 120.0
+    reacquire_timeout_sec: 120.0
     reverse_timeout_sec: 1.0
 
 maze_navigation_simulator:
@@ -100,7 +105,7 @@ maze_operator_monitor:
     navigation_status_topic: /maze/navigation/dry_run_status
     refresh_rate: 5.0
     status_stale_timeout_sec: 1.50
-    # 默认步态点动实测约8至15cm；按上界提示，避免低估前方余量消耗。
-    manual_step_distance_cm: 15.0
+    # 默认步态点动实测约8至18cm；按上界提示，避免低估前方余量消耗。
+    manual_step_distance_cm: 18.0
     use_color: true
     beep_on_action_change: true

@@ -189,6 +189,8 @@ class MazePerceptionDryRun(Node):
         self._last_odom_time = None
         self._last_cloud_error = ''
         self._last_odom_error = ''
+        # 每收到一帧真实 PointCloud2 就递增，供 B2 区分新帧和周期重发快照。
+        self._cloud_sequence = 0
         self._cloud_frame_id = ''
         self._odom_frame_id = ''
         self._odom_child_frame_id = ''
@@ -270,6 +272,7 @@ class MazePerceptionDryRun(Node):
                 + ', '.join(sorted(missing_fields))
             )
             with self._lock:
+                self._cloud_sequence += 1
                 self.side_stabilizer.reset()
                 self._last_cloud_time = receive_time
                 self._last_cloud_error = error
@@ -287,6 +290,7 @@ class MazePerceptionDryRun(Node):
             result = self.extractor.extract(points)
         except Exception as error:
             with self._lock:
+                self._cloud_sequence += 1
                 self.side_stabilizer.reset()
                 self._last_cloud_time = receive_time
                 self._last_cloud_error = (
@@ -297,6 +301,7 @@ class MazePerceptionDryRun(Node):
             return
 
         with self._lock:
+            self._cloud_sequence += 1
             if (
                 self._last_cloud_time is None
                 or receive_time - self._last_cloud_time
@@ -435,6 +440,9 @@ class MazePerceptionDryRun(Node):
                 'state': self.engine.state,
                 'advice': self.engine.advice,
                 'reason': self.engine.reason,
+                # B1 会按 print_rate 重发快照；序号只由新点云递增，不能
+                # 让下游把同一雷达帧误算成多个持续确认帧。
+                'cloud_sequence': self._cloud_sequence,
                 'cloud_age_sec': cloud_age,
                 'odom_age_sec': odom_age,
                 'cloud_frame': self._cloud_frame_id,

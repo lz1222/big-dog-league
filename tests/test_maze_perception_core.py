@@ -434,6 +434,54 @@ class SideDistanceStabilizerTest(unittest.TestCase):
         self.assertAlmostEqual(output['distances']['right'], 0.21)
         self.assertEqual(output['sources']['right'], 'continued_projected')
 
+    def test_round8_calibrated_window_rejects_far_wall_burst(self):
+        """Round 8标定窗口内的远墙回波不能扩大已确认近墙净空。"""
+        stabilizer = SideDistanceStabilizer(
+            hold_frames=8,
+            rise_tolerance_m=0.04,
+            continuity_tolerance_m=0.10,
+        )
+        stabilizer.update(
+            self._extraction(0.214, 0.23, 'projected', 'projected')
+        )
+
+        for _ in range(8):
+            output = stabilizer.update(
+                self._extraction(0.66, 0.23, 'direct', 'projected')
+            )
+            self.assertAlmostEqual(output['distances']['left'], 0.214)
+            self.assertTrue(
+                output['sources']['left'].startswith('held_rise_')
+            )
+
+        accepted = stabilizer.update(
+            self._extraction(0.66, 0.23, 'direct', 'projected')
+        )
+        self.assertAlmostEqual(accepted['distances']['left'], 0.66)
+
+    def test_round8_short_cluster_recovers_conservative_near_wall(self):
+        """与近墙相差不到10cm的短簇应恢复缓存且不得增大净空。"""
+        stabilizer = SideDistanceStabilizer(
+            hold_frames=8,
+            rise_tolerance_m=0.04,
+            continuity_tolerance_m=0.10,
+        )
+        stabilizer.update(
+            self._extraction(0.214, 0.23, 'projected', 'projected')
+        )
+        output = stabilizer.update(
+            self._extraction(
+                None,
+                0.23,
+                'none',
+                'projected',
+                left_continuity=(self._candidate(0.303, 5, 0.04),),
+            )
+        )
+
+        self.assertAlmostEqual(output['distances']['left'], 0.214)
+        self.assertEqual(output['sources']['left'], 'continued_projected')
+
     @staticmethod
     def _extraction(
         left,

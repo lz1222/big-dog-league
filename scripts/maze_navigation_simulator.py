@@ -91,6 +91,7 @@ class MazeNavigationSimulator(Node):
         )
         self._start_time = time.monotonic()
         self._last_label = ''
+        self._cloud_sequence = 0
 
         self.get_logger().info(
             'Maze navigation simulator ready: '
@@ -101,6 +102,8 @@ class MazeNavigationSimulator(Node):
     def _on_timer(self):
         elapsed = time.monotonic() - self._start_time
         sample = self._sample(elapsed)
+        # 模拟器每次定时发布代表一帧新的合成点云观测。
+        self._cloud_sequence += 1
         if sample['label'] != self._last_label:
             self._last_label = sample['label']
             self.get_logger().info(
@@ -112,6 +115,7 @@ class MazeNavigationSimulator(Node):
             'state': sample['sensor_state'],
             'advice': 'STOP',
             'reason': f'simulator_{sample["label"]}',
+            'cloud_sequence': self._cloud_sequence,
             'cloud_age_sec': sample['cloud_age_sec'],
             'odom_age_sec': sample['odom_age_sec'],
             'cloud_frame': 'base_link',

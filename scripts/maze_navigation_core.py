@@ -48,6 +48,8 @@ class MazeObservation:
     yaw_rad: float
     turn_rad: float
     distances: dict
+    # None 兼容旧录包；真机 B1 必须提供递增序号以防周期快照重复计帧。
+    cloud_sequence: int = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,7 @@ class MazePolicyConfig:
     side_missing_confirm_frames: int = 2
     side_unsafe_confirm_frames: int = 2
     corner_confirm_frames: int = 3
+    turn_start_confirm_frames: int = 3
     turn_confirm_frames: int = 3
     reacquire_confirm_frames: int = 5
     recovery_confirm_frames: int = 3
@@ -89,11 +92,13 @@ class MazePolicyConfig:
     center_kp: float = 1.20
     turn_kp: float = 1.10
     fine_turn_kp: float = 0.90
-    side_target_m: float = 0.285
+    # Round10 真机居中静态段的左右侧距中位数约为0.25m；该值是
+    # B1有效墙面回波的标定目标，不等同于几何通道宽度的一半。
+    side_target_m: float = 0.25
     center_tolerance_m: float = 0.07
 
     front_slow_distance_m: float = 1.00
-    corner_approach_distance_m: float = 0.85
+    corner_approach_distance_m: float = 0.98
     turn_start_distance_m: float = 0.62
     front_emergency_distance_m: float = 0.43
     recovery_front_clear_m: float = 0.72
@@ -159,6 +164,7 @@ class MazeNavigationPolicy:
         self._side_missing_streak = 0
         self._side_unsafe_streak = 0
         self._corner_streak = 0
+        self._turn_start_streak = 0
         self._turn_streak = 0
         self._reacquire_streak = 0
         self._recovery_streak = 0
@@ -167,6 +173,7 @@ class MazeNavigationPolicy:
         self._turn_target_rad = None
         self._turn_start_time = None
         self._last_observation = None
+        self._last_cloud_sequence = None
 
     def update(self, observation, now_sec):
         """使用一帧新 B1 观测推进状态机并返回 JSON 快照。"""
@@ -186,6 +193,10 @@ class MazeNavigationPolicy:
                 self.reason = freshness_reason
                 self._set_command(0.0, 0.0)
                 self._sensor_streak = 0
+            return self.snapshot(now)
+
+        if not self._accept_new_cloud_sequence(observation.cloud_sequence):
+            # 同一雷达帧的周期快照只更新显示值，不推进任何持续帧状态。
             return self.snapshot(now)
 
         if self.state == STATE_WAIT_SENSOR:
@@ -231,17 +242,35 @@ class MazeNavigationPolicy:
             else {name: None for name in SECTOR_NAMES}
         )
         expected_turn = self.expected_turn()
-        turn_error = self._turn_error(
+        turn_value = (
             observation.turn_rad
             if observation is not None
             else None
         )
-        center_error = self.corridor_center_error(distances)
-        moving_sweep_safe = (
+        turn_error = self._turn_error(turn_value)
+        turn_progress = self._turn_progress(turn_value)
+        center_error, center_reference = self._center_error_for_state(
+            distances,
+            expected_turn,
+        )
+        turn_start_sweep_safe = (
             self.moving_turn_sweep_safe(expected_turn, distances)
             if expected_turn is not None
             else None
         )
+        active_turn_clearance_safe = (
+            self.active_turn_clearance_safe(expected_turn, distances)
+            if expected_turn is not None
+            else None
+        )
+        if self.state in (
+            STATE_TURN_LEFT,
+            STATE_TURN_RIGHT,
+            STATE_TURN_FINE_ALIGN,
+        ):
+            moving_sweep_safe = active_turn_clearance_safe
+        else:
+            moving_sweep_safe = turn_start_sweep_safe
 
         return {
             'dry_run': True,
@@ -255,6 +284,12 @@ class MazeNavigationPolicy:
             'route_complete': self.route_complete(),
             'side_missing_streak': self._side_missing_streak,
             'side_unsafe_streak': self._side_unsafe_streak,
+            'turn_start_streak': self._turn_start_streak,
+            'cloud_sequence': (
+                observation.cloud_sequence
+                if observation is not None
+                else None
+            ),
             'expected_turn': expected_turn,
             'turn_target_rad': self._turn_target_rad,
             'turn_target_deg': self._degrees_or_none(
@@ -262,6 +297,10 @@ class MazeNavigationPolicy:
             ),
             'turn_error_rad': turn_error,
             'turn_error_deg': self._degrees_or_none(turn_error),
+            # 本次进度以进入 TURN 状态时的值为零点，不受此前长时间
+            # 静止累计漂移的绝对数值影响，供闭环诊断和终端 D 显示。
+            'turn_progress_rad': turn_progress,
+            'turn_progress_deg': self._degrees_or_none(turn_progress),
             'yaw_rad': (
                 observation.yaw_rad
                 if observation is not None
@@ -284,6 +323,7 @@ class MazeNavigationPolicy:
             ),
             'distances_m': distances,
             'center_error_m': center_error,
+            'center_reference': center_reference,
             'sweep_radius_m': self.sweep_radius_m,
             'sweep_diameter_with_margin_m': (
                 self.sweep_diameter_with_margin_m
@@ -292,6 +332,8 @@ class MazeNavigationPolicy:
                 self.in_place_rotation_fits_corridor
             ),
             'moving_turn_sweep_safe': moving_sweep_safe,
+            'turn_start_sweep_safe': turn_start_sweep_safe,
+            'active_turn_clearance_safe': active_turn_clearance_safe,
             'reverse_rear_visibility_confirmed': False,
             'geometry': {
                 'robot_length_m': self.config.robot_length_m,
@@ -310,6 +352,19 @@ class MazeNavigationPolicy:
         """校验 B1 状态、消息 age、Yaw 和五扇区数据。"""
         if not isinstance(observation, MazeObservation):
             return False, 'observation_type_invalid'
+        sequence = observation.cloud_sequence
+        if sequence is not None:
+            if (
+                isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence < 0
+            ):
+                return False, 'cloud_sequence_invalid'
+            if (
+                self._last_cloud_sequence is not None
+                and sequence < self._last_cloud_sequence
+            ):
+                return False, 'cloud_sequence_regressed'
         if str(observation.sensor_state).upper() == 'STALE':
             return False, 'b1_sensor_stale'
         if str(observation.sensor_state).upper() not in (
@@ -376,6 +431,20 @@ class MazeNavigationPolicy:
             return target - right
         return None
 
+    def corner_approach_center_error(self, direction, distances):
+        """接近开口时只跟随对侧墙，避免开口远墙拉偏居中结果。"""
+        if direction == DIRECTION_LEFT:
+            right = self._explicit_distance(distances.get('right'))
+            if right is None:
+                return None
+            return self.config.side_target_m - right
+        if direction == DIRECTION_RIGHT:
+            left = self._explicit_distance(distances.get('left'))
+            if left is None:
+                return None
+            return left - self.config.side_target_m
+        return None
+
     def rectangle_half_extents(self, yaw_rad):
         """计算矩形机身旋转到给定角度后的轴对齐半宽和半长。"""
         angle = float(yaw_rad)
@@ -435,6 +504,43 @@ class MazeNavigationPolicy:
             and opposite >= self.side_collision_distance_m
         )
 
+    def active_turn_clearance_safe(self, direction, distances):
+        """转向锁存后检查即时净空，不再要求开口侧持续显示远墙。"""
+        if direction not in VALID_DIRECTIONS:
+            return False
+
+        side_name, diagonal_name, opposite_name = self._turn_sector_names(
+            direction
+        )
+        front = self._explicit_distance(distances.get('front'))
+        turn_side = self._explicit_distance(distances.get(side_name))
+        turn_diagonal = self._explicit_distance(
+            distances.get(diagonal_name)
+        )
+        opposite = self._explicit_distance(
+            distances.get(opposite_name)
+        )
+
+        if (
+            front is None
+            or turn_diagonal is None
+            or opposite is None
+        ):
+            return False
+
+        # 严格扫掠开口已在启动前连续确认。转向中目标侧可能重新看到
+        # 身旁墙端，只要它仍高于机身半宽加安全余量就不能误判为封路。
+        turn_side_safe = (
+            turn_side is None
+            or turn_side >= self.side_collision_distance_m
+        )
+        return (
+            front >= self.front_collision_distance_m
+            and turn_side_safe
+            and turn_diagonal >= self.front_collision_distance_m
+            and opposite >= self.side_collision_distance_m
+        )
+
     def _handle_wait_sensor(self, observation, now):
         if self._missing_required_side(observation.distances):
             # 启动阶段先等待稳定侧墙几何，不把偶发缺测计入确认帧。
@@ -462,15 +568,17 @@ class MazeNavigationPolicy:
     def _handle_corridor_follow(self, observation, now):
         distances = observation.distances
         front = self._front_distance(distances)
-        allowed_missing = ()
-        if (
-            not self.route_complete()
+        expected_turn = self.expected_turn()
+        approaching_known_corner = (
+            expected_turn is not None
             and front <= self.config.corner_approach_distance_m
-        ):
+        )
+        allowed_missing = ()
+        if approaching_known_corner:
             # 接近已知拐角时，预期转向侧墙消失可作为开口候选；
             # 对侧墙仍必须可观测，避免把整片点云缺失误判为空旷。
             allowed_missing = (self._turn_sector_names(
-                self.expected_turn()
+                expected_turn
             )[0],)
 
         if self._pause_or_fault_for_missing(
@@ -512,7 +620,7 @@ class MazeNavigationPolicy:
                 return self.snapshot(now)
         else:
             self._exit_streak = 0
-            if front <= self.config.corner_approach_distance_m:
+            if approaching_known_corner:
                 self._corner_streak += 1
             else:
                 self._corner_streak = 0
@@ -525,7 +633,15 @@ class MazeNavigationPolicy:
                 return self._handle_corner_approach(observation, now)
 
         speed = self._corridor_speed(front)
-        correction = self._center_command(distances)
+        if approaching_known_corner:
+            # 状态持续帧尚未确认完成时，也必须立即忽略开口侧远墙；
+            # 否则短暂的错误修正方向可能把机器人推向挡板。
+            correction = self._corner_center_command(
+                expected_turn,
+                distances,
+            )
+        else:
+            correction = self._center_command(distances)
         self.reason = (
             'route_complete_search_exit'
             if self.route_complete()
@@ -565,14 +681,8 @@ class MazeNavigationPolicy:
 
         front = self._front_distance(distances)
         sweep_safe = self.moving_turn_sweep_safe(direction, distances)
-        if (
-            front <= self.config.turn_start_distance_m
-            and sweep_safe
-        ):
-            self._begin_turn(direction, observation.turn_rad, now)
-            return self._handle_turn(observation, now)
-
         if front <= self.config.front_emergency_distance_m:
+            self._turn_start_streak = 0
             self._transition(
                 STATE_REVERSE_RECOVERY,
                 'turn_envelope_unsafe_reverse_candidate',
@@ -581,13 +691,32 @@ class MazeNavigationPolicy:
             return self._handle_reverse_recovery(observation, now)
 
         if front <= self.config.turn_start_distance_m:
+            if sweep_safe:
+                # 开口必须连续稳定，不能由单帧远距离噪声锁存转向状态。
+                self._turn_start_streak += 1
+                self.reason = (
+                    f'turn_start_confirmation_'
+                    f'{self._turn_start_streak}/'
+                    f'{self.config.turn_start_confirm_frames}'
+                )
+                self._set_command(0.0, 0.0)
+                if (
+                    self._turn_start_streak
+                    >= self.config.turn_start_confirm_frames
+                ):
+                    self._begin_turn(direction, observation.turn_rad, now)
+                    return self._handle_turn(observation, now)
+                return self.snapshot(now)
+
+            self._turn_start_streak = 0
             self.reason = 'waiting_for_turn_opening'
             self._set_command(0.0, 0.0)
         else:
+            self._turn_start_streak = 0
             self.reason = 'approaching_turn_start'
             self._set_command(
                 self.config.approach_vx,
-                self._center_command(distances),
+                self._corner_center_command(direction, distances),
             )
         return self.snapshot(now)
 
@@ -602,6 +731,15 @@ class MazeNavigationPolicy:
                 observation.distances,
             ),
             'turn_clearance_missing',
+            now,
+        ):
+            return self.snapshot(now)
+        if self._pause_or_fault_for_side_clearance(
+            not self.active_turn_clearance_safe(
+                direction,
+                observation.distances,
+            ),
+            'turn_sweep_unsafe',
             now,
         ):
             return self.snapshot(now)
@@ -641,6 +779,15 @@ class MazeNavigationPolicy:
                 observation.distances,
             ),
             'fine_align_clearance_missing',
+            now,
+        ):
+            return self.snapshot(now)
+        if self._pause_or_fault_for_side_clearance(
+            not self.active_turn_clearance_safe(
+                direction,
+                observation.distances,
+            ),
+            'fine_align_sweep_unsafe',
             now,
         ):
             return self.snapshot(now)
@@ -849,6 +996,7 @@ class MazeNavigationPolicy:
         self._corner_streak = 0
         self._side_missing_streak = 0
         self._side_unsafe_streak = 0
+        self._turn_start_streak = 0
         self._turn_streak = 0
         self._reacquire_streak = 0
         self._recovery_streak = 0
@@ -935,6 +1083,14 @@ class MazeNavigationPolicy:
 
     def _center_command(self, distances):
         error = self.corridor_center_error(distances)
+        return self._center_command_from_error(error)
+
+    def _corner_center_command(self, direction, distances):
+        error = self.corner_approach_center_error(direction, distances)
+        return self._center_command_from_error(error)
+
+    def _center_command_from_error(self, error):
+        """将已选定参考墙的横向误差转换为限幅诊断角速度。"""
         if error is None:
             return 0.0
         return self._clamp(
@@ -942,6 +1098,44 @@ class MazeNavigationPolicy:
             -self.config.max_center_wz,
             self.config.max_center_wz,
         )
+
+    def _center_error_for_state(self, distances, expected_turn):
+        """返回当前状态实际采用的居中误差和可诊断参考墙。"""
+        if self._uses_corner_reference(distances, expected_turn):
+            error = self.corner_approach_center_error(
+                expected_turn,
+                distances,
+            )
+            reference = (
+                'right_wall'
+                if expected_turn == DIRECTION_LEFT
+                else 'left_wall'
+                if expected_turn == DIRECTION_RIGHT
+                else 'none'
+            )
+            return error, reference
+        return self.corridor_center_error(distances), 'both_walls'
+
+    def _uses_corner_reference(self, distances, expected_turn):
+        """确认中也提前跟随对侧墙，避免目标侧开口回波反向拉偏。"""
+        if expected_turn not in VALID_DIRECTIONS:
+            return False
+        if self.state == STATE_CORNER_APPROACH:
+            return True
+        return (
+            self.state == STATE_CORRIDOR_FOLLOW
+            and self._front_distance(distances)
+            <= self.config.corner_approach_distance_m
+        )
+
+    def _accept_new_cloud_sequence(self, sequence):
+        """只让递增点云序号推进策略；None 保持旧录包兼容。"""
+        if sequence is None:
+            return True
+        if self._last_cloud_sequence == sequence:
+            return False
+        self._last_cloud_sequence = sequence
+        return True
 
     def _bounded_turn_wz(self, error):
         raw = self.config.turn_kp * float(error)
@@ -1040,6 +1234,14 @@ class MazeNavigationPolicy:
         if not self._is_finite(turn_rad):
             return None
         return self._turn_target_rad - float(turn_rad)
+
+    def _turn_progress(self, turn_rad):
+        """返回本次转向相对启动时刻的有符号角度，不使用全程累计值。"""
+        if self._turn_start_rad is None or turn_rad is None:
+            return None
+        if not self._is_finite(turn_rad):
+            return None
+        return float(turn_rad) - self._turn_start_rad
 
     def _turn_elapsed(self, now):
         if self._turn_start_time is None:
@@ -1167,6 +1369,9 @@ class MazeNavigationPolicy:
                 self.config.side_unsafe_confirm_frames
             ),
             'corner_confirm_frames': self.config.corner_confirm_frames,
+            'turn_start_confirm_frames': (
+                self.config.turn_start_confirm_frames
+            ),
             'turn_confirm_frames': self.config.turn_confirm_frames,
             'reacquire_confirm_frames': (
                 self.config.reacquire_confirm_frames

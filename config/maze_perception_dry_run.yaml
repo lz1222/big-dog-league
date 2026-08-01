@@ -36,12 +36,14 @@ maze_perception_dry_run:
     side_projection_min_x_span: 0.12
     side_projection_lateral_tolerance: 0.04
     side_min_points: 3
-    # 单侧稀疏回波最多保留2个点云帧；突然变远超过8cm也需连续确认。
+    # Round 8全包回放确认低挡板近墙点会按雷达扫描相位短暂变成短簇；
+    # 保守保留8帧约0.54s，只延续较近历史值，真实开口确认会相应延迟。
     # 更近障碍始终立即生效，点云断流时立即清空缓存。
-    side_hold_frames: 2
-    side_rise_tolerance: 0.08
+    side_hold_frames: 8
+    # 单帧允许增量过大会逐帧抬高缓存；Round 8全包矩阵选择4cm稳定点。
+    side_rise_tolerance: 0.04
     # 仅允许短墙候选延续相近的已确认侧距，并且不得据此增大净空。
-    side_continuity_tolerance: 0.04
+    side_continuity_tolerance: 0.10
 
     # 进入阈值小于退出阈值，形成滞回并减少临界距离附近的抖动。
     front_block_enter: 0.65

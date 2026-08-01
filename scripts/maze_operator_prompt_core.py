@@ -24,6 +24,13 @@ DIRECTION_LABELS = {
     'RIGHT': '右转',
 }
 
+CENTER_REFERENCE_LABELS = {
+    'both_walls': '左右墙',
+    'left_wall': '左墙',
+    'right_wall': '右墙',
+    'none': '无',
+}
+
 REASON_LABELS = {
     'startup_wait_sensor': '节点刚启动，正在等待传感器',
     'b1_input_missing': '尚未收到 B1 状态',
@@ -44,6 +51,8 @@ REASON_LABELS = {
     'corner_distance_confirmed': '已确认接近拐角',
     'approaching_turn_start': '尚未到达允许转向的位置',
     'waiting_for_turn_opening': '已到转向距离，但转向扫掠空间不足',
+    'turn_sweep_unsafe': '转向扫掠包络不足',
+    'fine_align_sweep_unsafe': '精调扫掠包络不足',
     'left_turn_started': '左转条件已满足',
     'right_turn_started': '右转条件已满足',
     'yaw_closed_loop_turn': '正在使用累计 Yaw 闭环转向',
@@ -161,6 +170,19 @@ def build_operator_view(
             severity='danger',
         )
 
+    turning_states = ('TURN_LEFT', 'TURN_RIGHT', 'TURN_FINE_ALIGN')
+    if (
+        state in turning_states
+        and payload.get('moving_turn_sweep_safe') is not True
+    ):
+        # D端独立执行最后一道保护，绝不在包络不足时提示操控员转向。
+        return _stop_view(
+            state_label,
+            '保持静止；当前矩形机身转向扫掠包络不足，禁止继续转向。',
+            reason_label,
+            severity='danger',
+        )
+
     if state == 'WAIT_SENSOR':
         return OperatorView(
             'warning',
@@ -192,6 +214,13 @@ def build_operator_view(
             reason_label,
         )
     if state == 'CORNER_APPROACH':
+        if reason.startswith('turn_start_confirmation_'):
+            return _stop_view(
+                state_label,
+                '保持静止；等待转向开口和扫掠包络连续确认。',
+                reason_label,
+                severity='warning',
+            )
         if reason == 'waiting_for_turn_opening':
             return _stop_view(
                 state_label,
@@ -282,8 +311,13 @@ def translate_reason(reason):
         base_reason, count = text.rsplit('_confirmation_', 1)
         base_label = REASON_LABELS.get(base_reason, base_reason)
         return f'{base_label}，危险帧确认 {count}'
+    if 'sweep_unsafe_confirmation_' in text:
+        base_reason, count = text.rsplit('_confirmation_', 1)
+        base_label = REASON_LABELS.get(base_reason, base_reason)
+        return f'{base_label}，危险帧确认 {count}'
     prefixes = (
         ('sensor_confirmation_', '传感器连续确认 '),
+        ('turn_start_confirmation_', '转向开口连续确认 '),
         ('fine_align_confirmation_', '目标角连续确认 '),
         ('corridor_reacquire_', '新走廊连续确认 '),
         ('b1_payload_invalid:', 'B1 JSON 格式错误：'),
@@ -307,6 +341,10 @@ def format_dashboard(payload, view, stream_age_sec):
     distances = data.get('distances_m')
     if not isinstance(distances, dict):
         distances = {}
+    center_reference = CENTER_REFERENCE_LABELS.get(
+        str(data.get('center_reference', 'none')),
+        str(data.get('center_reference', '未知')),
+    )
 
     lines = [
         '=' * 72,
@@ -334,17 +372,24 @@ def format_dashboard(payload, view, stream_age_sec):
         (
             '姿态：'
             f'Yaw {_format_degrees_from_rad(data.get("yaw_rad"))}  '
-            f'累计转角 {_format_degrees_from_rad(data.get("turn_rad"))}  '
+            'Odom启动累计 '
+            f'{_format_degrees_from_rad(data.get("turn_rad"))}（含静止漂移）'
+        ),
+        (
+            '转弯闭环：'
+            f'本次进度 {_format_value(data.get("turn_progress_deg"), 1, "deg")}  '
             f'目标误差 {_format_value(data.get("turn_error_deg"), 1, "deg")}'
         ),
         (
-            '居中：'
+            f'居中（{center_reference}参考）：'
             f'{_format_value(data.get("center_error_m"), 3, "m")} '
             '(正值表示应向左修正，负值表示应向右修正)'
         ),
         (
             '转向包络：'
             f'{_format_bool(data.get("moving_turn_sweep_safe"))}  '
+            '启动条件：'
+            f'{_format_bool(data.get("turn_start_sweep_safe"))}  '
             '原地转向：'
             f'{_in_place_label(data.get("in_place_rotation_fits_corridor"))}'
         ),

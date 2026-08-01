@@ -68,6 +68,7 @@ ros2 topic echo /maze/perception/dry_run_status
 - `state`：`CLEAR`、`BLOCKED` 或 `STALE`。
 - `advice`：`FORWARD`、`TURN_LEFT`、`TURN_RIGHT` 或 `STOP`。
 - 两个输入的消息 age。
+- `cloud_sequence`：只在收到新 `PointCloud2` 时递增的帧序号。
 - raw yaw 和跨正负 pi 连续的累计 `turn`。
 - 五扇区距离、点数、有限点数以及总有效点数。
 - 障碍和清除持续帧计数。
@@ -87,6 +88,10 @@ state=STALE advice=STOP
 点云恢复后，必须连续达到 `clear_confirm_frames` 才会进入 `CLEAR`。检测到
 近障碍时，必须连续达到 `blocked_confirm_frames` 才会进入 `BLOCKED`；确认
 期间建议已经变为 `STOP`，不会继续建议前进。
+
+B1 为了持续报告 freshness，会按 `print_rate` 重发当前 JSON 快照；重发不会
+推进 B1 内部障碍持续帧。`cloud_sequence` 只由新的 PointCloud2 回调递增，B2
+等下游状态机必须用该字段去重，不能把同一雷达帧的周期快照计成多帧确认。
 
 `front_block_enter/exit` 控制正前方，`diagonal_block_enter/exit` 控制左右前方。
 exit 大于 enter，障碍距离处于两者之间时保持原状态，避免边界抖动。
@@ -121,6 +126,17 @@ exit 大于 enter，障碍距离处于两者之间时保持原状态，避免边
 `held_rise_direct/held_rise_projected`。更近的有效量测会立即覆盖缓存；连续缺测
 或变远超过上限、点云断流或解析失败都会清空缓存，因此该机制不能跨传感器失效
 继续提供旧墙距。
+
+2026-08-01 Round 8 的 `20091` 帧原始点云回放中，旧参数
+`side_hold_frames=2`、`side_continuity_tolerance=0.04m` 产生左侧缺测
+`464` 帧，并有 `2329` 帧把约 `0.66m` 的远墙当成侧距。原始近墙短簇仍位于
+约 `0.22..0.30m`，说明回波没有整体断流，而是扫描相位导致单帧纵向跨度不足。
+使用 `8` 帧、`0.10m` 连续性容差和 `0.04m` 单帧上升容差回放后，缺测为
+`0` 帧，左侧最大值为 `0.298m`，且没有任何 `>0.35m` 的错误远墙值。
+`0.08m` 上升容差会让缓存随多次小幅跳变逐步抬高，因此不能继续使用。
+保留值只能保持或减小已确认净空，更近量测仍立即生效；真实开口确认最多延迟
+约 `8 / 14.7 = 0.54s`。该结果是录包离线验证，仍需原位静止复测，不能写成
+动态迷宫 PASS。
 
 进入 `BLOCKED` 后比较：
 
