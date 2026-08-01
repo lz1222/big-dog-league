@@ -253,9 +253,9 @@ inspection_action_executor:
     sdk_action_timeout_sec: 15.0
     post_action_settle_sec: 1.5
     sdk_network_interface: eth0
-    # launch 根据 hardware_mode/software_smoke_mode 选择真实或假 ELF helper。
-    sdk_action_executable: ''
-    software_smoke_mode: false
+    # helper 路径由正式 launch 显式注入（ParameterValue(value_type=str)）。
+    # 此处不再放空字符串默认值，避免在 Foxy 中覆盖 launch 注入的正确路径。
+    # software_smoke_mode 由 launch 显式注入 (ParameterValue(value_type=bool))。
 
 gait_control_node:
   ros__parameters:
@@ -270,7 +270,7 @@ gait_control_node:
     obstacle_safety.require_fresh_data: false
     front_jump:
       # 默认是真实比赛链；仅 launch 的显式 smoke 参数可改为 true。
-      software_smoke_mode: false
+      # software_smoke_mode 由 launch 显式注入 (ParameterValue(value_type=bool))。
       start:
         pre_stop_duration: 0.5
         final_zero_epsilon: 0.001
@@ -285,7 +285,6 @@ gait_control_node:
         final_zero_timeout: 2.0
         sdk_timeout: 12.0
         post_settle_duration: 2.5
-      sdk_action_executable: ''
       sdk_network_interface: eth0
       zero_publish_rate_hz: 10.0
       final_cmd_topic: /navigation/cmd_vel
@@ -293,7 +292,7 @@ gait_control_node:
       cmd_mux_status_topic: /control/cmd_mux_status
       estop_state_topic: /safety/estop_state
       estop_state_stale_timeout: 0.20
-      cleanup_guard_path: ~/.rk_non_arm_competition/front_jump_cleanup_guard.json
+      # cleanup_guard_path 由 launch 注入；此处不放重复默认值。
       shutdown_drain_timeout_sec: 5.0
 
 command_mux_node:
@@ -312,8 +311,8 @@ command_mux_node:
 
 competition_readiness_node:
   ros__parameters:
-    hardware_mode: true
-    software_smoke_mode: false
+    # hardware_mode 和 software_smoke_mode 由 launch 显式注入
+    # (ParameterValue(value_type=bool))，不在此放会覆盖注入值的默认。
     image_topic: /camera/camera/color/image_raw
     final_cmd_topic: /navigation/cmd_vel
     line_track_topic: /perception/line_track
@@ -329,7 +328,6 @@ competition_readiness_node:
     motion_action_name: /locomotion/execute_motion
     cmd_mux_status_topic: /control/cmd_mux_status
     sdk_server: /home/unitree/unitree_go2_sdk_test/build/go2_sdk_udp_server
-    sdk_action_executable: ''
-    cleanup_guard_path: ~/.rk_non_arm_competition/front_jump_cleanup_guard.json
+    # sdk_action_executable 和 cleanup_guard_path 由 launch 显式注入。
     freshness_timeout_sec: 2.0
     status_publish_rate_hz: 2.0

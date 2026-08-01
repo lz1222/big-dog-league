@@ -252,9 +252,14 @@ def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
     assert "use_hardware_udp_forwarder" in source
     assert "use_smoke_publisher" in source
     assert "SOFTWARE_SMOKE_MODE" in source
-    assert "front_jump.sdk_action_executable': selected_sdk_helper" in source
-    assert "sdk_action_executable': selected_sdk_helper" in source
-    assert "front_jump.cleanup_guard_path': selected_cleanup_guard" in source
+    # B2 修复后使用 ParameterValue(..., value_type=str) 包装
+    assert "front_jump.sdk_action_executable" in source
+    assert 'selected_sdk_helper' in source
+    assert "sdk_action_executable" in source
+    assert "front_jump.cleanup_guard_path" in source
+    assert 'selected_cleanup_guard' in source
+    assert "ParameterValue(" in source
+    assert "value_type=str" in source
     assert "front_jump.software_smoke_mode" in source
     assert "'fake_sdk_action_executable', default_value=''" in source
 
@@ -357,3 +362,253 @@ def test_start_script_publishes_one_start_and_acceptance_uses_compiled_elf():
         'test_front_jump_supervisor.py',
     ):
         assert test_name in acceptance_script
+
+
+# ---- B2 修复回归：Foxy 中 launch 参数展开正确性 ----
+
+
+def _parse_launch_params_node_block(launch_source, node_package, node_executable):
+    """提取 launch 源码中指定节点的 inline parameters dict 文本。"""
+    import re
+
+    escaped_pkg = re.escape(node_package)
+    escaped_exe = re.escape(node_executable)
+    pattern = (
+        r"Node\(\s*"
+        r"package\s*=\s*'" + escaped_pkg + r"'\s*,"
+        r"\s*executable\s*=\s*'" + escaped_exe + r"'\s*,"
+    )
+    match = re.search(pattern, launch_source)
+    if match is None:
+        return None
+    # 找到 parameters=[ 后面的内容直到闭合
+    block = launch_source[match.start():]
+    params_start = block.find('parameters=')
+    if params_start == -1:
+        return None
+    return block[params_start:]
+
+
+def test_launch_uses_parameter_value_with_str_type_for_helper_paths():
+    """B2 修复：所有 helper 路径必须使用 ParameterValue(..., value_type=str)。"""
+    launch_path = (
+        PACKAGE_ROOT / 'launch' / 'competition_non_arm.launch.py'
+    )
+    source = launch_path.read_text(encoding='utf-8')
+
+    param_targets = [
+        'sdk_action_executable',
+        'cleanup_guard_path',
+        'sdk_network_interface',
+    ]
+    for target in param_targets:
+        # 确保每个 substitution 参数都包在 ParameterValue 中
+        for line in source.split('\n'):
+            if "'" + target + "'" in line and 'selected_' in line:
+                assert 'ParameterValue(' in source.split('\n')[
+                    source.split('\n').index(line) - 1
+                ] or 'ParameterValue(' in source.split('\n')[
+                    source.split('\n').index(line)
+                ] or 'ParameterValue(' in source.split('\n')[
+                    source.split('\n').index(line) + 1
+                ], (
+                    '{} with substitution must be wrapped in '
+                    'ParameterValue(..., value_type=str)'.format(target)
+                )
+
+
+def test_launch_helper_expression_conditions():
+    """验证 helper 选择表达式始终存在且覆盖 hardware/smoke 两种模式。"""
+    launch_path = (
+        PACKAGE_ROOT / 'launch' / 'competition_non_arm.launch.py'
+    )
+    source = launch_path.read_text(encoding='utf-8')
+
+    assert '_selected_helper_expression' in source
+    assert (
+        "ParameterValue(\n                    "
+        "selected_sdk_helper, value_type=str\n                )"
+    ) in source
+    # production 路径必须是安装目录中的 go2_sdk_motion_action
+    assert 'go2_sdk_motion_action' in source
+    # smoke 路径使用 fake 参数
+    assert 'fake_sdk_action_executable' in source
+
+
+def test_yaml_no_longer_contains_empty_sdk_action_defaults():
+    """B2 修复：YAML 不再包含会覆盖 launch 注入值的空字符串默认。"""
+    yaml_path = (
+        PACKAGE_ROOT / 'config' / 'non_arm_competition_params.yaml'
+    )
+    with yaml_path.open('r', encoding='utf-8') as fh:
+        text = fh.read()
+
+    yaml_data = yaml.safe_load(text)
+    # 检查 gait_control_node → front_jump 下没有空 sdk_action_executable
+    gc_params = (
+        yaml_data.get('gait_control_node', {}).get('ros__parameters', {})
+    )
+    fj_params = gc_params.get('front_jump', {})
+    assert 'sdk_action_executable' not in fj_params, (
+        'front_jump.sdk_action_executable must not have an empty default '
+        'in the YAML that overrides the launch-injected path'
+    )
+
+    # inspection_action_executor 下没有空 sdk_action_executable
+    insp_params = (
+        yaml_data.get('inspection_action_executor', {})
+        .get('ros__parameters', {})
+    )
+    assert 'sdk_action_executable' not in insp_params, (
+        'inspection_action_executor sdk_action_executable must come from launch'
+    )
+
+    # competition_readiness_node 下没有空 sdk_action_executable
+    ready_params = (
+        yaml_data.get('competition_readiness_node', {})
+        .get('ros__parameters', {})
+    )
+    assert 'sdk_action_executable' not in ready_params, (
+        'competition_readiness_node sdk_action_executable must come from launch'
+    )
+
+
+def test_node_python_defaults_remain_fail_closed():
+    """节点自身的 declare_parameter 默认值仍为空/安全值，依赖 launch 注入。"""
+    import rk_locomotion.gait_control_node as gc_mod
+    import inspect
+
+    source = inspect.getsource(gc_mod.GaitControlNode._declare_parameters)
+    # front_jump.sdk_action_executable 的 Python 默认值是 'go2_sdk_motion_action'
+    # 这是安全的 fail-closed 值（仅在未通过正式 launch 启动时使用）
+    assert "'front_jump.sdk_action_executable': 'go2_sdk_motion_action'" in source
+
+
+# ---- F3 修复回归：Foxy /** YAML 参数覆盖 -----
+
+
+def test_yaml_does_not_contain_hardware_mode_defaults():
+    """F3 修复：YAML 不应包含会被 launch 覆盖的 hardware/software_smoke_mode。
+
+    Foxy 的 rcl_yaml_param_parser 中 /** 通配符参数不会正确覆盖
+    节点特定参数。因此所有 hardware_mode 和 software_smoke_mode
+    的默认值必须仅来自 Python declare_parameter 和 launch 注入，
+    不得在 YAML 中重复声明。
+    """
+    yaml_path = (
+        PACKAGE_ROOT / 'config' / 'non_arm_competition_params.yaml'
+    )
+    with yaml_path.open('r', encoding='utf-8') as fh:
+        text = fh.read()
+    yaml_data = yaml.safe_load(text)
+
+    # readiness 节点不应有 hardware_mode / software_smoke_mode
+    ready_params = (
+        yaml_data.get('competition_readiness_node', {})
+        .get('ros__parameters', {})
+    )
+    assert 'hardware_mode' not in ready_params, (
+        'competition_readiness_node must not have hardware_mode in YAML '
+        '(launch injects ParameterValue(value_type=bool))'
+    )
+    assert 'software_smoke_mode' not in ready_params, (
+        'competition_readiness_node must not have software_smoke_mode in YAML'
+    )
+
+    # inspection_action_executor 不应有 software_smoke_mode
+    insp_params = (
+        yaml_data.get('inspection_action_executor', {})
+        .get('ros__parameters', {})
+    )
+    assert 'software_smoke_mode' not in insp_params, (
+        'inspection_action_executor must not have software_smoke_mode in YAML'
+    )
+
+    # gait_control_node → front_jump 不应有 software_smoke_mode
+    gc_params = (
+        yaml_data.get('gait_control_node', {}).get('ros__parameters', {})
+    )
+    fj = gc_params.get('front_jump', {})
+    assert 'software_smoke_mode' not in fj, (
+        'gait_control_node front_jump must not have software_smoke_mode '
+        'in YAML'
+    )
+
+
+def test_launch_uses_parameter_value_bool_for_mode_params():
+    """F3 修复：readiness 的硬件/烟感参数必须用 ParameterValue(value_type=bool)。"""
+    launch_path = (
+        PACKAGE_ROOT / 'launch' / 'competition_non_arm.launch.py'
+    )
+    source = launch_path.read_text(encoding='utf-8')
+
+    # readiness 节点区域的 hardware_mode 和 software_smoke_mode
+    assert ("'hardware_mode': ParameterValue(\n"
+            "                    hardware_mode, value_type=bool\n"
+            "                )") in source, (
+        'hardware_mode must use ParameterValue(value_type=bool) in launch'
+    )
+    assert ("'software_smoke_mode': ParameterValue(\n"
+            "                    software_smoke_mode, value_type=bool\n"
+            "                )") in source, (
+        'software_smoke_mode must use ParameterValue(value_type=bool)'
+    )
+
+
+def test_smoke_temp_params_file_has_bool_not_string():
+    """F3 修复：临时参数文件中的值为 YAML boolean 而非字符串。
+
+    字符串 'false' 在 bool('false') 后为 True，会造成灾难性误判。
+    """
+    launch_path = (
+        PACKAGE_ROOT / 'launch' / 'competition_non_arm.launch.py'
+    )
+    source = launch_path.read_text(encoding='utf-8')
+
+    # 所有 mode 参数必须显式标注 value_type=bool
+    bool_param_targets = ['hardware_mode', 'software_smoke_mode']
+    for target in bool_param_targets:
+        value_type_occurrences = source.count(
+            "'" + target + "': ParameterValue("
+        )
+        assert value_type_occurrences >= 1, (
+            '{} must use ParameterValue(value_type=bool)'.format(target)
+        )
+
+
+def test_readiness_smoke_checks_are_gated_by_software_smoke_mode():
+    """F3 修复：hardware SDK/forwarder/realsense 检查必须受 software_smoke_mode 门控。"""
+    readiness_source = (
+        PACKAGE_ROOT / 'rk_bringup' / 'competition_readiness_node.py'
+    ).read_text(encoding='utf-8')
+
+    # 硬件检查必须出现在 software_smoke_mode 门控下面
+    assert 'if self.software_smoke_mode:' in readiness_source, (
+        'readiness must have software_smoke_mode gate'
+    )
+    # hardware_mode 相关检查必须在 elif self.hardware_mode 下
+    assert 'elif self.hardware_mode:' in readiness_source, (
+        'hardware checks must be under elif self.hardware_mode gate'
+    )
+
+
+def test_gait_inspection_readiness_see_consistent_mode():
+    """F3 修复：三个核心节点必须看到一致的 mode 参数。
+
+    gait、inspection、readiness 的 software_smoke_mode 必须来自
+    同一组 launch 参数，不能出现一部分在 smoke、一部分在 hardware。
+    """
+    launch_path = (
+        PACKAGE_ROOT / 'launch' / 'competition_non_arm.launch.py'
+    )
+    source = launch_path.read_text(encoding='utf-8')
+
+    # 所有三个节点都通过 ParameterValue(value_type=bool) 接收参数
+    bool_injections = source.count(
+        "software_smoke_mode, value_type=bool"
+    )
+    assert bool_injections >= 2, (
+        'at least readiness and inspection must use '
+        'ParameterValue(value_type=bool) for software_smoke_mode, '
+        'found {} occurrences'.format(bool_injections)
+    )
