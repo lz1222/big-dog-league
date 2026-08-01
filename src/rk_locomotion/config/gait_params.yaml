@@ -44,7 +44,8 @@ gait_control_node:
         final_zero_timeout: 2.0
         sdk_timeout: 12.0
         post_settle_duration: 2.5
-      sdk_action_executable: go2_sdk_motion_action
+      # sdk_action_executable 和 cleanup_guard_path 由 launch 文件注入；
+      # YAML 中不放重复默认值避免覆盖 launch 的 smoke/production 选择。
       # eth0 仅为开发默认值，尚未声明为机器人实测接口。
       sdk_network_interface: eth0
       zero_publish_rate_hz: 10.0
@@ -53,7 +54,6 @@ gait_control_node:
       cmd_mux_status_topic: /control/cmd_mux_status
       estop_state_topic: /safety/estop_state
       estop_state_stale_timeout: 0.20
-      cleanup_guard_path: ~/rk_line_runtime/front_jump_cleanup_guard.json
       shutdown_drain_timeout_sec: 5.0
 
     obstacle_safety:
