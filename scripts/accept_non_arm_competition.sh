@@ -303,7 +303,7 @@ assert_smoke_process_guard() {
         echo "ERROR: marked fake helper did not pass /proc exe identity check." >&2
         return 1
     fi
-    if ! rg -F '"event": "helper_started"' "${CHECK_DIR}/launch.log" \
+    if ! grep -F '"event": "helper_started"' "${CHECK_DIR}/launch.log" \
         | grep -Fq "$FAKE_HELPER"; then
         echo "ERROR: real gait Action did not start the marked fake helper." >&2
         return 1
@@ -353,91 +353,30 @@ run_fault_injection_matrix() {
 }
 
 topic_json_matches() {
+    # Foxy 兼容：使用原生 rclpy observer 替代不支持的 ros2 topic echo --field
     local topic_name="$1"
     local key="$2"
     local expected="$3"
-    local sample
 
-    sample="$(timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" ros2 topic echo --once "$topic_name" \
-        --field data 2>/dev/null || true)"
-    [ -n "$sample" ] || return 1
-    if [ "${RK_ACCEPT_DEBUG_TOPIC:-false}" = "true" ]; then
-        printf 'DEBUG topic=%s key=%s expected=%s sample=%q\n' \
-            "$topic_name" "$key" "$expected" "$sample" >&2
-    fi
-    printf '%s' "$sample" | python3 -c '
-import ast
-import json
-import sys
-
-key, expected = sys.argv[1:]
-raw = sys.stdin.read().strip()
-rows = [row.strip() for row in raw.splitlines() if row.strip()]
-# ros2 topic echo 默认在 YAML 消息后输出 `---`；逐行逆序尝试，避免把
-# 分隔符误当成唯一候选 JSON。
-candidates = [raw] + list(reversed(rows))
-payload = None
-for candidate in candidates:
-    try:
-        value = json.loads(candidate)
-    except (TypeError, ValueError):
-        try:
-            value = ast.literal_eval(candidate)
-        except (SyntaxError, TypeError, ValueError):
-            continue
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
-            continue
-    if isinstance(value, dict):
-        payload = value
-        break
-if payload is None:
-    raise SystemExit(1)
-value = payload.get(key)
-if expected == "__true__":
-    raise SystemExit(value is not True)
-if expected == "__false__":
-    raise SystemExit(value is not False)
-raise SystemExit(str(value) != expected)
-' "$key" "$expected"
+    timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" \
+        python3 "$WORKSPACE_DIR/src/rk_bringup/scripts/non_arm_smoke_observer.py" \
+        "$topic_name" \
+        --once --match-key "$key" --match-value "$expected" \
+        --timeout-sec "$TOPIC_SAMPLE_TIMEOUT_SEC" \
+        >/dev/null 2>&1
 }
 
 topic_json_value() {
+    # Foxy 兼容：使用原生 rclpy observer 替代不支持的 ros2 topic echo --field
     local topic_name="$1"
     local key="$2"
-    local sample
 
-    sample="$(timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" ros2 topic echo --once "$topic_name" \
-        --field data 2>/dev/null || true)"
-    [ -n "$sample" ] || return 1
-    printf '%s' "$sample" | python3 -c '
-import ast
-import json
-import sys
-
-key = sys.argv[1]
-raw = sys.stdin.read().strip()
-rows = [row.strip() for row in raw.splitlines() if row.strip()]
-for candidate in [raw] + list(reversed(rows)):
-    try:
-        value = json.loads(candidate)
-    except (TypeError, ValueError):
-        try:
-            value = ast.literal_eval(candidate)
-        except (SyntaxError, TypeError, ValueError):
-            continue
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
-            continue
-    if isinstance(value, dict) and key in value:
-        print(value[key])
-        raise SystemExit(0)
-raise SystemExit(1)
-' "$key"
+    timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" \
+        python3 "$WORKSPACE_DIR/src/rk_bringup/scripts/non_arm_smoke_observer.py" \
+        "$topic_name" \
+        --once --value-key "$key" \
+        --timeout-sec "$TOPIC_SAMPLE_TIMEOUT_SEC" \
+        2>/dev/null
 }
 
 wait_until() {
@@ -456,19 +395,27 @@ wait_until() {
 
 start_topic_observer() {
     # 先建立长期订阅再发布 start，避免冷启动 CLI 因 DDS 发现错过短暂阶段。
-    # PYTHONUNBUFFERED 确保验收脚本可即时读取 observer 输出，而不是在退出时
-    # 才看到缓存；该 observer 只读，不发布任何 ROS 消息。
+    # Foxy 的 ros2 topic echo 不支持 --field，因此使用原生 rclpy observer
+    # 作为替代。Twist observer（无 field）仍保留 ros2 CLI。
     local topic_name="$1"
     local output_file="$2"
     local field_name="${3:-}"
-    local -a echo_args=(ros2 topic echo "$topic_name")
 
     if [ -n "$field_name" ]; then
-        echo_args+=(--field "$field_name")
+        # Foxy 兼容：使用原生 rclpy String observer，每条 msg.data 一行
+        env PYTHONUNBUFFERED=1 timeout "${TOPIC_OBSERVER_TIMEOUT_SEC}s" \
+            python3 "$WORKSPACE_DIR/src/rk_bringup/scripts/non_arm_smoke_observer.py" \
+            "$topic_name" \
+            --timeout-sec "$TOPIC_OBSERVER_TIMEOUT_SEC" \
+            > "$output_file" 2>&1 &
+        TOPIC_OBSERVER_PIDS+=("$!")
+    else
+        # Twist observer：ros2 topic echo 在 Foxy 正常工作
+        env PYTHONUNBUFFERED=1 timeout "${TOPIC_OBSERVER_TIMEOUT_SEC}s" \
+            ros2 topic echo "$topic_name" \
+            > "$output_file" 2>&1 &
+        TOPIC_OBSERVER_PIDS+=("$!")
     fi
-    env PYTHONUNBUFFERED=1 timeout "${TOPIC_OBSERVER_TIMEOUT_SEC}s" "${echo_args[@]}" \
-        > "$output_file" 2>&1 &
-    TOPIC_OBSERVER_PIDS+=("$!")
 }
 
 topic_stream_json_matches() {
@@ -631,11 +578,39 @@ is_zero_twist_sample() {
 }
 
 final_cmd_is_zero() {
-    local sample
+    # Foxy 兼容：使用有界 rclpy 订阅器替代不支持的 ros2 topic echo --once
+    timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" python3 - <<'PY'
+import time
 
-    sample="$(timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" ros2 topic echo --once /navigation/cmd_vel \
-        2>/dev/null || true)"
-    [ -n "$sample" ] && printf '%s\n' "$sample" | is_zero_twist_sample
+import rclpy
+from geometry_msgs.msg import Twist
+
+rclpy.init()
+node = rclpy.create_node('final_cmd_zero_probe')
+result = {'vx': None, 'wz': None}
+
+def _on_twist(msg):
+    result['vx'] = msg.linear.x
+    result['wz'] = msg.angular.z
+
+node.create_subscription(Twist, '/navigation/cmd_vel', _on_twist, 10)
+deadline = time.monotonic() + 5.0
+while rclpy.ok() and (result['vx'] is None or result['wz'] is None) \
+        and time.monotonic() < deadline:
+    rclpy.spin_once(node, timeout_sec=0.1)
+
+node.destroy_node()
+if rclpy.ok():
+    rclpy.shutdown()
+
+vx = result['vx']
+wz = result['wz']
+if vx is None or wz is None:
+    raise SystemExit(1)
+if abs(vx) < 1e-9 and abs(wz) < 1e-9:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
 }
 
 smoke_hardware_is_suppressed() {
@@ -661,7 +636,9 @@ smoke_route_completed() {
 
 capture_line_course_state() {
     # 失败证据保存在验收目录，避免 timeout cleanup 吞掉 ROS CLI 的末尾输出。
-    timeout 5s ros2 topic echo --once /mission/line_course_state --field data \
+    # Foxy 兼容：使用原生 rclpy observer 替代不支持的 ros2 topic echo --once --field
+    timeout 5s python3 "$WORKSPACE_DIR/src/rk_bringup/scripts/non_arm_smoke_observer.py" \
+        /mission/line_course_state --once --dump --timeout-sec 4 \
         > "${CHECK_DIR}/line_course_state_failure_sample.txt" 2>&1 || true
 }
 

@@ -14,7 +14,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.substitutions import PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
+from launch_ros.substitutions import FindPackageShare
 
 from rk_bringup.non_arm_competition_contract import DEFAULT_IMAGE_TOPIC
 
@@ -68,15 +68,20 @@ def _selected_helper_expression(
     hardware_mode,
     software_smoke_mode,
     fake_helper,
-    production_helper,
 ):
-    """选择 helper：非硬件或 smoke 路径永远不用 Unitree SDK helper。"""
-    expression = ['(']
-    expression.extend(_truthy_expression(hardware_mode))
-    expression.extend([' and not '])
-    expression.extend(_truthy_expression(software_smoke_mode))
-    expression.extend([') and '])
-    expression.extend(["'", production_helper, "' or '", fake_helper, "'"])
+    """选择 helper：非硬件或 smoke 路径永远不用 Unitree SDK helper。
+
+    生产 helper 使用 basename 让 resolve_sdk_executable 通过 PATH 解析；
+    smoke fake helper 使用绝对路径。避免 PathJoinSubstitution 在
+    PythonExpression 内部未完全解析导致回退到参数默认值。
+    """
+    expression = [
+        "'", fake_helper, "' if not (",
+        "('", hardware_mode, "'.strip().lower() in ('1','true','yes','on'))",
+        " and not ",
+        "('", software_smoke_mode, "'.strip().lower() in ('1','true','yes','on'))",
+        ") else 'go2_sdk_motion_action'",
+    ]
     return PythonExpression(expression)
 
 
@@ -113,21 +118,15 @@ def generate_launch_description():
     gait_config = PathJoinSubstitution([
         FindPackageShare('rk_locomotion'), 'config', 'gait_params.yaml',
     ])
-    installed_sdk_helper = PathJoinSubstitution([
-        FindPackagePrefix('rk_go2_sdk_bridge'),
-        'lib', 'rk_go2_sdk_bridge', 'go2_sdk_motion_action',
-    ])
     selected_sdk_helper = _selected_helper_expression(
         hardware_mode,
         software_smoke_mode,
         fake_sdk_action_executable,
-        installed_sdk_helper,
     )
     selected_cleanup_guard = _selected_helper_expression(
         hardware_mode,
         software_smoke_mode,
         smoke_cleanup_guard_path,
-        cleanup_guard_path,
     )
     # smoke helper 不接触 SDK/网络/实体机器人，但高负载 VM 可能让独立的
     # estop 心跳调度抖动超过生产 0.20 秒。仅 smoke 将其观察窗限为 8 秒；
@@ -364,9 +363,15 @@ def generate_launch_description():
                 'front_jump.estop_state_stale_timeout': (
                     smoke_estop_stale_timeout
                 ),
-                'front_jump.sdk_network_interface': sdk_network_interface,
-                'front_jump.sdk_action_executable': selected_sdk_helper,
-                'front_jump.cleanup_guard_path': selected_cleanup_guard,
+                'front_jump.sdk_network_interface': ParameterValue(
+                    sdk_network_interface, value_type=str
+                ),
+                'front_jump.sdk_action_executable': ParameterValue(
+                    selected_sdk_helper, value_type=str
+                ),
+                'front_jump.cleanup_guard_path': ParameterValue(
+                    selected_cleanup_guard, value_type=str
+                ),
                 'front_jump.software_smoke_mode': ParameterValue(
                     software_smoke_mode, value_type=bool
                 ),
@@ -378,8 +383,12 @@ def generate_launch_description():
             name='inspection_action_executor',
             output='log',
             parameters=[formal_config, {
-                'sdk_network_interface': sdk_network_interface,
-                'sdk_action_executable': selected_sdk_helper,
+                'sdk_network_interface': ParameterValue(
+                    sdk_network_interface, value_type=str
+                ),
+                'sdk_action_executable': ParameterValue(
+                    selected_sdk_helper, value_type=str
+                ),
                 'estop_state_stale_timeout_sec': smoke_estop_stale_timeout,
                 'software_smoke_mode': ParameterValue(
                     software_smoke_mode, value_type=bool
@@ -414,8 +423,12 @@ def generate_launch_description():
                 ),
                 'image_topic': image_topic,
                 'sdk_server': sdk_server,
-                'sdk_action_executable': selected_sdk_helper,
-                'cleanup_guard_path': selected_cleanup_guard,
+                'sdk_action_executable': ParameterValue(
+                    selected_sdk_helper, value_type=str
+                ),
+                'cleanup_guard_path': ParameterValue(
+                    selected_cleanup_guard, value_type=str
+                ),
             }],
         ),
         # SDK server/forwarder 仅在真实硬件模式存在，软件测试没有网络出口。

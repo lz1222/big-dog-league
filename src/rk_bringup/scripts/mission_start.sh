@@ -194,8 +194,13 @@ PY
 start_state_confirmed() {
     local sample
 
-    sample="$(timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" ros2 topic echo --once /mission/line_course_state \
-        --field data 2>/dev/null || true)"
+    # Foxy 兼容：使用原生 rclpy observer 替代不支持的 ros2 topic echo --field
+    sample="$(timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" \
+        python3 "${SCRIPT_DIR}/non_arm_smoke_observer.py" \
+        /mission/line_course_state \
+        --once --dump \
+        --timeout-sec "$TOPIC_SAMPLE_TIMEOUT_SEC" \
+        2>/dev/null || true)"
     if [ -z "$sample" ]; then
         return 1
     fi

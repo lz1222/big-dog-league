@@ -17,7 +17,6 @@ import time
 
 from geometry_msgs.msg import Twist
 import rclpy
-from rclpy._rclpy_pybind11 import RCLError
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
@@ -45,6 +44,17 @@ from rk_mission.inspection_action_core import decode_inspection_request
 from rk_mission.inspection_action_core import finite_float
 from rk_mission.inspection_action_core import normalize_label
 from rk_mission.inspection_action_core import warning_action_for
+
+# ---- Foxy/Humble 兼容：Context 关闭时的 shutdown 异常 ----
+# Humble+ 中 rclpy._rclpy_pybind11.RCLError 在 Foxy 不存在。
+# 构造一个只包含当前平台实际可用异常类型的窄元组，用于 executor.spin() 的
+# 安全关闭捕获。
+_SHUTDOWN_SIGNALS = ()
+try:
+    from rclpy._rclpy_pybind11 import RCLError as _RCLError  # noqa: E402
+    _SHUTDOWN_SIGNALS = (_RCLError,)
+except (ImportError, ModuleNotFoundError):
+    pass
 
 
 FINAL_CMD_QOS = QoSProfile(
@@ -673,10 +683,10 @@ def main(args=None):
     executor.add_node(node)
     try:
         executor.spin()
-    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
-        # launch 的 SIGINT 与 helper 完成回调可并发到达。Humble 在 context 已
-        # 失效时会从 wait set 抛出 RCLError；这是关闭竞态而非任务失败，finally
-        # 仍会请求 helper 进程组清理并释放节点资源。
+    except (KeyboardInterrupt, ExternalShutdownException) + _SHUTDOWN_SIGNALS:
+        # launch 的 SIGINT 与 helper 完成回调可并发到达；Foxy/Humble 在
+        # context 失效时从 wait set 抛出的异常类型不同。两者都属于可预期的
+        # 关闭竞态而非任务失败，finally 仍会请求 helper 进程组清理。
         pass
     finally:
         executor.shutdown()
