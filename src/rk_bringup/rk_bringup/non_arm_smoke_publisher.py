@@ -35,7 +35,8 @@ class NonArmSmokePublisher(Node):
         """建立测试输入 publisher；所有输出均停留在 ROS 软件图内。"""
         super().__init__('competition_smoke_publisher')
         self._declare_parameters()
-        self.image_topic = self._string_parameter('image_topic')
+        self.line_image_topic = self._string_parameter('line_image_topic')
+        self.sign_image_topic = self._string_parameter('sign_image_topic')
         self.scenario = self._string_parameter('scenario').lower()
         self.auto_start = self._bool_parameter('auto_start')
         self.publish_rate_hz = self._positive_float_parameter(
@@ -57,8 +58,11 @@ class NonArmSmokePublisher(Node):
         self._last_status_at = 0.0
         self._completed = False
 
-        self.image_publisher = self.create_publisher(
-            Image, self.image_topic, 10
+        self.line_image_publisher = self.create_publisher(
+            Image, self.line_image_topic, 10
+        )
+        self.sign_image_publisher = self.create_publisher(
+            Image, self.sign_image_topic, 10
         )
         self.line_publisher = self.create_publisher(
             LineTrack, '/perception/line_track', 10
@@ -104,14 +108,16 @@ class NonArmSmokePublisher(Node):
         )
         self.get_logger().info(
             'SOFTWARE_SMOKE_MODE publisher ready: scenario={}, '
-            'auto_start={}, image_topic={}'.format(
-                self.scenario, self.auto_start, self.image_topic
+            'auto_start={}, line_topic={}, sign_topic={}'.format(
+                self.scenario, self.auto_start,
+                self.line_image_topic, self.sign_image_topic,
             )
         )
 
     def _declare_parameters(self):
         """仅暴露合成输入的控制参数，避免引入任何硬件参数。"""
-        self.declare_parameter('image_topic', '/camera/color/image_raw')
+        self.declare_parameter('line_image_topic', '/camera/color/image_raw')
+        self.declare_parameter('sign_image_topic', '/go2/front_camera/image_raw')
         self.declare_parameter('scenario', 'idle')
         self.declare_parameter('auto_start', False)
         self.declare_parameter('publish_rate_hz', 20.0)
@@ -175,7 +181,8 @@ class NonArmSmokePublisher(Node):
         return message
 
     def _publish_image(self):
-        """发布极小 RGB 帧，只用于 image 新鲜度，不依赖真实相机。"""
+        """发布极小 RGB 帧到两路独立 Topic，确保 tracker 和 sign detector
+        各自获得独立的新鲜度证据，不共享单一相机 Topic。"""
         msg = self._stamp_header(Image())
         msg.height = 2
         msg.width = 2
@@ -183,7 +190,16 @@ class NonArmSmokePublisher(Node):
         msg.is_bigendian = False
         msg.step = 6
         msg.data = bytes((0, 0, 0) * 4)
-        self.image_publisher.publish(msg)
+        self.line_image_publisher.publish(msg)
+        # sign 的 smoke frame_id 使用本体相机 frame
+        sign_msg = self._stamp_header(Image())
+        sign_msg.height = 2
+        sign_msg.width = 2
+        sign_msg.encoding = 'rgb8'
+        sign_msg.is_bigendian = False
+        sign_msg.step = 6
+        sign_msg.data = bytes((128, 128, 128) * 4)
+        self.sign_image_publisher.publish(sign_msg)
 
     def _publish_line(self):
         """发布有限、居中的可见线，完整 smoke 在 start 后先保留零速窗口。"""

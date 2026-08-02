@@ -13,9 +13,13 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 
+DEFAULT_LINE_IMAGE_TOPIC = '/camera/color/image_raw'
+DEFAULT_SIGN_IMAGE_TOPIC = '/go2/front_camera/image_raw'
+DEFAULT_SIGN_CAMERA_FRAME_ID = 'go2_front_camera_optical_frame'
 DEFAULT_IMAGE_TOPIC = '/camera/color/image_raw'
 FINAL_CMD_TOPIC = '/navigation/cmd_vel'
 MOTION_ACTION_NAME = '/locomotion/execute_motion'
+SIGN_CAMERA_BRIDGE_NODE = 'go2_front_camera_bridge_node'
 # software smoke 只认可由本仓库 C 测试源码编译的 ELF；这不是生产 helper
 # 的通用信任机制，而是防止测试参数误指向真实 Unitree SDK 二进制。
 TEST_ONLY_SMOKE_HELPER_MARKER = b'RK_NON_ARM_TEST_ONLY_FAKE_SDK_HELPER_V1'

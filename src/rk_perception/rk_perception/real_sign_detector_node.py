@@ -3,6 +3,7 @@
 import base64
 import json
 import math
+import os
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -611,16 +612,23 @@ def _normalize_warning_symbol(image_bgr, size=DEFAULT_WARNING_TEMPLATE_SIZE):
     if yellow_contour is None or cv2.contourArea(yellow_contour) < 20.0:
         return None
 
+    # Tight support: use the yellow contour directly (no dilation)
+    # to keep the symbol region clean of background noise.
     support = np.zeros((height, width), dtype=np.uint8)
     cv2.drawContours(support, [yellow_contour], -1, 255, thickness=-1)
-    kernel_size = max(5, int(min(width, height) * 0.08))
+    # Minimal erosion to remove edge artefacts
+    kernel_size = max(3, int(min(width, height) * 0.02))
     if kernel_size % 2 == 0:
         kernel_size += 1
     kernel = np.ones((kernel_size, kernel_size), np.uint8)
-    support = cv2.dilate(support, kernel, iterations=1)
+    support = cv2.erode(support, kernel, iterations=1)
 
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    dark_mask = cv2.inRange(gray, 0, 105)
+    # Use adaptive thresholding for robust dark-symbol extraction
+    # across varying lighting and camera colour responses.
+    dark_mask = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 31, 5)
     dark_mask = cv2.bitwise_and(dark_mask, support)
 
     x, y, rect_w, rect_h = cv2.boundingRect(support)
@@ -651,24 +659,85 @@ def _normalize_warning_symbol(image_bgr, size=DEFAULT_WARNING_TEMPLATE_SIZE):
     return normalized
 
 
-def load_warning_templates(template_images=None):
+def load_warning_templates(template_images=None, resource_dir=None):
     templates = {}
-    raw_templates = template_images or DEFAULT_WARNING_TEMPLATE_IMAGES
-    for sign_value, encoded in raw_templates.items():
-        try:
-            image_bytes = base64.b64decode(encoded)
-        except (TypeError, ValueError):
-            continue
-        image_array = np.frombuffer(image_bytes, dtype=np.uint8)
-        image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
-        normalized = _normalize_warning_symbol(image)
-        if normalized is None:
-            continue
-        templates[normalize_label(sign_value)] = normalized
+
+    # 1. Try PNG files from resource directory (preferred — auditable).
+    search_dirs = []
+    if resource_dir and os.path.isdir(resource_dir):
+        search_dirs.append(resource_dir)
+    # Default resource dirs relative to this source file.
+    _this_dir = os.path.dirname(os.path.abspath(__file__))
+    for _candidate in (
+            os.path.join(_this_dir, '..', 'resources', 'warning_templates'),
+            os.path.join(_this_dir, '..', 'resource'),
+    ):
+        if os.path.isdir(_candidate):
+            search_dirs.append(_candidate)
+    # Also search the install-tree share directory.
+    for _prefix in os.environ.get('AMENT_PREFIX_PATH', '').split(':'):
+        _share = os.path.join(_prefix, 'share', 'rk_perception',
+                              'warning_templates')
+        if os.path.isdir(_share):
+            search_dirs.append(_share)
+    for d in search_dirs:
+        for fname in sorted(os.listdir(d)):
+            if not fname.lower().endswith(('.png', '.jpg', '.jpeg')):
+                continue
+            name = os.path.splitext(fname)[0]
+            sign_value = normalize_label(name)
+            # Only accept known warning sign names.
+            if sign_value not in (
+                    'electric_shock', 'strong_oxidizer', 'radiation'):
+                continue
+            fpath = os.path.join(d, fname)
+            image = cv2.imread(fpath, cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                continue
+            # Resize to standard template size.
+            expected = (DEFAULT_WARNING_TEMPLATE_SIZE,
+                        DEFAULT_WARNING_TEMPLATE_SIZE)
+            if image.shape[:2] != expected:
+                image = cv2.resize(
+                    image,
+                    (DEFAULT_WARNING_TEMPLATE_SIZE,
+                     DEFAULT_WARNING_TEMPLATE_SIZE),
+                    interpolation=cv2.INTER_AREA)
+            _, binary = cv2.threshold(
+                image, 60, 255, cv2.THRESH_BINARY)
+            templates[sign_value] = binary
+
+    # 2. Fall back to base64-encoded templates.
+    if not templates:
+        raw_templates = template_images or DEFAULT_WARNING_TEMPLATE_IMAGES
+        for sign_value, encoded in raw_templates.items():
+            try:
+                image_bytes = base64.b64decode(encoded)
+            except (TypeError, ValueError):
+                continue
+            image_array = np.frombuffer(image_bytes, dtype=np.uint8)
+            image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            normalized = _normalize_warning_symbol(image)
+            if normalized is None:
+                continue
+            templates[normalize_label(sign_value)] = normalized
     return templates
 
 
 def _template_score(candidate_mask, template_mask):
+    """Zero-mean normalised cross-correlation with ±15° rotation search."""
+    best = _ncc_score(candidate_mask, template_mask)
+    # Try small rotations for viewpoint tolerance
+    for angle in (-15, -10, -5, 5, 10, 15):
+        rotated = _rotate_mask(candidate_mask, angle)
+        if rotated is not None:
+            score = _ncc_score(rotated, template_mask)
+            if score > best:
+                best = score
+    return best
+
+
+def _ncc_score(candidate_mask, template_mask):
     candidate = candidate_mask.astype(np.float32).reshape(-1) / 255.0
     template = template_mask.astype(np.float32).reshape(-1) / 255.0
     candidate -= float(np.mean(candidate))
@@ -679,11 +748,25 @@ def _template_score(candidate_mask, template_mask):
     return float(np.dot(candidate, template) / denominator)
 
 
+def _rotate_mask(mask, angle_deg):
+    h, w = mask.shape[:2]
+    centre = (w / 2.0, h / 2.0)
+    matrix = cv2.getRotationMatrix2D(centre, angle_deg, 1.0)
+    rotated = cv2.warpAffine(
+        mask, matrix, (w, h),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    return rotated
+
+
 def detect_warning_template_signs(
     image_bgr,
     templates,
     min_area_fraction=DEFAULT_WARNING_TEMPLATE_MIN_AREA_FRACTION,
-    min_score=DEFAULT_WARNING_TEMPLATE_SCORE
+    min_score=DEFAULT_WARNING_TEMPLATE_SCORE,
+    min_margin=0.06,
 ):
     if image_bgr is None or image_bgr.size == 0 or not templates:
         return []
@@ -715,15 +798,24 @@ def detect_warning_template_signs(
         if symbol is None:
             continue
 
-        best_value = None
-        best_score = -1.0
+        # Collect all template scores, sorted descending.
+        scored = []
         for sign_value, template in templates.items():
             score = _template_score(symbol, template)
-            if score > best_score:
-                best_value = sign_value
-                best_score = score
+            scored.append((sign_value, score))
+        scored.sort(key=lambda item: -item[1])
 
-        if best_value is None or best_score < min_score:
+        if not scored:
+            continue
+
+        best_value, best_score = scored[0]
+        second_score = scored[1][1] if len(scored) > 1 else -1.0
+        margin = best_score - second_score
+
+        if best_score < min_score:
+            continue
+        if margin < min_margin:
+            # Scores too close — refuse to guess.
             continue
 
         confidence = clamp(
@@ -735,7 +827,7 @@ def detect_warning_template_signs(
             sign_type='warning',
             sign_value=best_value,
             confidence=float(confidence),
-            source=f'template:{best_score:.2f}',
+            source='template:%.2f margin:%.3f' % (best_score, margin),
             center_x=float(x + rect_w * 0.5),
             center_y=float(y + rect_h * 0.5),
             area_fraction=float(area_fraction),
@@ -789,6 +881,9 @@ class RealSignDetectorNode(Node):
             'template_min_score',
             DEFAULT_WARNING_TEMPLATE_SCORE
         )
+        self.template_min_margin = self._float_parameter(
+            'template_min_margin', 0.06
+        )
         self.template_min_area_fraction = self._float_parameter(
             'template_min_area_fraction',
             DEFAULT_WARNING_TEMPLATE_MIN_AREA_FRACTION
@@ -801,7 +896,10 @@ class RealSignDetectorNode(Node):
         self.qr_value_map = parse_qr_value_map(
             self._string_parameter('qr_value_map_json')
         )
-        self.warning_templates = load_warning_templates()
+        self.warning_templates = load_warning_templates(
+            resource_dir=str(
+                self.get_parameter('template_resource_dir').value).strip()
+            or None)
         self.qr_detector = cv2.QRCodeDetector() if self.enable_qr else None
         self.bridge = CvBridge()
 
@@ -856,6 +954,8 @@ class RealSignDetectorNode(Node):
             'template_min_area_fraction',
             DEFAULT_WARNING_TEMPLATE_MIN_AREA_FRACTION
         )
+        self.declare_parameter('template_min_margin', 0.06)
+        self.declare_parameter('template_resource_dir', '')
         self.declare_parameter('enable_color', True)
         self.declare_parameter('enable_debug_image', False)
         self.declare_parameter('debug_log', False)
@@ -888,7 +988,8 @@ class RealSignDetectorNode(Node):
                 image,
                 self.warning_templates,
                 self.template_min_area_fraction,
-                self.template_min_score
+                self.template_min_score,
+                self.template_min_margin,
             ))
         if self.enable_color:
             candidates.extend(detect_color_signs(image, self.color_rules))

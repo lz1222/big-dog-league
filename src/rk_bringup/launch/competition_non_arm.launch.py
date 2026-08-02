@@ -93,9 +93,13 @@ def generate_launch_description():
     start_realsense = LaunchConfiguration('start_realsense')
     start_sdk_server = LaunchConfiguration('start_sdk_server')
     start_udp_forwarder = LaunchConfiguration('start_udp_forwarder')
+    start_go2_front_camera = LaunchConfiguration('start_go2_front_camera')
     enable_debug_image = LaunchConfiguration('enable_debug_image')
     sdk_network_interface = LaunchConfiguration('sdk_network_interface')
-    image_topic = LaunchConfiguration('image_topic')
+    stream_helper = LaunchConfiguration('stream_helper')
+    line_image_topic = LaunchConfiguration('line_image_topic')
+    sign_image_topic = LaunchConfiguration('sign_image_topic')
+    go2_front_camera_frame_id = LaunchConfiguration('go2_front_camera_frame_id')
     sdk_server = LaunchConfiguration('sdk_server')
     sdk_udp_host = LaunchConfiguration('sdk_udp_host')
     sdk_udp_port = LaunchConfiguration('sdk_udp_port')
@@ -150,6 +154,9 @@ def generate_launch_description():
     use_hardware_udp_forwarder = IfCondition(_hardware_backend_expression(
         hardware_mode, software_smoke_mode, start_udp_forwarder
     ))
+    use_hardware_front_camera = IfCondition(_hardware_backend_expression(
+        hardware_mode, software_smoke_mode, start_go2_front_camera
+    ))
     use_real_perception = IfCondition(_not_smoke_expression(
         software_smoke_mode
     ))
@@ -193,11 +200,28 @@ def generate_launch_description():
             description='Unitree SDK interface in hardware mode.',
         ),
         DeclareLaunchArgument(
-            'image_topic', default_value=DEFAULT_IMAGE_TOPIC,
-            description=(
-                'Shared RGB topic for tracker and sign detector; e.g. '
-                '/camera/color/image_raw on an alternate RealSense graph.'
-            ),
+            'line_image_topic', default_value=DEFAULT_IMAGE_TOPIC,
+            description='D435i RGB topic for line tracker (ground-facing).',
+        ),
+        DeclareLaunchArgument(
+            'sign_image_topic', default_value='/go2/front_camera/image_raw',
+            description='Go2 onboard front camera topic for sign detector.',
+        ),
+        DeclareLaunchArgument(
+            'start_go2_front_camera', default_value='true',
+            description='Start go2_front_camera_bridge_node in hardware mode.',
+        ),
+        DeclareLaunchArgument(
+            'go2_front_camera_frame_id',
+            default_value='go2_front_camera_optical_frame',
+            description='frame_id for the Go2 front camera bridge output.',
+        ),
+        DeclareLaunchArgument(
+            'stream_helper',
+            default_value=[FindPackagePrefix('rk_go2_sdk_bridge'),
+                           '/lib/rk_go2_sdk_bridge/',
+                           'go2_front_camera_stream_helper'],
+            description='Absolute path to the Go2 front camera stream helper.',
         ),
         DeclareLaunchArgument(
             'sdk_server',
@@ -222,10 +246,13 @@ def generate_launch_description():
             description='Kept for camera compatibility; depth stays disabled.',
         ),
         DeclareLaunchArgument(
-            'fake_sdk_action_executable', default_value='',
+            'fake_sdk_action_executable',
+            default_value=[FindPackagePrefix('rk_go2_sdk_bridge'),
+                           '/lib/rk_go2_sdk_bridge/fake_sdk_motion_helper'],
             description=(
-                'Required only by SOFTWARE_SMOKE_MODE. Empty is '
-                'fail-closed; acceptance supplies a marked test-only ELF.'
+                'Fake SDK helper for SOFTWARE_SMOKE_MODE. Contains the '
+                'required identity marker so smoke acceptance can verify '
+                'the helper without touching real hardware or network.'
             ),
         ),
         DeclareLaunchArgument(
@@ -237,7 +264,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'smoke_cleanup_guard_path',
-            default_value='/tmp/rk_non_arm_competition_smoke_guard.json',
+            default_value='/tmp/rk_non_arm_competition/smoke_guard.json',
             description=(
                 'Smoke-only FrontJump cleanup journal, isolated from the '
                 'production guard and normally overridden per acceptance run.'
@@ -289,7 +316,7 @@ def generate_launch_description():
             output='log',
             condition=use_real_perception,
             parameters=[formal_config, {
-                'image_topic': image_topic,
+                'image_topic': line_image_topic,
                 'enable_debug_image': ParameterValue(
                     enable_debug_image, value_type=bool
                 ),
@@ -305,7 +332,8 @@ def generate_launch_description():
             output='log',
             condition=use_real_perception,
             parameters=[formal_config, {
-                'image_topic': image_topic,
+                'image_topic': sign_image_topic,
+                'frame_id': go2_front_camera_frame_id,
                 'enable_debug_image': ParameterValue(
                     enable_debug_image, value_type=bool
                 ),
@@ -426,6 +454,26 @@ def generate_launch_description():
                 'arbiter_rate_hz': 10.0,
             }],
         ),
+        # Go2 本体前向相机 → sensor_msgs/Image 桥接。
+        # 长期 stream helper 子进程通过管道写入 JPEG 帧，
+        # 桥接节点解码后发布为 ROS Image 消息。
+        Node(
+            package='rk_go2_sdk_bridge',
+            executable='go2_front_camera_bridge.py',
+            name='go2_front_camera_bridge_node',
+            output='log',
+            condition=use_hardware_front_camera,
+            parameters=[{
+                'network_interface': ParameterValue(
+                    sdk_network_interface, value_type=str
+                ),
+                'output_topic': sign_image_topic,
+                'frame_id': go2_front_camera_frame_id,
+                'stream_helper': ParameterValue(
+                    stream_helper, value_type=str
+                ),
+            }],
+        ),
         Node(
             package='rk_bringup',
             executable='competition_readiness_node',
@@ -438,7 +486,10 @@ def generate_launch_description():
                 'software_smoke_mode': ParameterValue(
                     software_smoke_mode, value_type=bool
                 ),
-                'image_topic': image_topic,
+                'line_image_topic': line_image_topic,
+                'sign_image_topic': sign_image_topic,
+                'sign_camera_frame_id': go2_front_camera_frame_id,
+                'image_topic': line_image_topic,
                 'sdk_server': PathJoinSubstitution([
                     FindPackagePrefix('rk_go2_sdk_bridge'),
                     'lib',
@@ -483,7 +534,8 @@ def generate_launch_description():
             output='log',
             condition=use_smoke_publisher,
             parameters=[{
-                'image_topic': image_topic,
+                'line_image_topic': line_image_topic,
+                'sign_image_topic': sign_image_topic,
                 'scenario': smoke_scenario,
                 'auto_start': ParameterValue(
                     smoke_auto_start, value_type=bool

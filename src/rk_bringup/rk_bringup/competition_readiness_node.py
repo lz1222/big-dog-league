@@ -27,9 +27,13 @@ from rk_interfaces.action import ExecuteMotion
 from rk_interfaces.msg import LineTrack
 
 from rk_bringup.non_arm_competition_contract import (
+    DEFAULT_LINE_IMAGE_TOPIC,
+    DEFAULT_SIGN_CAMERA_FRAME_ID,
+    DEFAULT_SIGN_IMAGE_TOPIC,
     FINAL_CMD_TOPIC,
     FORBIDDEN_FORMAL_NODE_MARKERS,
     MOTION_ACTION_NAME,
+    SIGN_CAMERA_BRIDGE_NODE,
     ReadinessCheck,
     is_zero_twist,
     json_object,
@@ -108,6 +112,12 @@ class CompetitionReadinessNode(Node):
         self.create_subscription(
             Twist, self.final_cmd_topic, self._on_final_cmd, 10
         )
+        self.create_subscription(
+            Image,
+            self.sign_image_topic,
+            self._on_sign_camera_image,
+            10,
+        )
 
         self.timer = self.create_timer(
             1.0 / self.status_publish_rate_hz,
@@ -118,9 +128,10 @@ class CompetitionReadinessNode(Node):
             if self.software_smoke_mode else 'HARDWARE_MODE'
         )
         self.get_logger().info(
-            'Competition readiness node ready: mode={}, image_topic={}, '
-            'action={}'.format(
-                mode_label, self.image_topic, self.motion_action_name
+            'Competition readiness node ready: mode={}, '
+            'line_topic={}, sign_topic={}, action={}'.format(
+                mode_label, self.line_image_topic,
+                self.sign_image_topic, self.motion_action_name
             )
         )
 
@@ -129,6 +140,9 @@ class CompetitionReadinessNode(Node):
         defaults = {
             'hardware_mode': True,
             'software_smoke_mode': False,
+            'line_image_topic': DEFAULT_LINE_IMAGE_TOPIC,
+            'sign_image_topic': DEFAULT_SIGN_IMAGE_TOPIC,
+            'sign_camera_frame_id': DEFAULT_SIGN_CAMERA_FRAME_ID,
             'image_topic': '/camera/color/image_raw',
             'final_cmd_topic': FINAL_CMD_TOPIC,
             'line_track_topic': '/perception/line_track',
@@ -167,6 +181,9 @@ class CompetitionReadinessNode(Node):
             'software_smoke_mode'
         )
         for name in (
+            'line_image_topic',
+            'sign_image_topic',
+            'sign_camera_frame_id',
             'image_topic',
             'final_cmd_topic',
             'line_track_topic',
@@ -253,6 +270,9 @@ class CompetitionReadinessNode(Node):
                 msg.angular.z,
             ),
         )
+
+    def _on_sign_camera_image(self, msg):
+        self._remember('sign_camera_image', str(msg.header.frame_id))
 
     def _fresh_value(self, name):
         record = self._last_messages.get(name)
@@ -516,16 +536,67 @@ class CompetitionReadinessNode(Node):
                 ),
             ),
         ))
+        # A. 巡线摄像头 (D435i)
         checks.append(ReadinessCheck(
-            'image_topic_has_publisher',
-            self._has_publisher(self.image_topic), self.image_topic,
+            'line_camera_publisher',
+            self._has_publisher(self.line_image_topic),
+            self.line_image_topic,
         ))
-        image_value, image_age = self._fresh_value('image')
+        line_image_value, line_image_age = self._fresh_value('image')
         checks.append(ReadinessCheck(
-            'image_topic_fresh',
-            image_value is not None,
-            'missing' if image_age is None else '{:.3f}s'.format(image_age),
+            'line_camera_fresh',
+            line_image_value is not None,
+            'missing' if line_image_age is None else '{:.3f}s'.format(line_image_age),
         ))
+
+        # B. 警示牌摄像头 (Go2 前向本体相机)
+        checks.append(ReadinessCheck(
+            'sign_camera_publisher',
+            self._has_publisher(self.sign_image_topic),
+            self.sign_image_topic,
+        ))
+        sign_image_value, sign_image_age = self._fresh_value('sign_camera_image')
+        checks.append(ReadinessCheck(
+            'sign_camera_fresh',
+            sign_image_value is not None,
+            'missing' if sign_image_age is None else '{:.3f}s'.format(sign_image_age),
+        ))
+
+        # B2. 桥接节点存在且 frame_id 正确
+        sign_bridge_nodes = [
+            name for name in self._node_names()
+            if name.endswith('/' + SIGN_CAMERA_BRIDGE_NODE)
+        ]
+        checks.append(ReadinessCheck(
+            'sign_camera_bridge_ready',
+            bool(sign_bridge_nodes),
+            'found' if sign_bridge_nodes else 'missing',
+        ))
+        sign_frame_ok = (
+            sign_image_value is not None
+            and str(sign_image_value) == str(self.sign_camera_frame_id)
+        )
+        checks.append(ReadinessCheck(
+            'sign_camera_frame_id',
+            sign_frame_ok,
+            'expected={} actual={}'.format(
+                self.sign_camera_frame_id,
+                sign_image_value if sign_image_value is not None else 'missing',
+            ),
+        ))
+
+        # 硬件模式下两个 Topic 必须不同
+        if self.hardware_mode:
+            topics_different = (
+                str(self.line_image_topic) != str(self.sign_image_topic)
+            )
+            checks.append(ReadinessCheck(
+                'line_sign_topics_different',
+                topics_different,
+                'line={} sign={}'.format(
+                    self.line_image_topic, self.sign_image_topic,
+                ),
+            ))
         line_value, line_age = self._fresh_value('line_track')
         checks.append(ReadinessCheck(
             'line_track_fresh',
