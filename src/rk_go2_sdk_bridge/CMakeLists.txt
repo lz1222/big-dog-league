@@ -106,6 +106,7 @@ install(PROGRAMS
   scripts/cmd_vel_udp_forwarder.py
   scripts/warning_sign_image_classifier.py
   scripts/go2_warning_sign_sdk_loop.sh
+  scripts/go2_front_camera_bridge.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -125,6 +126,10 @@ if(unitree_sdk2_FOUND)
     src/go2_sdk_capture_image.cpp
   )
   rk_configure_unitree_sdk_target(go2_sdk_capture_image)
+  add_executable(go2_front_camera_stream_helper
+    src/go2_front_camera_stream_helper.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_front_camera_stream_helper)
   add_executable(go2_sdk_speed_sweep src/go2_sdk_speed_sweep.cpp)
   rk_configure_unitree_sdk_target(go2_sdk_speed_sweep)
   add_executable(go2_sdk_motion_action
@@ -139,6 +144,9 @@ if(unitree_sdk2_FOUND)
     src/go2_sdk_sport_state_monitor.cpp
   )
   rk_configure_unitree_sdk_target(go2_sdk_sport_state_monitor)
+  add_executable(fake_sdk_motion_helper
+    src/fake_sdk_motion_helper.cpp
+  )
   install(TARGETS
     go2_sdk_udp_server
     go2_sdk_capture_image
@@ -146,6 +154,8 @@ if(unitree_sdk2_FOUND)
     go2_sdk_motion_action
     go2_sdk_velocity_action
     go2_sdk_sport_state_monitor
+    go2_front_camera_stream_helper
+    fake_sdk_motion_helper
     DESTINATION lib/${PROJECT_NAME}
   )
 else()
@@ -166,6 +176,13 @@ if(BUILD_TESTING)
   add_test(
     NAME test_udp_motion_core
     COMMAND test_udp_motion_core
+  )
+  add_test(
+    NAME test_front_camera_bridge
+    COMMAND python3 -m pytest
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_front_camera_bridge.py"
+      -v --tb=short
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   )
 endif()
 
