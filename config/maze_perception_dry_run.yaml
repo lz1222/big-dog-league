@@ -27,10 +27,11 @@ maze_perception_dry_run:
     side_angle_max: 120.0
 
     # 真机低矮挡板在正侧方无稳定回波，使用斜前点的 |y| 估算侧墙净距。
-    # x_min 不得小于 body_x_max，避免把机身或腿部回波投影成墙面。
+    # 第一弯录包中，x=0.45~0.60m的拐角边缘会产生0.14m假侧距；
+    # 整包矩阵确认从0.65m开始投影可消除假近障，且直道可见率为100%。
     side_projection_angle_min: 15.0
     side_projection_angle_max: 60.0
-    side_projection_x_min: 0.45
+    side_projection_x_min: 0.65
     side_projection_x_max: 1.50
     # 近似固定x的前挡板不具备侧墙纵向跨度，不能投影成左右近障。
     side_projection_min_x_span: 0.12

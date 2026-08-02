@@ -135,15 +135,33 @@ class SectorExtractorTest(unittest.TestCase):
         self.assertEqual(result['sources']['left'], 'none')
         self.assertEqual(result['sources']['right'], 'none')
 
+    def test_round12_corner_edge_before_projection_window_is_rejected(self):
+        """第一弯录包中x<0.65m的拐角边缘不得再产生假右侧距。"""
+        extractor = self._narrow_front_extractor()
+        result = extractor.extract([
+            (0.579, -0.173, -0.014),
+            (0.582, -0.174, -0.041),
+            (0.595, -0.175, -0.141),
+            (0.592, -0.177, -0.085),
+            (0.598, -0.179, -0.114),
+            (0.599, -0.183, -0.058),
+            (0.534, -0.188, -0.130),
+            (0.516, -0.189, -0.083),
+            (0.451, -0.197, -0.112),
+        ])
+
+        self.assertIsNone(result['distances']['right'])
+        self.assertEqual(result['sources']['right'], 'none')
+
     def test_short_wall_is_exposed_only_as_continuity_candidate(self):
         """纵向跨度不足的真实短墙不能直接输出，但可提供连续性证据。"""
         extractor = self._narrow_front_extractor()
         result = extractor.extract(
             [
-                (0.50, -0.21, 0.10),
-                (0.52, -0.22, 0.10),
-                (0.54, -0.23, 0.10),
-                (0.56, -0.22, 0.10),
+                (0.68, -0.21, 0.10),
+                (0.70, -0.22, 0.10),
+                (0.72, -0.23, 0.10),
+                (0.74, -0.22, 0.10),
             ]
         )
 
@@ -162,9 +180,9 @@ class SectorExtractorTest(unittest.TestCase):
                 (0.46, 0.13, 0.10),
                 (0.47, 0.14, 0.10),
                 (0.48, 0.15, 0.10),
-                (0.50, 0.24, 0.10),
-                (0.65, 0.25, 0.10),
-                (0.80, 0.26, 0.10),
+                (0.68, 0.24, 0.10),
+                (0.77, 0.25, 0.10),
+                (0.86, 0.26, 0.10),
             ]
         )
 
@@ -216,12 +234,12 @@ class SectorExtractorTest(unittest.TestCase):
             (1.20, 0.00, 0.10),
             (1.20, 0.10, 0.10),
             # 两侧墙距中线约0.24m，不得进入正负10度的front。
-            (0.50, 0.24, 0.10),
-            (0.60, 0.24, 0.10),
             (0.70, 0.24, 0.10),
-            (0.50, -0.24, 0.10),
-            (0.60, -0.24, 0.10),
+            (0.78, 0.24, 0.10),
+            (0.86, 0.24, 0.10),
             (0.70, -0.24, 0.10),
+            (0.78, -0.24, 0.10),
+            (0.86, -0.24, 0.10),
         ]
 
         result = extractor.extract(points)
@@ -251,7 +269,7 @@ class SectorExtractorTest(unittest.TestCase):
             side_angle_max_deg=120.0,
             side_projection_angle_min_deg=15.0,
             side_projection_angle_max_deg=60.0,
-            side_projection_x_min=0.45,
+            side_projection_x_min=0.65,
             side_projection_x_max=1.50,
             side_projection_min_x_span=0.12,
             side_projection_lateral_tolerance=0.04,
@@ -433,6 +451,35 @@ class SideDistanceStabilizerTest(unittest.TestCase):
 
         self.assertAlmostEqual(output['distances']['right'], 0.21)
         self.assertEqual(output['sources']['right'], 'continued_projected')
+
+    def test_round13_continuity_cannot_ratchet_cache_downward(self):
+        """连续短簇只能续接强确认墙，不能跨帧逐级制造假近障。"""
+        stabilizer = SideDistanceStabilizer(
+            hold_frames=8,
+            rise_tolerance_m=0.04,
+            continuity_tolerance_m=0.10,
+        )
+        stabilizer.update(
+            self._extraction(0.25, 0.24, 'direct', 'projected')
+        )
+
+        for candidate_distance in (0.23, 0.22, 0.21, 0.19):
+            output = stabilizer.update(
+                self._extraction(
+                    0.25,
+                    None,
+                    'direct',
+                    'none',
+                    right_continuity=(
+                        self._candidate(candidate_distance, 8, 0.03),
+                    ),
+                )
+            )
+            self.assertAlmostEqual(output['distances']['right'], 0.24)
+            self.assertEqual(
+                output['sources']['right'],
+                'continued_projected',
+            )
 
     def test_round8_calibrated_window_rejects_far_wall_burst(self):
         """Round 8标定窗口内的远墙回波不能扩大已确认近墙净空。"""

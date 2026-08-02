@@ -558,17 +558,13 @@ class SideDistanceStabilizer:
                 continuity_candidates.get(name, ()),
             )
             if continuity is not None:
-                # 短墙只能延续已确认侧墙，且不得据此增大安全净空。
-                # 每帧都有当前点云支持，因此不消耗盲保留帧数。
-                continued_distance = min(
-                    cached,
-                    continuity['distance'],
-                )
-                distances[name] = continued_distance
+                # 短簇只证明上一面强确认墙仍存在，不能作为新的距离锚点。
+                # 否则相邻帧中逐步靠近的前墙边缘会反复写回缓存，最终
+                # 把正常侧距“棘轮式”压低成假近障。真正更近的侧墙仍须
+                # 由 direct 或具有完整纵向跨度的 projected 量测确认。
+                distances[name] = cached
                 counts[name] = continuity['count']
                 sources[name] = 'continued_projected'
-                self._cached_distances[name] = continued_distance
-                self._cached_sources[name] = 'projected'
                 self._unconfirmed_frames[name] = 0
                 continue
 

@@ -84,6 +84,7 @@ REASON_LABELS = {
     'corridor_reacquire_timeout': '重新进入走廊超时',
     'reacquire_side_distance_missing': '新走廊侧墙距离缺失',
     'reacquire_side_clearance_unsafe': '新走廊侧向安全余量不足',
+    'reacquire_front_clearance_unsafe': '新走廊前方安全余量不足',
     'reverse_recovery_timeout': '恢复候选超时',
     'reverse_side_distance_missing': '恢复阶段侧向距离缺失',
     'reverse_side_clearance_unsafe': '恢复阶段侧向安全余量不足',
@@ -390,6 +391,8 @@ def format_dashboard(payload, view, stream_age_sec):
             f'{_format_bool(data.get("moving_turn_sweep_safe"))}  '
             '启动条件：'
             f'{_format_bool(data.get("turn_start_sweep_safe"))}  '
+            '开口滞回：'
+            f'{_format_latched(data.get("turn_open_latched"))}  '
             '原地转向：'
             f'{_in_place_label(data.get("in_place_rotation_fits_corridor"))}'
         ),
@@ -411,13 +414,17 @@ def format_dashboard(payload, view, stream_age_sec):
 
 def _fine_align_view(payload, state_label, reason_label):
     error = _finite_number(payload.get('turn_error_deg'))
+    tolerance = _finite_number(payload.get('turn_tolerance_deg'))
+    if tolerance is None or tolerance <= 0.0:
+        # 兼容没有该诊断字段的旧 B2 录包。
+        tolerance = 4.0
     if error is None:
         return _stop_view(
             state_label,
             '立即停止；转角误差不可用，等待 B2 进入故障保护。',
             reason_label,
         )
-    if abs(error) <= 4.0:
+    if abs(error) <= tolerance:
         return OperatorView(
             'warning',
             'HOLD_ALIGN',
@@ -484,6 +491,15 @@ def _format_bool(value):
         return '安全'
     if value is False:
         return '不足'
+    return '未知'
+
+
+def _format_latched(value):
+    """将开口滞回状态与普通安全布尔量区分显示。"""
+    if value is True:
+        return '已锁存'
+    if value is False:
+        return '未锁存'
     return '未知'
 
 

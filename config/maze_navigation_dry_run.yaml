@@ -28,8 +28,9 @@ maze_navigation_dry_run:
 
     # 每项状态转换所需连续 B1 帧数。
     sensor_confirm_frames: 3
-    # 单帧侧距缺失先输出零诊断速度，第2帧仍缺失才锁定故障。
-    side_missing_confirm_frames: 2
+    # 侧距缺失的第1帧就输出零诊断速度；真机第一弯最长缺测
+    # 13帧，因此第15帧才锁定故障，避免扫描相位缺测造成不可恢复误停。
+    side_missing_confirm_frames: 15
     # 单帧侧向余量不足也先停住，第2帧仍不足才锁止；0.185m门限不变。
     side_unsafe_confirm_frames: 2
     corner_confirm_frames: 3
@@ -65,18 +66,27 @@ maze_navigation_dry_run:
     # Round10在front约0.92m时左侧开口已污染近墙回波；提前到0.98m切换
     # 对侧墙参考，仍需持续帧确认后才正式进入CORNER_APPROACH。
     corner_approach_distance_m: 0.98
-    turn_start_distance_m: 0.62
+    # Round15 单次最短点动实测可达26.5cm；0.62m会让下一次点动直接越过
+    # 转向触发区。前距进入0.80m后仍须通过开口、矩形扫掠和3帧确认。
+    turn_start_distance_m: 0.80
     front_emergency_distance_m: 0.43
-    recovery_front_clear_m: 0.72
-    turn_open_distance_m: 0.50
+    # 故障恢复线必须高于转向启动线，防止刚退出近障又立即开始转弯。
+    recovery_front_clear_m: 0.85
+    # 矩形扫掠半径加3cm边界约0.413m；0.42m入口门限保留该边界。
+    # 6cm退出滞回只用于跨过低挡板扫描波动，其他净空仍每帧校验。
+    turn_open_distance_m: 0.42
+    turn_open_hysteresis_m: 0.06
     exit_front_clear_m: 1.00
     exit_side_open_m: 0.50
 
     # 连续 turn_rad 用于跨正负 pi 的 90 度闭环，不使用固定时间猜角。
     turn_angle_deg: 90.0
-    fine_align_enter_deg: 12.0
-    fine_align_exit_deg: 18.0
-    turn_tolerance_deg: 4.0
+    # 人工转弯录包峰值约超过90度10度，提前到剩20度时进入精调。
+    fine_align_enter_deg: 20.0
+    fine_align_exit_deg: 25.0
+    # 第一弯录包在新启动零点下预计最终误差约4.3度；
+    # 5度容差仍小于重捕获的7度上限，且需要3帧确认。
+    turn_tolerance_deg: 5.0
     reacquire_yaw_tolerance_deg: 7.0
 
     # 接近阶段包含尺量和日志核对，可长时间等待且不会发送运动命令。
@@ -105,7 +115,8 @@ maze_operator_monitor:
     navigation_status_topic: /maze/navigation/dry_run_status
     refresh_rate: 5.0
     status_stale_timeout_sec: 1.50
-    # 默认步态点动实测约8至18cm；按上界提示，避免低估前方余量消耗。
-    manual_step_distance_cm: 18.0
+    # Round15 的一次最短遥控点动实测约26.5cm；按27cm提示，避免操控员
+    # 依据早期18cm标定连续点动并越过转向触发区。
+    manual_step_distance_cm: 27.0
     use_color: true
     beep_on_action_change: true

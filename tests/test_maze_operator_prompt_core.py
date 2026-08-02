@@ -122,6 +122,7 @@ class MazeOperatorPromptCoreTest(unittest.TestCase):
     def test_fine_align_in_tolerance_holds_position(self):
         payload = self._payload('TURN_FINE_ALIGN')
         payload['turn_error_deg'] = 2.0
+        payload['turn_tolerance_deg'] = 5.0
         view = build_operator_view(payload, 0.1, 1.5)
         self.assertEqual(view.action_code, 'HOLD_ALIGN')
         self.assertIn('不要继续增加转角', view.instruction)
@@ -151,6 +152,7 @@ class MazeOperatorPromptCoreTest(unittest.TestCase):
         self.assertIn('Odom启动累计', dashboard)
         self.assertIn('含静止漂移', dashboard)
         self.assertIn('本次进度 0.0deg', dashboard)
+        self.assertIn('开口滞回：未锁存', dashboard)
 
     def test_dashboard_names_opposite_wall_center_reference(self):
         """拐角开口波动时面板应明确当前只参考右墙。"""
@@ -196,6 +198,7 @@ class MazeOperatorPromptCoreTest(unittest.TestCase):
             'center_reference': 'both_walls',
             'moving_turn_sweep_safe': True,
             'turn_start_sweep_safe': True,
+            'turn_open_latched': False,
             'active_turn_clearance_safe': True,
             'in_place_rotation_fits_corridor': False,
             'cloud_age_sec': 0.05,

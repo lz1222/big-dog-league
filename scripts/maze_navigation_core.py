@@ -103,6 +103,7 @@ class MazePolicyConfig:
     front_emergency_distance_m: float = 0.43
     recovery_front_clear_m: float = 0.72
     turn_open_distance_m: float = 0.50
+    turn_open_hysteresis_m: float = 0.06
     exit_front_clear_m: float = 1.00
     exit_side_open_m: float = 0.50
 
@@ -172,6 +173,9 @@ class MazeNavigationPolicy:
         self._turn_start_rad = None
         self._turn_target_rad = None
         self._turn_start_time = None
+        # 拐角低挡板会因扫描相位产生数厘米侧距波动；
+        # 只有先越过严格入口门限后才允许用退出门限继续确认。
+        self._turn_open_latched = False
         self._last_observation = None
         self._last_cloud_sequence = None
 
@@ -254,12 +258,19 @@ class MazeNavigationPolicy:
             expected_turn,
         )
         turn_start_sweep_safe = (
-            self.moving_turn_sweep_safe(expected_turn, distances)
+            self.turn_start_sweep_safe(expected_turn, distances)
             if expected_turn is not None
             else None
         )
         active_turn_clearance_safe = (
-            self.active_turn_clearance_safe(expected_turn, distances)
+            self.active_turn_clearance_safe(
+                expected_turn,
+                distances,
+                require_full_sweep=self.state in (
+                    STATE_TURN_LEFT,
+                    STATE_TURN_RIGHT,
+                ),
+            )
             if expected_turn is not None
             else None
         )
@@ -285,6 +296,7 @@ class MazeNavigationPolicy:
             'side_missing_streak': self._side_missing_streak,
             'side_unsafe_streak': self._side_unsafe_streak,
             'turn_start_streak': self._turn_start_streak,
+            'turn_open_latched': self._turn_open_latched,
             'cloud_sequence': (
                 observation.cloud_sequence
                 if observation is not None
@@ -297,6 +309,8 @@ class MazeNavigationPolicy:
             ),
             'turn_error_rad': turn_error,
             'turn_error_deg': self._degrees_or_none(turn_error),
+            'turn_tolerance_deg': self.config.turn_tolerance_deg,
+            'fine_align_enter_deg': self.config.fine_align_enter_deg,
             # 本次进度以进入 TURN 状态时的值为零点，不受此前长时间
             # 静止累计漂移的绝对数值影响，供闭环诊断和终端 D 显示。
             'turn_progress_rad': turn_progress,
@@ -334,6 +348,16 @@ class MazeNavigationPolicy:
             'moving_turn_sweep_safe': moving_sweep_safe,
             'turn_start_sweep_safe': turn_start_sweep_safe,
             'active_turn_clearance_safe': active_turn_clearance_safe,
+            'active_turn_required_side_clearance_m': (
+                self.active_turn_required_side_clearance_m(
+                    require_full_sweep=self.state in (
+                        STATE_TURN_LEFT,
+                        STATE_TURN_RIGHT,
+                    ),
+                )
+                if expected_turn is not None
+                else None
+            ),
             'reverse_rear_visibility_confirmed': False,
             'geometry': {
                 'robot_length_m': self.config.robot_length_m,
@@ -504,8 +528,87 @@ class MazeNavigationPolicy:
             and opposite >= self.side_collision_distance_m
         )
 
-    def active_turn_clearance_safe(self, direction, distances):
-        """转向锁存后检查即时净空，不再要求开口侧持续显示远墙。"""
+    def turn_start_sweep_safe(self, direction, distances):
+        """返回考虑已确认开口滞回后的转向启动包络状态。"""
+        if direction not in VALID_DIRECTIONS:
+            return False
+
+        side_name, diagonal_name, opposite_name = self._turn_sector_names(
+            direction
+        )
+        front = self._explicit_distance(distances.get('front'))
+        turn_side = self._explicit_distance(distances.get(side_name))
+        turn_diagonal = self._explicit_distance(
+            distances.get(diagonal_name)
+        )
+        opposite = self._explicit_distance(
+            distances.get(opposite_name)
+        )
+        if (
+            front is None
+            or turn_diagonal is None
+            or opposite is None
+        ):
+            return False
+
+        required_open = max(
+            self.sweep_radius_m
+            + self.config.footprint_safety_margin_m,
+            self.config.turn_open_distance_m,
+        )
+        if self._turn_open_latched:
+            # 滞回下限绝不得低于机身半宽加安全边界。
+            required_open = max(
+                self.side_collision_distance_m,
+                required_open
+                - self.config.turn_open_hysteresis_m,
+            )
+        turn_side_open = (
+            turn_side is None
+            or turn_side >= required_open
+        )
+        return (
+            front >= self.front_collision_distance_m
+            and turn_side_open
+            and turn_diagonal >= self.front_collision_distance_m
+            and opposite >= self.side_collision_distance_m
+        )
+
+    def _update_turn_open_latch(self, direction, distances):
+        """严格门限进入、滞回门限退出，其他包络量仍每帧检查。"""
+        if self.moving_turn_sweep_safe(direction, distances):
+            self._turn_open_latched = True
+            return True
+        if (
+            self._turn_open_latched
+            and self.turn_start_sweep_safe(direction, distances)
+        ):
+            return True
+        self._turn_open_latched = False
+        return False
+
+    def active_turn_required_side_clearance_m(
+        self,
+        require_full_sweep=False,
+    ):
+        """返回当前转向阶段要求的内侧最小距离。"""
+        if require_full_sweep:
+            # 粗转阶段机身长边会横扫内侧板，必须按整个矩形外接半径保护；
+            # 只使用半宽会在约45度时漏掉左/右侧机身碰撞。
+            return max(
+                self.side_collision_distance_m,
+                self.sweep_radius_m
+                + self.config.footprint_safety_margin_m,
+            )
+        return self.side_collision_distance_m
+
+    def active_turn_clearance_safe(
+        self,
+        direction,
+        distances,
+        require_full_sweep=False,
+    ):
+        """按粗转外接半径或精调半宽检查实时内侧净空。"""
         if direction not in VALID_DIRECTIONS:
             return False
 
@@ -528,11 +631,16 @@ class MazeNavigationPolicy:
         ):
             return False
 
-        # 严格扫掠开口已在启动前连续确认。转向中目标侧可能重新看到
-        # 身旁墙端，只要它仍高于机身半宽加安全余量就不能误判为封路。
+        required_turn_side = (
+            self.active_turn_required_side_clearance_m(
+                require_full_sweep=require_full_sweep,
+            )
+        )
+        # 启动前的开口确认不能替代动态检查。粗转时墙端重新进入内侧
+        # 扇区，必须保留整机扫掠半径；精调阶段才按机身半宽判断。
         turn_side_safe = (
             turn_side is None
-            or turn_side >= self.side_collision_distance_m
+            or turn_side >= required_turn_side
         )
         return (
             front >= self.front_collision_distance_m
@@ -680,7 +788,6 @@ class MazeNavigationPolicy:
             return self.snapshot(now)
 
         front = self._front_distance(distances)
-        sweep_safe = self.moving_turn_sweep_safe(direction, distances)
         if front <= self.config.front_emergency_distance_m:
             self._turn_start_streak = 0
             self._transition(
@@ -691,6 +798,10 @@ class MazeNavigationPolicy:
             return self._handle_reverse_recovery(observation, now)
 
         if front <= self.config.turn_start_distance_m:
+            sweep_safe = self._update_turn_open_latch(
+                direction,
+                distances,
+            )
             if sweep_safe:
                 # 开口必须连续稳定，不能由单帧远距离噪声锁存转向状态。
                 self._turn_start_streak += 1
@@ -712,6 +823,7 @@ class MazeNavigationPolicy:
             self.reason = 'waiting_for_turn_opening'
             self._set_command(0.0, 0.0)
         else:
+            self._turn_open_latched = False
             self._turn_start_streak = 0
             self.reason = 'approaching_turn_start'
             self._set_command(
@@ -738,6 +850,7 @@ class MazeNavigationPolicy:
             not self.active_turn_clearance_safe(
                 direction,
                 observation.distances,
+                require_full_sweep=True,
             ),
             'turn_sweep_unsafe',
             now,
@@ -786,6 +899,7 @@ class MazeNavigationPolicy:
             not self.active_turn_clearance_safe(
                 direction,
                 observation.distances,
+                require_full_sweep=False,
             ),
             'fine_align_sweep_unsafe',
             now,
@@ -860,6 +974,14 @@ class MazeNavigationPolicy:
             return self.snapshot(now)
 
         front = self._front_distance(observation.distances)
+        if front <= self.config.front_emergency_distance_m:
+            # 短直段允许在62cm内完成重捕获，但绝不允许
+            # 在紧急前距内继续输出向前诊断值。
+            self._enter_fault(
+                'reacquire_front_clearance_unsafe',
+                now,
+            )
+            return self.snapshot(now)
         center_error = self.corridor_center_error(
             observation.distances
         )
@@ -875,8 +997,7 @@ class MazeNavigationPolicy:
             )
         )
         if (
-            front >= self.config.turn_start_distance_m
-            and centered
+            centered
             and yaw_aligned
         ):
             self._reacquire_streak += 1
@@ -1000,6 +1121,7 @@ class MazeNavigationPolicy:
         self._turn_streak = 0
         self._reacquire_streak = 0
         self._recovery_streak = 0
+        self._turn_open_latched = False
         if not preserve_turn and state not in (
             STATE_TURN_LEFT,
             STATE_TURN_RIGHT,
@@ -1348,6 +1470,16 @@ class MazeNavigationPolicy:
             raise ValueError(
                 'recovery_front_clear_m must exceed '
                 'turn_start_distance_m'
+            )
+        if (
+            not self._is_finite(self.config.turn_open_hysteresis_m)
+            or self.config.turn_open_hysteresis_m < 0.0
+            or self.config.turn_open_hysteresis_m
+            >= self.config.turn_open_distance_m
+        ):
+            raise ValueError(
+                'turn_open_hysteresis_m must be finite, nonnegative, '
+                'and less than turn_open_distance_m'
             )
         if not (
             0.0 < self.config.turn_tolerance_deg
