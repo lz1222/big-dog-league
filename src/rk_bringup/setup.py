@@ -27,7 +27,7 @@ setup(
         ),
         (
             os.path.join('share', package_name, 'scripts'),
-            glob('scripts/*.sh')
+            glob('scripts/*.sh') + glob('scripts/*.py')
         ),
         (
             os.path.join('share', package_name, 'test_support'),

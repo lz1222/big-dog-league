@@ -113,6 +113,16 @@ fi
 # DDS 图，防止测试 publisher 与现场机器人进程互相可见。
 export ROS_DOMAIN_ID="${RK_ROS_DOMAIN_ID:-10}"
 
+# 添加 SDK helper/server 到 PATH，让 resolve_sdk_executable 的 which 查找生效。
+_RK_SDK_BIN_DIR="${WORKSPACE_DIR}/install/rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge"
+if [ -d "$_RK_SDK_BIN_DIR" ]; then
+    case ":$PATH:" in
+        *:"$_RK_SDK_BIN_DIR":*) ;;
+        *) export PATH="$_RK_SDK_BIN_DIR:$PATH" ;;
+    esac
+fi
+unset _RK_SDK_BIN_DIR
+
 remove_ld_path_entry "/usr/local/lib"
 remove_ld_path_entry "/home/unitree/cyclonedds_ws/install/cyclonedds/lib"
 

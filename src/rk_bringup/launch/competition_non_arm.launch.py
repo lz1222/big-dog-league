@@ -14,7 +14,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.substitutions import PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-from launch_ros.substitutions import FindPackageShare
+from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 
 from rk_bringup.non_arm_competition_contract import DEFAULT_IMAGE_TOPIC
 
@@ -68,11 +68,12 @@ def _selected_helper_expression(
     hardware_mode,
     software_smoke_mode,
     fake_helper,
+    production_value='go2_sdk_motion_action',
 ):
     """选择 helper：非硬件或 smoke 路径永远不用 Unitree SDK helper。
 
-    生产 helper 使用 basename 让 resolve_sdk_executable 通过 PATH 解析；
-    smoke fake helper 使用绝对路径。避免 PathJoinSubstitution 在
+    production_value 为硬件非 smoke 模式的回退值；对于 SDK helper 是 basename，
+    对于 cleanup guard 是生产 guard 路径字符串。避免 PathJoinSubstitution 在
     PythonExpression 内部未完全解析导致回退到参数默认值。
     """
     expression = [
@@ -80,7 +81,7 @@ def _selected_helper_expression(
         "('", hardware_mode, "'.strip().lower() in ('1','true','yes','on'))",
         " and not ",
         "('", software_smoke_mode, "'.strip().lower() in ('1','true','yes','on'))",
-        ") else 'go2_sdk_motion_action'",
+        ") else '", production_value, "'",
     ]
     return PythonExpression(expression)
 
@@ -127,6 +128,7 @@ def generate_launch_description():
         hardware_mode,
         software_smoke_mode,
         smoke_cleanup_guard_path,
+        production_value=cleanup_guard_path,
     )
     # smoke helper 不接触 SDK/网络/实体机器人，但高负载 VM 可能让独立的
     # estop 心跳调度抖动超过生产 0.20 秒。仅 smoke 将其观察窗限为 8 秒；
@@ -199,10 +201,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'sdk_server',
-            default_value=(
-                '/home/unitree/unitree_go2_sdk_test/build/'
-                'go2_sdk_udp_server'
-            ),
+            default_value=[FindPackagePrefix('rk_go2_sdk_bridge'),
+                           '/lib/rk_go2_sdk_bridge/go2_sdk_udp_server'],
             description='Production Go2 UDP server executable.',
         ),
         DeclareLaunchArgument(
@@ -409,6 +409,23 @@ def generate_launch_description():
                 'estop_service_name': '/safety/estop',
             }],
         ),
+        # 单一锁仲裁节点将 gait/inspection 的独立锁请求做 OR 聚合，
+        # 发布唯一权威的 /gait/control_lock，消除双发布者竞态。
+        Node(
+            package='rk_safety',
+            executable='gait_lock_arbiter_node',
+            name='gait_lock_arbiter_node',
+            output='log',
+            parameters=[{
+                'input_topics': [
+                    '/gait/control_lock_req/gait',
+                    '/gait/control_lock_req/inspection',
+                ],
+                'output_topic': '/gait/control_lock',
+                'source_timeout_sec': 2.0,
+                'arbiter_rate_hz': 10.0,
+            }],
+        ),
         Node(
             package='rk_bringup',
             executable='competition_readiness_node',
@@ -422,9 +439,18 @@ def generate_launch_description():
                     software_smoke_mode, value_type=bool
                 ),
                 'image_topic': image_topic,
-                'sdk_server': sdk_server,
+                'sdk_server': PathJoinSubstitution([
+                    FindPackagePrefix('rk_go2_sdk_bridge'),
+                    'lib',
+                    'rk_go2_sdk_bridge',
+                    'go2_sdk_udp_server',
+                ]),
                 'sdk_action_executable': ParameterValue(
-                    selected_sdk_helper, value_type=str
+                    [
+                        FindPackagePrefix('rk_go2_sdk_bridge'),
+                        '/lib/rk_go2_sdk_bridge/go2_sdk_motion_action',
+                    ],
+                    value_type=str,
                 ),
                 'cleanup_guard_path': ParameterValue(
                     selected_cleanup_guard, value_type=str
