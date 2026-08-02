@@ -1,0 +1,41 @@
+project: unitree_go2_maze
+current_stage: B2.1-A
+current_substage: first_turn_geometry_and_round15_replay
+current_status: IN_PROGRESS
+motion_allowed: false
+first_turn_execution_allowed: false
+full_maze_allowed: false
+next_required_gate: round15_replay_with_wall_end_geometry
+last_test_id: B2_1_A_ALL_UNIT_TESTS
+last_result: UNIT_TEST_PASS
+blocked_reasons:
+  - round15_bag_not_present_in_current_workspace
+  - rear_coverage_not_verified_on_hardware
+  - wall_end_round15_evidence_not_generated
+  - gait_and_motion_model_unverified
+verified_items:
+  - b0_sensor_interfaces_historical_single_pass
+  - b1_front_five_sectors_historical_single_pass
+  - b1_5_move_stop_watchdog_estop_historical_pass
+  - legacy_0413m_round15_guard_dry_run_pass
+  - b2_1_local_grid_unit_test_pass
+  - b2_1_rear_sector_fail_closed_unit_test_pass
+  - b2_1_finite_wall_and_endpoint_unit_test_pass
+  - b2_1_continuous_dynamic_footprint_unit_test_pass
+  - b2_1_six_level_candidate_ranking_unit_test_pass
+  - b2_1_round15_replay_algorithm_unit_test_pass
+  - b2_1_no_motion_publisher_static_check_pass
+unverified_items:
+  - b2_1_local_map_rate_on_foxy_arm64
+  - b2_1_ground_and_body_filter_on_hardware
+  - b2_1_rear_coverage_on_hardware
+  - b2_1_round15_new_geometry_replay
+  - b2_1_top5_candidates_on_round15
+  - b2_1_round15_first_unsafe_time_yaw_clearance_wall_part
+  - dynamic_footprint_margins
+  - motion_model
+  - watchdog_and_estop_status_topics
+last_update: '2026-08-02'
+git_sha: f69616e
+working_tree_dirty: true
+nonzero_motion_generated: false

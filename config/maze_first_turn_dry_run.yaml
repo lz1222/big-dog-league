@@ -1,0 +1,135 @@
+maze_first_turn_dry_run:
+  ros__parameters:
+    # B2.1 直接读取局部点云和 Odom，只发布第一左弯 JSON 诊断。
+    cloud_topic: /utlidar/cloud_base
+    odom_topic: /utlidar/robot_odom
+    status_topic: /maze/first_turn/dry_run_status
+    expected_cloud_frame: base_link
+    watchdog_status_topic: /maze/safety/watchdog_ok
+    estop_status_topic: /maze/safety/estop
+    evaluation_rate: 2.0
+    print_rate: 1.0
+
+    # base_link 周围约 3m x 3m 的瞬时二维占据图，不跨帧保留旧障碍。
+    x_min_m: -1.50
+    x_max_m: 1.50
+    y_min_m: -1.50
+    y_max_m: 1.50
+    resolution_m: 0.02
+    z_min_m: -0.15
+    z_max_m: 0.50
+    body_x_min_m: -0.40
+    body_x_max_m: 0.40
+    body_y_min_m: -0.18
+    body_y_max_m: 0.18
+    min_range_m: 0.05
+    coverage_bin_deg: 5.0
+    sector_min_coverage_points: 3
+    sector_min_coverage_bins: 2
+    wall_inlier_tolerance_m: 0.035
+    wall_cluster_gap_m: 0.10
+    wall_min_points: 6
+    wall_min_length_m: 0.12
+    wall_max_residual_m: 0.04
+    wall_max_segments: 16
+    wall_ransac_sample_limit: 8
+    wall_endpoint_uncertainty_m: 0.03
+
+    # 名义 70cm x 31cm 只是基础足迹；以下四向边界可按雷达到机身
+    # 实测位置独立修改。动态余量未完成真机标定前必须保持 false。
+    footprint_front_m: 0.35
+    footprint_rear_m: 0.35
+    footprint_left_m: 0.155
+    footprint_right_m: 0.155
+    gait_sway_margin_m: 0.03
+    cloud_uncertainty_margin_m: 0.015
+    odom_uncertainty_margin_m: 0.015
+    model_uncertainty_margin_m: 0.015
+    stop_tail_margin_m: 0.05
+    target_physical_clearance_m: 0.05
+    margins_calibrated: false
+
+    cloud_stale_timeout_sec: 0.50
+    odom_stale_timeout_sec: 0.20
+    sector_stale_timeout_sec: 0.50
+    safety_status_stale_timeout_sec: 0.30
+    trajectory_sample_dt_sec: 0.02
+    trajectory_max_translation_step_m: 0.01
+    trajectory_max_yaw_step_deg: 1.0
+    clearance_search_m: 0.20
+    hard_clearance_m: 0.01
+    robust_clearance_m: 0.02
+    legacy_turn_sweep_clearance_m: 0.413
+    minimum_wall_segments_for_turn: 1
+    wall_confidence_min: 0.45
+
+    # ROBUST_SAFE 要求下列运动模型边界扰动全部通过连续足迹检查。
+    trajectory_vx_uncertainty_ratio: 0.15
+    trajectory_vy_uncertainty_mps: 0.03
+    trajectory_wz_uncertainty_ratio: 0.15
+    trajectory_duration_uncertainty_sec: 0.05
+
+    # 本轮只识别入口后的第一左弯；完成后停在 TURN_COMPLETE、route=1/5。
+    approach_stop_distance_m: 0.80
+    left_open_distance_m: 0.42
+    turn_target_deg: 90.0
+    fine_align_enter_error_deg: 20.0
+    turn_complete_tolerance_deg: 5.0
+    reacquire_side_difference_m: 0.06
+    stable_confirm_frames: 3
+
+    max_roll_deg: 8.0
+    max_pitch_deg: 8.0
+    stationary_linear_speed_mps: 0.04
+    stationary_angular_speed_radps: 0.04
+    yaw_jump_limit_deg: 20.0
+    max_tracking_position_error_m: 0.06
+    max_tracking_yaw_error_deg: 8.0
+    stage_timeout_sec: 30.0
+    max_reverse_segments: 3
+    max_reverse_distance_m: 0.30
+
+    # 下列值只是离线几何假设，不是已验收运动模型。所有 calibrated 默认
+    # 为 false，因此即使轨迹几何安全也只能得到
+    # GEOMETRY_SAFE_UNCALIBRATED。
+    forward_short_vx_mps: 0.25
+    forward_short_vy_mps: 0.00
+    forward_short_wz_radps: 0.00
+    forward_short_duration_sec: 0.50
+    forward_short_calibrated: false
+    forward_short_calibration_id: UNVALIDATED
+
+    outside_diagonal_short_vx_mps: 0.18
+    outside_diagonal_short_vy_mps: -0.05
+    outside_diagonal_short_wz_radps: 0.00
+    outside_diagonal_short_duration_sec: 0.50
+    outside_diagonal_short_calibrated: false
+    outside_diagonal_short_calibration_id: UNVALIDATED
+
+    left_arc_vx_mps: 0.18
+    left_arc_vy_mps: 0.00
+    left_arc_wz_radps: 0.35
+    left_arc_duration_sec: 0.50
+    left_arc_calibrated: false
+    left_arc_calibration_id: UNVALIDATED
+
+    left_arc_outside_vy_vx_mps: 0.18
+    left_arc_outside_vy_vy_mps: -0.04
+    left_arc_outside_vy_wz_radps: 0.35
+    left_arc_outside_vy_duration_sec: 0.50
+    left_arc_outside_vy_calibrated: false
+    left_arc_outside_vy_calibration_id: UNVALIDATED
+
+    reverse_short_vx_mps: -0.18
+    reverse_short_vy_mps: 0.00
+    reverse_short_wz_radps: 0.00
+    reverse_short_duration_sec: 0.40
+    reverse_short_calibrated: false
+    reverse_short_calibration_id: UNVALIDATED
+
+    fine_left_arc_vx_mps: 0.12
+    fine_left_arc_vy_mps: 0.00
+    fine_left_arc_wz_radps: 0.20
+    fine_left_arc_duration_sec: 0.35
+    fine_left_arc_calibrated: false
+    fine_left_arc_calibration_id: UNVALIDATED
