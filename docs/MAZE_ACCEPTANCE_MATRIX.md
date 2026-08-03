@@ -16,11 +16,11 @@
 | B2.1-A | 局部占据图 | 每帧地图、过滤、约10Hz | 合成场景构图约30ms；真机频率未测 | UNIT_TEST_PASS | `tests/test_maze_first_turn_core.py` | 2026-08-02 | `16251ae` |
 | B2.1-A | 后向三扇区 | 距离/点数/年龄/覆盖 | 代码已实现，真机覆盖未测 | UNIT_TEST_PASS | `tests/test_maze_first_turn_core.py` | 2026-08-02 | `16251ae` |
 | B2.1-A | 后退失效保护 | 后方不足明确禁用 | 纯逻辑测试通过 | UNIT_TEST_PASS | `tests/test_maze_first_turn_core.py` | 2026-08-02 | `16251ae` |
-| B2.1-A | 墙线/墙端 | 有限段、端点、残差、置信度、原始点 | 确定性拟合与证据关联测试通过 | UNIT_TEST_PASS | `tests/test_maze_first_turn_core.py` | 2026-08-02 | `16251ae` |
+| B2.1-A | 墙线/墙端 | 有限段、端点、残差、置信度、原始点 | 完整墙段与只读短片段分层；短片段不能授权转弯 | UNIT_TEST_PASS | `tests/test_maze_first_turn_core.py` | 2026-08-02 | 工作区未提交 |
 | B2.1-A | 动态矩形连续扫掠 | 全轨迹、尾程、不确定性、危险部位 | 解析墙段、墙端和原始点测试通过 | UNIT_TEST_PASS | `tests/test_maze_first_turn_core.py` | 2026-08-02 | `16251ae` |
 | B2.1-A | 六级分级/前5排名 | 安全优先，不以速度抵消风险 | 六候选及排序纯逻辑测试通过 | UNIT_TEST_PASS | `tests/test_maze_first_turn_core.py` | 2026-08-02 | `16251ae` |
-| B2.1-A | Round15回放工具 | 历史地图+后续实际Odom连续检查 | 合成旧弧回放测试通过，真包未运行 | UNIT_TEST_PASS | `tests/test_maze_round15_replay_core.py` | 2026-08-02 | `16251ae` |
-| B2.1-A | Round15新几何重放 | 44deg接触前输出完整几何FAIL | 本机缺少bag | BLOCKED | 待生成 `B2_1_A_ROUND15_REPLAY` | 2026-08-02 | `16251ae` |
+| B2.1-A | Round15回放工具 | 历史地图+后续实际Odom连续检查 | 合成旧弧与短片段证据关联测试通过 | UNIT_TEST_PASS | `tests/test_maze_round15_replay_core.py` | 2026-08-02 | 工作区未提交 |
+| B2.1-A | Round15新几何重放 | 44deg接触前输出完整几何FAIL及对应墙段 | `left_side` 预测约23.980deg、领先7.278s；关联有限短片段，不能授权轨迹 | DRY_RUN_PASS | `/tmp/b2_1_a_round15_replay_summary.json` | 2026-08-02 | 工作区未提交 |
 | B2.1-A | 无运动输出 | 无速度或Unitree发布器 | 静态检查仅String发布器 | UNIT_TEST_PASS | `scripts/maze_first_turn_dry_run.py` | 2026-08-02 | `16251ae` |
 | B2.1-B | 步态冻结 | 模式和状态验证、运动模型VERIFIED | 未开始 | NOT_STARTED |  |  |  |
 | B2.1-C | 自动短段 | 直行/后退人工逐次5/5 | 未开始 | NOT_STARTED |  |  |  |

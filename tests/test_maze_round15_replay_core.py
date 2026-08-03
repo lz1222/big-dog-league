@@ -130,6 +130,50 @@ class Round15ReplayCoreTest(unittest.TestCase):
         )
         self.assertEqual(result['gate_status'], 'DRY_RUN_PASS')
 
+    def test_eligible_short_fragment_preserves_raw_left_hazard_evidence(self):
+        """短片段只补齐回放因果证据，不能被当作完整转弯墙模型。"""
+        fragment_points = (
+            (0.10, 0.30, 0.20),
+            (0.14, 0.30, 0.20),
+            (0.18, 0.30, 0.20),
+            (0.22, 0.30, 0.20),
+            (0.26, 0.30, 0.20),
+        )
+        grid = LocalMapBuilder(self.map_config).build(fragment_points)
+        self.assertEqual(grid.statistics['full_wall_segment_count'], 0)
+        self.assertEqual(grid.statistics['wall_fragment_count'], 1)
+        self.assertFalse(
+            grid.wall_segments[0]['reliable_for_turn_model']
+        )
+
+        odom = []
+        for degree in range(0, 51):
+            angle = math.radians(degree)
+            odom.append(ReplayOdomSample(
+                degree * 0.05,
+                0.50 * math.sin(angle),
+                0.50 * (1.0 - math.cos(angle)),
+                angle,
+            ))
+        result = analyze_round15_actual_trajectory(
+            (ReplayMapSnapshot(0.0, grid),),
+            odom,
+            self.footprint,
+            self.planner_config,
+            contact_progress_deg=44.0,
+        )
+        self.assertEqual(result['gate_status'], 'DRY_RUN_PASS')
+        self.assertIsNotNone(
+            result['first_round15_matching_raw_geometry_alert']
+        )
+        self.assertEqual(
+            result['dangerous_wall_evidence_kind'],
+            'wall_fragment',
+        )
+        self.assertFalse(
+            result['dangerous_wall_segment']['reliable_for_turn_model']
+        )
+
     def test_missing_map_remains_blocked(self):
         odom = (
             ReplayOdomSample(0.0, 0.0, 0.0, 0.0),

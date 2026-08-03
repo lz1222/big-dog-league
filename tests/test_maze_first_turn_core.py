@@ -93,6 +93,39 @@ class FirstTurnCoreTest(unittest.TestCase):
         self.assertEqual(grid.statistics['height_filtered_points'], 1)
         self.assertEqual(grid.statistics['body_filtered_points'], 1)
 
+    def test_front_leg_filter_is_local_and_preserves_front_obstacle(self):
+        """前腿过滤只能排除已标定角区，不能吞掉机头正前方近障。"""
+        builder = LocalMapBuilder(replace(
+            self.map_config,
+            front_leg_self_filter_enabled=True,
+            front_left_leg_x_min_m=0.15,
+            front_left_leg_x_max_m=0.45,
+            front_left_leg_y_min_m=0.18,
+            front_left_leg_y_max_m=0.28,
+            front_right_leg_x_min_m=0.15,
+            front_right_leg_x_max_m=0.45,
+            front_right_leg_y_min_m=-0.28,
+            front_right_leg_y_max_m=-0.18,
+        ))
+        grid = builder.build((
+            (0.35, 0.22, 0.20),   # 左前腿静止自回波。
+            (0.35, -0.25, 0.20),  # 右前腿静止自回波。
+            (0.43, 0.00, 0.20),   # 机头正前方障碍，必须保留。
+            (0.50, 0.35, 0.20),   # 侧方墙点，必须保留。
+        ))
+        self.assertEqual(grid.statistics['leg_self_filtered_points'], 2)
+        self.assertEqual(grid.statistics['occupied_cells'], 2)
+        self.assertTrue(any(
+            math.isclose(x, 0.43, abs_tol=1.0e-6)
+            and math.isclose(y, 0.01, abs_tol=1.0e-6)
+            for x, y in grid.obstacle_points
+        ))
+        self.assertTrue(any(
+            math.isclose(x, 0.51, abs_tol=1.0e-6)
+            and math.isclose(y, 0.35, abs_tol=1.0e-6)
+            for x, y in grid.obstacle_points
+        ))
+
     def test_rear_coverage_is_independent(self):
         points = self._ring_points(excluded={'rear'})
         grid = LocalMapBuilder(self.map_config).build(points)
@@ -318,6 +351,37 @@ class FirstTurnCoreTest(unittest.TestCase):
         grid = LocalMapBuilder(self.map_config).build(((1.20, 1.20, 0.20),))
         evaluation = planner.evaluate_candidate(
             planner.primitives[PRIMITIVE_LEFT_ARC],
+            grid,
+            self._safety(),
+        )
+        self.assertEqual(evaluation['verdict'], VERDICT_UNKNOWN)
+        self.assertIn('wall_model_insufficient', evaluation['unknown_reasons'])
+
+    def test_short_fragment_associates_evidence_but_cannot_authorize_turn(self):
+        """稀疏墙片段可审计原始点，但不能降低转弯墙模型准入门槛。"""
+        points = (
+            (1.20, 0.30, 0.20),
+            (1.20, 0.38, 0.20),
+            (1.20, 0.46, 0.20),
+            (1.20, 0.54, 0.20),
+        )
+        grid = LocalMapBuilder(self.map_config).build(points)
+        fragments = [
+            segment
+            for segment in grid.wall_segments
+            if segment.get('evidence_kind') == 'wall_fragment'
+        ]
+        self.assertEqual(len(fragments), 1)
+        fragment = fragments[0]
+        self.assertTrue(fragment['association_eligible'])
+        self.assertFalse(fragment['reliable_for_turn_model'])
+        self.assertEqual(
+            grid.nearest_wall_segment_id((1.21, 0.45)),
+            fragment['id'],
+        )
+
+        evaluation = self._planner().evaluate_candidate(
+            self._planner().primitives[PRIMITIVE_LEFT_ARC],
             grid,
             self._safety(),
         )

@@ -33,6 +33,12 @@ maze_round15_replay_analyzer:
     wall_max_segments: 16
     wall_ransac_sample_limit: 8
     wall_endpoint_uncertainty_m: 0.03
+    # 只读回放中保留稀疏短片段，以审计原始危险点的有限墙关联。
+    # 该片段不会被规划器计为可靠转弯墙模型。
+    wall_fragment_min_points: 3
+    wall_fragment_min_length_m: 0.06
+    wall_fragment_max_segments: 8
+    wall_fragment_association_confidence_min: 0.45
 
     footprint_front_m: 0.35
     footprint_rear_m: 0.35

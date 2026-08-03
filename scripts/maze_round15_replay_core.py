@@ -55,10 +55,12 @@ def analyze_round15_actual_trajectory(
         'map_snapshot_count': len(ordered_maps),
         'odom_sample_count': len(ordered_odom),
         'first_geometry_alert': None,
+        'first_round15_matching_raw_geometry_alert': None,
         'first_round15_matching_geometry_alert': None,
         'first_legacy_0413_alert': None,
         'minimum_predicted_clearance_m': None,
         'dangerous_wall_segment': None,
+        'dangerous_wall_evidence_kind': None,
         'dangerous_footprint_part': None,
         'global_minimum_danger': None,
         'dangerous_part_matches_round15': False,
@@ -112,6 +114,7 @@ def analyze_round15_actual_trajectory(
         max(expanded['left'], expanded['right']),
     )
     first_geometry = None
+    first_matching_raw_geometry = None
     first_matching_geometry = None
     first_legacy = None
     global_minimum = None
@@ -153,18 +156,29 @@ def analyze_round15_actual_trajectory(
                 start_index,
                 contact_time,
             )
-        if first_matching_geometry is None:
-            matching = _first_matching_part_evidence(sweep)
-            if matching is not None:
-                first_matching_geometry = _part_geometry_alert_record(
-                    snapshot,
-                    matching,
-                    ordered_odom,
-                    unwrapped_yaw,
-                    directed_progress,
-                    start_index,
-                    contact_time,
+        matching = _first_matching_part_evidence(sweep)
+        if matching is not None:
+            raw_record = _part_geometry_alert_record(
+                snapshot,
+                matching,
+                ordered_odom,
+                unwrapped_yaw,
+                directed_progress,
+                start_index,
+                contact_time,
+            )
+            if first_matching_raw_geometry is None:
+                # 原始点碰撞永远是首要安全事实，即使该帧暂未提取出有限墙段。
+                first_matching_raw_geometry = raw_record
+            if (
+                first_matching_geometry is None
+                and _wall_record_is_association_eligible(
+                    raw_record['wall_segment']
                 )
+            ):
+                # 回放门禁需要有限墙证据；短片段必须达到独立的关联置信度。
+                # 它仅用于可追溯性，不改变完整墙段的规划放行要求。
+                first_matching_geometry = raw_record
 
         left_distance = snapshot.grid.sector_stats.get(
             'left', {}
@@ -186,6 +200,9 @@ def analyze_round15_actual_trajectory(
             }
 
     base_result['first_geometry_alert'] = first_geometry
+    base_result['first_round15_matching_raw_geometry_alert'] = (
+        first_matching_raw_geometry
+    )
     base_result['first_round15_matching_geometry_alert'] = (
         first_matching_geometry
     )
@@ -224,6 +241,12 @@ def analyze_round15_actual_trajectory(
         'dangerous_wall_segment': (
             first_matching_geometry.get('wall_segment')
             if first_matching_geometry is not None
+            else None
+        ),
+        'dangerous_wall_evidence_kind': (
+            first_matching_geometry['wall_segment'].get('evidence_kind')
+            if first_matching_geometry is not None
+            and first_matching_geometry.get('wall_segment') is not None
             else None
         ),
         'dangerous_footprint_part': danger_part,
@@ -413,3 +436,10 @@ def _wall_segment_for_id(grid, segment_id):
         if segment['id'] == segment_id:
             return dict(segment)
     return None
+
+
+def _wall_record_is_association_eligible(wall_record):
+    """有限墙证据需明确合格，避免弱片段被误当作回放因果关联。"""
+    if wall_record is None:
+        return False
+    return bool(wall_record.get('association_eligible', True))

@@ -22,6 +22,17 @@ maze_first_turn_dry_run:
     body_x_max_m: 0.40
     body_y_min_m: -0.18
     body_y_max_m: 0.18
+    # 前腿局部自回波过滤默认关闭。它不是扩大后的整体机身矩形，始终保留
+    # x 轴正前方近障观测；仅完成静止真机验证后才可通过临时参数启用。
+    front_leg_self_filter_enabled: false
+    front_left_leg_x_min_m: 0.15
+    front_left_leg_x_max_m: 0.45
+    front_left_leg_y_min_m: 0.18
+    front_left_leg_y_max_m: 0.28
+    front_right_leg_x_min_m: 0.15
+    front_right_leg_x_max_m: 0.45
+    front_right_leg_y_min_m: -0.28
+    front_right_leg_y_max_m: -0.18
     min_range_m: 0.05
     coverage_bin_deg: 5.0
     sector_min_coverage_points: 3
@@ -34,6 +45,11 @@ maze_first_turn_dry_run:
     wall_max_segments: 16
     wall_ransac_sample_limit: 8
     wall_endpoint_uncertainty_m: 0.03
+    # 仅用于原始障碍点到有限墙证据的关联，绝不作为转弯模型或放行依据。
+    wall_fragment_min_points: 3
+    wall_fragment_min_length_m: 0.06
+    wall_fragment_max_segments: 8
+    wall_fragment_association_confidence_min: 0.45
 
     # 名义 70cm x 31cm 只是基础足迹；以下四向边界可按雷达到机身
     # 实测位置独立修改。动态余量未完成真机标定前必须保持 false。

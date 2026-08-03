@@ -79,6 +79,17 @@ class LocalMapConfig:
     body_x_max_m: float = 0.40
     body_y_min_m: float = -0.18
     body_y_max_m: float = 0.18
+    # 标准机身矩形之外的两块前腿回波区默认关闭。它们仅供 B2.1-A 静止
+    # 标定使用，不能通过扩大整个机身矩形来遮蔽机头正前方的真实障碍。
+    front_leg_self_filter_enabled: bool = False
+    front_left_leg_x_min_m: float = 0.15
+    front_left_leg_x_max_m: float = 0.45
+    front_left_leg_y_min_m: float = 0.18
+    front_left_leg_y_max_m: float = 0.28
+    front_right_leg_x_min_m: float = 0.15
+    front_right_leg_x_max_m: float = 0.45
+    front_right_leg_y_min_m: float = -0.28
+    front_right_leg_y_max_m: float = -0.18
     min_range_m: float = 0.05
     coverage_bin_deg: float = 5.0
     sector_min_coverage_points: int = 3
@@ -91,6 +102,12 @@ class LocalMapConfig:
     wall_max_segments: int = 16
     wall_ransac_sample_limit: int = 8
     wall_endpoint_uncertainty_m: float = 0.03
+    # 短墙片段只用于把原始障碍点关联到有限几何证据，不能作为转弯墙模型。
+    # 该层避免因暂时稀疏的点云而丢失事故复盘证据，同时不降低规划放行门槛。
+    wall_fragment_min_points: int = 3
+    wall_fragment_min_length_m: float = 0.06
+    wall_fragment_max_segments: int = 8
+    wall_fragment_association_confidence_min: float = 0.45
 
 
 @dataclass(frozen=True)
@@ -410,6 +427,7 @@ class LocalMapBuilder:
         map_points = 0
         height_points = 0
         body_filtered_points = 0
+        leg_self_filtered_points = 0
         sector_occupied = {name: 0 for name in SECTOR_NAMES}
         sector_distances = {name: [] for name in SECTOR_NAMES}
         sector_coverage_points = {name: 0 for name in SECTOR_NAMES}
@@ -428,8 +446,12 @@ class LocalMapBuilder:
                 continue
             if math.hypot(x, y) < self.config.min_range_m:
                 continue
-            if self._inside_body(x, y):
-                body_filtered_points += 1
+            filter_kind = self._self_filter_kind(x, y)
+            if filter_kind is not None:
+                if filter_kind == 'body':
+                    body_filtered_points += 1
+                else:
+                    leg_self_filtered_points += 1
                 continue
 
             # 覆盖统计在高度过滤前完成：地面回波可以证明该角度被雷达扫描，
@@ -479,9 +501,20 @@ class LocalMapBuilder:
             'occupied_cells': len(occupied_cells),
             'height_filtered_points': height_points,
             'body_filtered_points': body_filtered_points,
+            'leg_self_filtered_points': leg_self_filtered_points,
         }
         wall_segments = self._extract_wall_segments(occupied_cells)
         statistics['wall_segment_count'] = len(wall_segments)
+        statistics['full_wall_segment_count'] = sum(
+            1
+            for segment in wall_segments
+            if segment.get('evidence_kind') == 'full_wall'
+        )
+        statistics['wall_fragment_count'] = sum(
+            1
+            for segment in wall_segments
+            if segment.get('evidence_kind') == 'wall_fragment'
+        )
         grid = LocalOccupancyGrid(
             self.config,
             occupied_cells,
@@ -495,7 +528,7 @@ class LocalMapBuilder:
         return grid
 
     def _extract_wall_segments(self, occupied_cells):
-        """用确定性 RANSAC 提取有限墙段，保留端点和拟合置信度。"""
+        """提取完整墙段及只读证据短片段，二者具有不同安全职责。"""
         points = [
             (
                 self.config.x_min_m
@@ -507,22 +540,88 @@ class LocalMapBuilder:
         ]
         remaining = list(points)
         segments = []
+        full_segments = self._extract_segment_tier(
+            remaining,
+            minimum_points=self.config.wall_min_points,
+            minimum_length_m=self.config.wall_min_length_m,
+            maximum_segments=self.config.wall_max_segments,
+            identifier_prefix='wall',
+            evidence_kind='full_wall',
+            reliable_for_turn_model=True,
+            association_confidence_min=0.0,
+        )
+        segments.extend(full_segments)
+        remaining = self._remove_segment_inliers(remaining, full_segments)
+
+        # 完整墙段先消耗高置信点；剩余稀疏点只构成审计片段。片段仍参与
+        # 碰撞拒绝，但 planner 明确不会把它们计入可靠转弯墙模型。
+        fragments = self._extract_segment_tier(
+            remaining,
+            minimum_points=self.config.wall_fragment_min_points,
+            minimum_length_m=self.config.wall_fragment_min_length_m,
+            maximum_segments=self.config.wall_fragment_max_segments,
+            identifier_prefix='fragment',
+            evidence_kind='wall_fragment',
+            reliable_for_turn_model=False,
+            association_confidence_min=(
+                self.config.wall_fragment_association_confidence_min
+            ),
+        )
+        segments.extend(fragments)
+        return tuple(segments)
+
+    def _extract_segment_tier(
+        self,
+        points,
+        *,
+        minimum_points,
+        minimum_length_m,
+        maximum_segments,
+        identifier_prefix,
+        evidence_kind,
+        reliable_for_turn_model,
+        association_confidence_min,
+    ):
+        """按独立门槛提取一层墙证据，保证完整墙门槛不被短片段稀释。"""
+        remaining = list(points)
+        segments = []
         while (
-            len(remaining) >= self.config.wall_min_points
-            and len(segments) < self.config.wall_max_segments
+            len(remaining) >= minimum_points
+            and len(segments) < maximum_segments
         ):
-            cluster = self._best_wall_cluster(remaining)
+            cluster = self._best_wall_cluster(
+                remaining,
+                minimum_points=minimum_points,
+                minimum_length_m=minimum_length_m,
+            )
             if cluster is None:
                 break
-            fitted = self._fit_wall_segment(cluster)
+            fitted = self._fit_wall_segment(
+                cluster,
+                minimum_points=minimum_points,
+                minimum_length_m=minimum_length_m,
+            )
             if fitted is None:
                 break
-            fitted['id'] = f'wall_{len(segments):03d}'
+            fitted['id'] = f'{identifier_prefix}_{len(segments):03d}'
+            fitted['evidence_kind'] = evidence_kind
+            fitted['reliable_for_turn_model'] = bool(
+                reliable_for_turn_model
+            )
+            fitted['association_eligible'] = bool(
+                evidence_kind == 'full_wall'
+                or fitted['confidence'] >= association_confidence_min
+            )
             segments.append(fitted)
+            remaining = self._remove_segment_inliers(remaining, (fitted,))
+        return tuple(segments)
 
-            start = tuple(fitted['start_m'])
-            end = tuple(fitted['end_m'])
-            # 只移除该有限段附近的内点，交叉处另一方向的墙仍可继续拟合。
+    def _remove_segment_inliers(self, points, segments):
+        """移除已被本层有限段解释的内点，交叉墙仍可继续被提取。"""
+        remaining = list(points)
+        for segment in segments:
+            start = tuple(segment['start_m'])
+            end = tuple(segment['end_m'])
             remaining = [
                 point
                 for point in remaining
@@ -532,9 +631,9 @@ class LocalMapBuilder:
                     end,
                 ) > self.config.wall_inlier_tolerance_m
             ]
-        return tuple(segments)
+        return remaining
 
-    def _best_wall_cluster(self, points):
+    def _best_wall_cluster(self, points, *, minimum_points, minimum_length_m):
         sample = self._deterministic_sample(
             points,
             self.config.wall_ransac_sample_limit,
@@ -548,7 +647,7 @@ class LocalMapBuilder:
                 dx = second[0] - first[0]
                 dy = second[1] - first[1]
                 length = math.hypot(dx, dy)
-                if length < self.config.wall_min_length_m:
+                if length < minimum_length_m:
                     continue
                 direction = (dx / length, dy / length)
                 normal = (-direction[1], direction[0])
@@ -565,10 +664,10 @@ class LocalMapBuilder:
                         )
                         inliers.append((projection, point))
                 for cluster in self._split_projection_clusters(inliers):
-                    if len(cluster) < self.config.wall_min_points:
+                    if len(cluster) < minimum_points:
                         continue
                     span = cluster[-1][0] - cluster[0][0]
-                    if span < self.config.wall_min_length_m:
+                    if span < minimum_length_m:
                         continue
                     score = (len(cluster), span)
                     if best_score is None or score > best_score:
@@ -588,7 +687,7 @@ class LocalMapBuilder:
                 clusters[-1].append(item)
         return tuple(tuple(cluster) for cluster in clusters)
 
-    def _fit_wall_segment(self, points):
+    def _fit_wall_segment(self, points, *, minimum_points, minimum_length_m):
         count = len(points)
         center_x = sum(point[0] for point in points) / count
         center_y = sum(point[1] for point in points) / count
@@ -627,8 +726,8 @@ class LocalMapBuilder:
             sum(value * value for value in residuals) / count
         )
         if (
-            count < self.config.wall_min_points
-            or length < self.config.wall_min_length_m
+            count < minimum_points
+            or length < minimum_length_m
             or residual_rms > self.config.wall_max_residual_m
         ):
             return None
@@ -642,11 +741,11 @@ class LocalMapBuilder:
         )
         point_score = min(
             1.0,
-            count / max(1.0, 2.0 * self.config.wall_min_points),
+            count / max(1.0, 2.0 * minimum_points),
         )
         length_score = min(
             1.0,
-            length / max(1.0e-6, 2.0 * self.config.wall_min_length_m),
+            length / max(1.0e-6, 2.0 * minimum_length_m),
         )
         residual_score = max(
             0.0,
@@ -688,12 +787,30 @@ class LocalMapBuilder:
             and cfg.y_min_m <= y <= cfg.y_max_m
         )
 
-    def _inside_body(self, x, y):
+    def _self_filter_kind(self, x, y):
+        """返回自回波过滤来源，保留机头中心方向的真实近障观测。"""
         cfg = self.config
-        return (
+        if (
             cfg.body_x_min_m <= x <= cfg.body_x_max_m
             and cfg.body_y_min_m <= y <= cfg.body_y_max_m
+        ):
+            return 'body'
+        if not cfg.front_leg_self_filter_enabled:
+            return None
+
+        # Go2 左右前腿的静止回波位于机身前侧角落。这里使用两个局部矩形，
+        # 而不是把 body_x/body_y 整体放大，避免过滤 x 轴正前方的挡板。
+        inside_left_leg = (
+            cfg.front_left_leg_x_min_m <= x <= cfg.front_left_leg_x_max_m
+            and cfg.front_left_leg_y_min_m <= y <= cfg.front_left_leg_y_max_m
         )
+        inside_right_leg = (
+            cfg.front_right_leg_x_min_m <= x <= cfg.front_right_leg_x_max_m
+            and cfg.front_right_leg_y_min_m <= y <= cfg.front_right_leg_y_max_m
+        )
+        if inside_left_leg or inside_right_leg:
+            return 'front_leg'
+        return None
 
     def _cell_for_point(self, x, y):
         cfg = self.config
@@ -743,6 +860,14 @@ class LocalMapBuilder:
             cfg.body_x_max_m,
             cfg.body_y_min_m,
             cfg.body_y_max_m,
+            cfg.front_left_leg_x_min_m,
+            cfg.front_left_leg_x_max_m,
+            cfg.front_left_leg_y_min_m,
+            cfg.front_left_leg_y_max_m,
+            cfg.front_right_leg_x_min_m,
+            cfg.front_right_leg_x_max_m,
+            cfg.front_right_leg_y_min_m,
+            cfg.front_right_leg_y_max_m,
             cfg.min_range_m,
             cfg.coverage_bin_deg,
             cfg.wall_inlier_tolerance_m,
@@ -750,6 +875,8 @@ class LocalMapBuilder:
             cfg.wall_min_length_m,
             cfg.wall_max_residual_m,
             cfg.wall_endpoint_uncertainty_m,
+            cfg.wall_fragment_min_length_m,
+            cfg.wall_fragment_association_confidence_min,
         )
         if not all(math.isfinite(value) for value in finite_values):
             raise ValueError('local map parameters must be finite')
@@ -767,6 +894,30 @@ class LocalMapBuilder:
             raise ValueError(
                 'body_y_min_m must be less than body_y_max_m'
             )
+        for lower, upper, name in (
+            (
+                cfg.front_left_leg_x_min_m,
+                cfg.front_left_leg_x_max_m,
+                'front_left_leg_x',
+            ),
+            (
+                cfg.front_left_leg_y_min_m,
+                cfg.front_left_leg_y_max_m,
+                'front_left_leg_y',
+            ),
+            (
+                cfg.front_right_leg_x_min_m,
+                cfg.front_right_leg_x_max_m,
+                'front_right_leg_x',
+            ),
+            (
+                cfg.front_right_leg_y_min_m,
+                cfg.front_right_leg_y_max_m,
+                'front_right_leg_y',
+            ),
+        ):
+            if not lower < upper:
+                raise ValueError(f'{name} minimum must be less than maximum')
         if cfg.resolution_m <= 0.0:
             raise ValueError('resolution_m must be positive')
         if cfg.min_range_m < 0.0:
@@ -789,6 +940,18 @@ class LocalMapBuilder:
             raise ValueError('wall_max_residual_m must be positive')
         if cfg.wall_max_segments <= 0:
             raise ValueError('wall_max_segments must be positive')
+        if cfg.wall_fragment_min_points <= 1:
+            raise ValueError(
+                'wall_fragment_min_points must be greater than one'
+            )
+        if cfg.wall_fragment_min_length_m <= 0.0:
+            raise ValueError('wall_fragment_min_length_m must be positive')
+        if cfg.wall_fragment_max_segments <= 0:
+            raise ValueError('wall_fragment_max_segments must be positive')
+        if not 0.0 < cfg.wall_fragment_association_confidence_min <= 1.0:
+            raise ValueError(
+                'wall_fragment_association_confidence_min must be in (0, 1]'
+            )
         if cfg.wall_ransac_sample_limit < 2:
             raise ValueError('wall_ransac_sample_limit must be at least two')
         if cfg.wall_endpoint_uncertainty_m < 0.0:
@@ -1527,7 +1690,10 @@ class FirstTurnTrajectoryPlanner:
         reliable_walls = [
             segment
             for segment in grid.wall_segments
-            if segment['confidence'] >= self.config.wall_confidence_min
+            # 短片段只证明“障碍点属于有限墙证据”，不能补足转弯墙模型；
+            # 否则稀疏点云会错误降低 B2.1 的轨迹放行门槛。
+            if segment.get('reliable_for_turn_model', True)
+            and segment['confidence'] >= self.config.wall_confidence_min
         ]
         is_turning = primitive.name in (
             PRIMITIVE_LEFT_ARC,
