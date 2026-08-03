@@ -13,23 +13,30 @@ import numpy as np
 
 try:
     import rclpy
-    from cv_bridge import CvBridge, CvBridgeError
     from rclpy.executors import ExternalShutdownException
     from rclpy.node import Node
-    from rclpy.qos import qos_profile_sensor_data
+    from rclpy.qos import (
+        DurabilityPolicy,
+        HistoryPolicy,
+        QoSProfile,
+        ReliabilityPolicy,
+    )
     from sensor_msgs.msg import Image
+    from std_msgs.msg import String
 
     from rk_interfaces.msg import SignDetection, SignDetectionArray
 except ImportError:
     rclpy = None
-    CvBridge = None
-    CvBridgeError = Exception
     ExternalShutdownException = Exception
     Image = None
+    String = None
     Node = object
     SignDetection = None
     SignDetectionArray = None
-    qos_profile_sensor_data = 10
+    QoSProfile = None
+    HistoryPolicy = None
+    ReliabilityPolicy = None
+    DurabilityPolicy = None
 
 
 DEFAULT_QR_VALUE_MAP = {
@@ -95,6 +102,20 @@ DEFAULT_COLOR_RULES = [
 DEFAULT_WARNING_TEMPLATE_SIZE = 48
 DEFAULT_WARNING_TEMPLATE_SCORE = 0.34
 DEFAULT_WARNING_TEMPLATE_MIN_AREA_FRACTION = 0.010
+DEFAULT_QR_MAX_WIDTH = 960
+
+
+def image_transport_qos():
+    """返回与 camera bridge 完全一致的可靠单帧图像 QoS。"""
+    if QoSProfile is None:
+        return 1
+    return QoSProfile(
+        history=HistoryPolicy.KEEP_LAST,
+        depth=1,
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.VOLATILE,
+    )
+
 
 DEFAULT_WARNING_TEMPLATE_IMAGES = {
     'electric_shock': (
@@ -465,6 +486,73 @@ def _find_external_contours(mask):
     return contours
 
 
+def image_message_to_owned_bgr8(msg):
+    """将 ROS bgr8 图像复制为独立、连续的 OpenCV 输入。
+
+    DDS 接收缓冲区的生命周期只保证到 callback 返回。这里按 ``step`` 逐行
+    剥离可能的 padding，并强制复制，使后续 OpenCV 调用绝不持有 DDS 或
+    ROS 消息的底层内存。任何不满足固定 bgr8 协议的帧一律拒绝，避免把
+    错误的 stride/长度交给原生库造成越界访问。
+    """
+    if msg is None:
+        raise ValueError('image_message_missing')
+    if str(getattr(msg, 'encoding', '')).strip().lower() != 'bgr8':
+        raise ValueError('unsupported_encoding:{}'.format(
+            getattr(msg, 'encoding', '')))
+
+    try:
+        width = int(msg.width)
+        height = int(msg.height)
+        step = int(msg.step)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError('invalid_image_dimensions') from error
+    row_bytes = width * 3
+    if width <= 0 or height <= 0:
+        raise ValueError('non_positive_image_dimensions')
+    if step < row_bytes:
+        raise ValueError('step_smaller_than_bgr8_row')
+
+    try:
+        raw = np.frombuffer(msg.data, dtype=np.uint8)
+    except (TypeError, ValueError) as error:
+        raise ValueError('image_data_not_buffer_compatible') from error
+    required_bytes = height * step
+    if raw.size < required_bytes:
+        raise ValueError('image_data_truncated')
+
+    # 先按 ROS step 重塑，再只选择每行实际的 BGR 像素；不可直接假设
+    # step == width * 3，否则带行 padding 的合法 Image 会错行。
+    rows = raw[:required_bytes].reshape(height, step)
+    pixels = rows[:, :row_bytes].reshape(height, width, 3)
+    image = np.ascontiguousarray(pixels).copy()
+    if not image.flags.c_contiguous or not image.flags.owndata:
+        raise RuntimeError('owned_bgr8_copy_contract_failed')
+    return image
+
+
+def prepare_qr_image(image_bgr, max_width=DEFAULT_QR_MAX_WIDTH):
+    """为 QR 原生检测器提供有限尺寸的独立连续副本。
+
+    QRCodeDetector 在 1920×1080 图上曾处于 SIGBUS 可疑路径；限制其输入
+    宽度可压低原生算法的内存压力，同时不影响模板和颜色检测使用原始图。
+    """
+    if image_bgr is None or image_bgr.size == 0:
+        return None
+    try:
+        max_width = int(max_width)
+    except (TypeError, ValueError):
+        max_width = DEFAULT_QR_MAX_WIDTH
+    max_width = max(1, max_width)
+    height, width = image_bgr.shape[:2]
+    if width > max_width:
+        target_height = max(1, int(round(height * max_width / width)))
+        image_bgr = cv2.resize(
+            image_bgr, (max_width, target_height), interpolation=cv2.INTER_AREA
+        )
+    # 即使 resize 未触发，也隔离 QR 的输入，避免与其它 OpenCV 路径共用数组。
+    return np.ascontiguousarray(image_bgr).copy()
+
+
 def detect_color_signs(image_bgr, rules):
     if image_bgr is None or image_bgr.size == 0:
         return []
@@ -523,9 +611,22 @@ def detect_color_signs(image_bgr, rules):
     return candidates
 
 
-def detect_qr_signs(image_bgr, qr_detector, value_map):
+def detect_qr_signs(
+    image_bgr,
+    qr_detector,
+    value_map,
+    max_width=DEFAULT_QR_MAX_WIDTH,
+):
     if qr_detector is None:
         return []
+
+    original_height, original_width = image_bgr.shape[:2]
+    qr_image = prepare_qr_image(image_bgr, max_width)
+    if qr_image is None:
+        return []
+    qr_height, qr_width = qr_image.shape[:2]
+    scale_x = float(original_width) / max(1, qr_width)
+    scale_y = float(original_height) / max(1, qr_height)
 
     candidates = []
     decoded_items = []
@@ -533,13 +634,13 @@ def detect_qr_signs(image_bgr, qr_detector, value_map):
     try:
         if hasattr(qr_detector, 'detectAndDecodeMulti'):
             ok, decoded_info, points, _ = qr_detector.detectAndDecodeMulti(
-                image_bgr
+                qr_image
             )
             if ok:
                 decoded_items = list(decoded_info or [])
                 points_items = list(points) if points is not None else []
         if not decoded_items:
-            decoded, points, _ = qr_detector.detectAndDecode(image_bgr)
+            decoded, points, _ = qr_detector.detectAndDecode(qr_image)
             if decoded:
                 decoded_items = [decoded]
                 points_items = [points]
@@ -560,8 +661,8 @@ def detect_qr_signs(image_bgr, qr_detector, value_map):
                 2
             )
             if pts.size:
-                center_x = float(np.mean(pts[:, 0]))
-                center_y = float(np.mean(pts[:, 1]))
+                center_x = float(np.mean(pts[:, 0]) * scale_x)
+                center_y = float(np.mean(pts[:, 1]) * scale_y)
 
         candidates.append(SignCandidate(
             sign_type=normalize_label(mapped.get('sign_type', 'qr')),
@@ -838,8 +939,17 @@ def detect_warning_template_signs(
 
 
 def merge_candidates(candidates, min_confidence):
+    """合并最终检测；颜色只能辅助定位，不能独立确认 warning。
+
+    仅模板或 QR 的 warning 允许通过。这样日常红、蓝物体仍可供颜色规则
+    产生候选区域，却不会被误报告成电击或辐射警示牌。
+    """
     best_by_key: Dict[Tuple[str, str], SignCandidate] = {}
     for candidate in candidates:
+        if (candidate.sign_type == 'warning'
+                and candidate.source != 'qr'
+                and not candidate.source.startswith('template:')):
+            continue
         if not math.isfinite(candidate.confidence):
             continue
         if candidate.confidence < min_confidence:
@@ -888,7 +998,21 @@ class RealSignDetectorNode(Node):
             'template_min_area_fraction',
             DEFAULT_WARNING_TEMPLATE_MIN_AREA_FRACTION
         )
+        self.qr_max_width = int(max(1.0, self._float_parameter(
+            'qr_max_width', DEFAULT_QR_MAX_WIDTH
+        )))
         self._last_log_time = 0.0
+        # 这些计数只服务于可观测性与 readiness，绝不驱动重启或动作。
+        self.input_frame_count = 0
+        self.output_frame_count = 0
+        self.callback_failures = 0
+        self.invalid_image_count = 0
+        self.qr_failures = 0
+        self.template_failures = 0
+        self.last_input_time = None
+        self.last_output_time = None
+        self.last_processing_time_ms = 0.0
+        self.last_error = ''
 
         self.color_rules = parse_color_rules(
             self._string_parameter('color_rules_json')
@@ -901,12 +1025,15 @@ class RealSignDetectorNode(Node):
                 self.get_parameter('template_resource_dir').value).strip()
             or None)
         self.qr_detector = cv2.QRCodeDetector() if self.enable_qr else None
-        self.bridge = CvBridge()
 
         self.publisher = self.create_publisher(
             SignDetectionArray,
             self.sign_detections_topic,
             10
+        )
+        self.status_topic = self._string_parameter('status_topic')
+        self.status_publisher = self.create_publisher(
+            String, self.status_topic, 10
         )
         self.debug_publisher = None
         if self.enable_debug_image:
@@ -920,7 +1047,13 @@ class RealSignDetectorNode(Node):
             Image,
             self.image_topic,
             self._on_image,
-            qos_profile_sensor_data,
+            image_transport_qos(),
+        )
+        self.status_timer = self.create_timer(
+            1.0 / max(0.1, self._float_parameter(
+                'status_publish_rate_hz', 2.0
+            )),
+            self._publish_status,
         )
 
         self.get_logger().info(
@@ -945,6 +1078,7 @@ class RealSignDetectorNode(Node):
         self.declare_parameter('frame_id', 'd435i_color_optical_frame')
         self.declare_parameter('min_confidence', 0.55)
         self.declare_parameter('enable_qr', True)
+        self.declare_parameter('qr_max_width', DEFAULT_QR_MAX_WIDTH)
         self.declare_parameter('enable_warning_templates', True)
         self.declare_parameter(
             'template_min_score',
@@ -961,6 +1095,10 @@ class RealSignDetectorNode(Node):
         self.declare_parameter('debug_log', False)
         self.declare_parameter('log_period_sec', 1.0)
         self.declare_parameter(
+            'status_topic', '/perception/sign_detector_status'
+        )
+        self.declare_parameter('status_publish_rate_hz', 2.0)
+        self.declare_parameter(
             'color_rules_json',
             json.dumps(DEFAULT_COLOR_RULES, separators=(',', ':'))
         )
@@ -970,35 +1108,73 @@ class RealSignDetectorNode(Node):
         )
 
     def _on_image(self, msg):
+        started_at = time.monotonic()
+        self.input_frame_count += 1
+        self.last_input_time = started_at
         try:
-            image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        except CvBridgeError as error:
-            self.get_logger().error(f'cv_bridge failed: {error}')
+            image = image_message_to_owned_bgr8(msg)
+        except (TypeError, ValueError, RuntimeError) as error:
+            # 非法帧在进入 OpenCV 前 fail-closed，绝不复用旧检测结果。
+            self.invalid_image_count += 1
+            self.last_error = 'invalid_image:{}'.format(error)
+            self.get_logger().error(self.last_error)
             return
 
         candidates: List[SignCandidate] = []
         if self.enable_qr:
-            candidates.extend(detect_qr_signs(
-                image,
-                self.qr_detector,
-                self.qr_value_map
-            ))
+            try:
+                candidates.extend(detect_qr_signs(
+                    image,
+                    self.qr_detector,
+                    self.qr_value_map,
+                    self.qr_max_width,
+                ))
+            except Exception as error:
+                self.qr_failures += 1
+                self.last_error = 'qr_failure:{}'.format(error)
+                self.get_logger().error(self.last_error)
         if self.enable_warning_templates:
-            candidates.extend(detect_warning_template_signs(
-                image,
-                self.warning_templates,
-                self.template_min_area_fraction,
-                self.template_min_score,
-                self.template_min_margin,
-            ))
+            try:
+                candidates.extend(detect_warning_template_signs(
+                    image,
+                    self.warning_templates,
+                    self.template_min_area_fraction,
+                    self.template_min_score,
+                    self.template_min_margin,
+                ))
+            except Exception as error:
+                self.template_failures += 1
+                self.last_error = 'template_failure:{}'.format(error)
+                self.get_logger().error(self.last_error)
         if self.enable_color:
-            candidates.extend(detect_color_signs(image, self.color_rules))
+            try:
+                candidates.extend(detect_color_signs(image, self.color_rules))
+            except Exception as error:
+                self.callback_failures += 1
+                self.last_error = 'color_failure:{}'.format(error)
+                self.get_logger().error(self.last_error)
 
         detections = merge_candidates(candidates, self.min_confidence)
-        self._publish_detections(msg, detections)
+        try:
+            self._publish_detections(msg, detections)
+        except Exception as error:
+            self.callback_failures += 1
+            self.last_error = 'publish_failure:{}'.format(error)
+            self.get_logger().error(self.last_error)
+            return
+        self.output_frame_count += 1
+        self.last_output_time = time.monotonic()
+        self.last_processing_time_ms = (
+            self.last_output_time - started_at
+        ) * 1000.0
 
         if self.debug_publisher is not None:
-            self._publish_debug_image(msg, image, detections)
+            try:
+                self._publish_debug_image(msg, image, detections)
+            except Exception as error:
+                self.callback_failures += 1
+                self.last_error = 'debug_publish_failure:{}'.format(error)
+                self.get_logger().error(self.last_error)
         if self.debug_log:
             self._log_detections(detections)
 
@@ -1016,6 +1192,30 @@ class RealSignDetectorNode(Node):
             msg.detections.append(detection)
 
         self.publisher.publish(msg)
+
+    def _publish_status(self):
+        """发布 detector 心跳；输出陈旧由 readiness fail-closed 判定。"""
+        now = time.monotonic()
+        payload = {
+            'input_frame_count': self.input_frame_count,
+            'output_frame_count': self.output_frame_count,
+            'last_input_age': None if self.last_input_time is None else max(
+                0.0, now - self.last_input_time),
+            'last_output_age': None if self.last_output_time is None else max(
+                0.0, now - self.last_output_time),
+            'callback_failures': self.callback_failures,
+            'invalid_image_count': self.invalid_image_count,
+            'qr_failures': self.qr_failures,
+            'template_failures': self.template_failures,
+            'processing_time_ms': self.last_processing_time_ms,
+            'state': 'RUNNING' if self.last_input_time is not None else 'READY',
+            'last_error': self.last_error,
+        }
+        message = String()
+        message.data = json.dumps(
+            payload, ensure_ascii=True, separators=(',', ':'), allow_nan=False
+        )
+        self.status_publisher.publish(message)
 
     def _publish_debug_image(self, image_msg, image, detections):
         overlay = image.copy()
@@ -1045,7 +1245,15 @@ class RealSignDetectorNode(Node):
                 1,
                 cv2.LINE_AA
             )
-        debug_msg = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
+        # 手动封装调试图，避免 ROS 图像转换扩展与运行时 cv2 混入同一进程；
+        # debug 图像仅在显式打开时发布。
+        debug_msg = Image()
+        debug_msg.height = int(overlay.shape[0])
+        debug_msg.width = int(overlay.shape[1])
+        debug_msg.encoding = 'bgr8'
+        debug_msg.is_bigendian = 0
+        debug_msg.step = int(overlay.shape[1] * 3)
+        debug_msg.data = np.ascontiguousarray(overlay).tobytes()
         debug_msg.header = image_msg.header
         self.debug_publisher.publish(debug_msg)
 

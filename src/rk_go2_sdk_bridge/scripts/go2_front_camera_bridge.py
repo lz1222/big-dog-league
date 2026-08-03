@@ -27,6 +27,12 @@ import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
@@ -36,6 +42,20 @@ STREAM_HELPER_BASENAME = 'go2_front_camera_stream_helper'
 LENGTH_HEADER_FORMAT = '!I'
 LENGTH_HEADER_SIZE = struct.calcsize(LENGTH_HEADER_FORMAT)
 MAX_JPEG_BYTES = 8 * 1024 * 1024
+
+
+def image_transport_qos():
+    """返回前向相机图像的可靠、单帧 QoS。
+
+    大尺寸图像在真机上使用 BEST_EFFORT 时出现长时间断流。只保留最新帧可
+    限制积压，而 RELIABLE 确保 bridge 与 detector 对同一帧交付契约一致。
+    """
+    return QoSProfile(
+        history=HistoryPolicy.KEEP_LAST,
+        depth=1,
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.VOLATILE,
+    )
 
 
 def _validate_bgr_image(array):
@@ -71,6 +91,30 @@ def _build_image_msg(array, frame_id, stamp):
         'data length mismatch: %d != %d' % (
             len(msg.data), msg.height * msg.step))
     return msg
+
+
+def _resize_output_bgr(array, max_output_width):
+    """按宽度上限缩小相机图像，并保证输出为独立连续 BGR 内存。
+
+    helper 始终传输原始 JPEG；缩放只发生在成功解码之后、构造 DDS Image
+    之前，避免 1920×1080 原始 BGR 消息占用过大传输缓冲导致下游断流。
+    """
+    if not _validate_bgr_image(array):
+        raise ValueError('invalid_decoded_bgr_image')
+    max_output_width = max(1, int(max_output_width))
+    height, width = array.shape[:2]
+    if width > max_output_width:
+        target_height = max(1, int(round(
+            height * float(max_output_width) / float(width))))
+        array = cv2.resize(
+            array,
+            (max_output_width, target_height),
+            interpolation=cv2.INTER_AREA,
+        )
+    output = np.ascontiguousarray(array).copy()
+    if not _validate_bgr_image(output) or not output.flags.c_contiguous:
+        raise RuntimeError('output_bgr_resize_contract_failed')
+    return output
 
 
 def _resolve_helper(stream_helper_param):
@@ -191,14 +235,28 @@ class Go2FrontCameraBridgeNode(Node):
         self._last_frame_time = None
         self._last_width = 0
         self._last_height = 0
+        self._source_width = 0
+        self._source_height = 0
+        self._output_bytes = 0
         self._last_encoding = 'bgr8'
         self._fps = 0.0
         self._frame_times = []
         self._decode_failures = 0
         self._protocol_errors = 0
+        # 分段计数和时间戳用于只读定位图像断流边界：helper 读取、JPEG
+        # 解码和 ROS 发布分别记录，避免把下游订阅问题误判为相机取流失败。
+        self._helper_frame_read_count = 0
+        self._jpeg_decode_success_count = 0
+        self._image_publish_attempt_count = 0
+        self._image_publish_return_count = 0
+        self._image_publish_exception_count = 0
+        self._last_helper_frame_time = None
+        self._last_decode_time = None
+        self._last_publish_return_time = None
+        self._max_publish_duration_ms = 0.0
 
         self.image_publisher = self.create_publisher(
-            Image, self.output_topic, 10)
+            Image, self.output_topic, image_transport_qos())
         self.status_publisher = self.create_publisher(
             String, self.status_topic, 10)
 
@@ -225,6 +283,7 @@ class Go2FrontCameraBridgeNode(Node):
         self.declare_parameter('publish_status_topic',
                                '/go2/front_camera/status')
         self.declare_parameter('max_publish_rate_hz', 10.0)
+        self.declare_parameter('max_output_width', 960)
         self.declare_parameter('sdk_timeout_sec', 2.0)
         self.declare_parameter('retry_sleep_sec', 0.20)
         self.declare_parameter('max_consecutive_retries', 10)
@@ -238,15 +297,16 @@ class Go2FrontCameraBridgeNode(Node):
         self.frame_id = self._str_param('frame_id')
         self.status_topic = self._str_param('publish_status_topic')
         self.max_publish_rate_hz = self._pos_float('max_publish_rate_hz')
+        self.max_output_width = self._pos_int('max_output_width')
         self.sdk_timeout_sec = self._pos_float('sdk_timeout_sec')
-        self.retry_sleep_sec = self._pos_float('retry_sleep_sec',
-                                                positive=False)
+        self.retry_sleep_sec = self._pos_float(
+            'retry_sleep_sec', positive=False)
         self.max_consecutive_retries = self._pos_int('max_consecutive_retries')
         self.max_helper_restarts = self._pos_int('max_helper_restarts')
         stream_helper = self._str_param('stream_helper', empty_ok=True)
         self._resolved_stream_helper = _resolve_helper(stream_helper)
-        self._sdk_library_path = self._str_param('sdk_library_path',
-                                                  empty_ok=True)
+        self._sdk_library_path = self._str_param(
+            'sdk_library_path', empty_ok=True)
 
     # ---- helper lifecycle ----
 
@@ -437,6 +497,11 @@ class Go2FrontCameraBridgeNode(Node):
                     self._cleanup_active_process(process)
                     break
 
+                # 成功读到完整长度前缀和 JPEG 后立即记账；该点不包含限速、
+                # 解码或 ROS publish，可与后续阶段精确区分断流位置。
+                self._helper_frame_read_count += 1
+                self._last_helper_frame_time = time.monotonic()
+
                 if min_frame_interval > 0.0:
                     time.sleep(min_frame_interval)
 
@@ -457,12 +522,24 @@ class Go2FrontCameraBridgeNode(Node):
             self._last_error = 'jpeg_decode_failed_or_invalid'
             return
 
+        self._source_height, self._source_width = array.shape[:2]
+        try:
+            array = _resize_output_bgr(array, self.max_output_width)
+        except (TypeError, ValueError, RuntimeError, cv2.error) as error:
+            self._decode_failures += 1
+            self._consecutive_failures += 1
+            self._last_error = 'output_resize_failed:%s' % type(error).__name__
+            return
+
         self._consecutive_failures = 0
         self._last_error = ''
         now = time.monotonic()
+        self._jpeg_decode_success_count += 1
+        self._last_decode_time = now
         self._frame_count += 1
         self._last_width = array.shape[1]
         self._last_height = array.shape[0]
+        self._output_bytes = int(array.nbytes)
         self._last_encoding = 'bgr8'
         self._last_frame_time = now
 
@@ -476,11 +553,25 @@ class Go2FrontCameraBridgeNode(Node):
                 if span > 0.0 else 0.0
             )
 
+        publish_started = None
         try:
             stamp = self.get_clock().now().to_msg()
             msg = _build_image_msg(array, self.frame_id, stamp)
+            self._image_publish_attempt_count += 1
+            publish_started = time.monotonic()
             self.image_publisher.publish(msg)
+            publish_duration_ms = (time.monotonic() - publish_started) * 1000.0
+            self._max_publish_duration_ms = max(
+                self._max_publish_duration_ms, publish_duration_ms)
+            self._image_publish_return_count += 1
+            self._last_publish_return_time = time.monotonic()
         except Exception as exc:
+            if publish_started is not None:
+                publish_duration_ms = (
+                    time.monotonic() - publish_started) * 1000.0
+                self._max_publish_duration_ms = max(
+                    self._max_publish_duration_ms, publish_duration_ms)
+            self._image_publish_exception_count += 1
             self._consecutive_failures += 1
             self._last_error = 'publish: %s' % type(exc).__name__
 
@@ -494,11 +585,11 @@ class Go2FrontCameraBridgeNode(Node):
 
     def _publish_status(self):
         now_ts = time.monotonic()
-        age = (
-            now_ts - self._last_frame_time
-            if self._last_frame_time is not None
-            else -1.0
-        )
+
+        def _age(timestamp):
+            return now_ts - timestamp if timestamp is not None else -1.0
+
+        age = _age(self._last_frame_time)
         helper_running = False
         helper_pid = None
         with self._process_lock:
@@ -520,8 +611,25 @@ class Go2FrontCameraBridgeNode(Node):
             'frame_count': self._frame_count,
             'fps': round(self._fps, 2),
             'last_frame_age': round(age, 3),
+            'helper_frame_read_count': self._helper_frame_read_count,
+            'jpeg_decode_success_count': self._jpeg_decode_success_count,
+            'image_publish_attempt_count': self._image_publish_attempt_count,
+            'image_publish_return_count': self._image_publish_return_count,
+            'image_publish_exception_count': self._image_publish_exception_count,
+            'last_helper_frame_age': round(
+                _age(self._last_helper_frame_time), 3),
+            'last_decode_age': round(_age(self._last_decode_time), 3),
+            'last_publish_return_age': round(
+                _age(self._last_publish_return_time), 3),
+            'max_publish_duration_ms': round(
+                self._max_publish_duration_ms, 3),
             'width': self._last_width,
             'height': self._last_height,
+            'source_width': self._source_width,
+            'source_height': self._source_height,
+            'output_width': self._last_width,
+            'output_height': self._last_height,
+            'output_bytes': self._output_bytes,
             'encoding': self._last_encoding,
             'consecutive_failures': self._consecutive_failures,
             'decode_failures': self._decode_failures,
