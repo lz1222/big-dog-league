@@ -20,6 +20,9 @@ setup(
          glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'warning_templates'),
          glob('resources/warning_templates/*.png')),
+        # 抓取平台模板随包安装，现场校准时可通过参数替换为审计过的资源。
+        (os.path.join('share', package_name, 'place_marker_templates'),
+         glob('resources/place_marker_templates/*.png')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

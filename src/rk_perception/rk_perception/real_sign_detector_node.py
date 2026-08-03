@@ -5,8 +5,9 @@ import json
 import math
 import os
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -116,6 +117,19 @@ def image_transport_qos():
         durability=DurabilityPolicy.VOLATILE,
     )
 
+
+# 抓取平台标志使用红色外环定位，内部黑白编号模板才决定平台编号。
+# 该两级判定避免把普通红色物体或警示牌直接映射为放置平台。
+DEFAULT_PLACE_MARKER_TEMPLATE_SIZE = 128
+DEFAULT_PLACE_MARKER_MIN_AREA_FRACTION = 0.007
+DEFAULT_PLACE_MARKER_MAX_AREA_FRACTION = 0.45
+DEFAULT_PLACE_MARKER_MIN_CIRCULARITY = 0.70
+DEFAULT_PLACE_MARKER_MIN_SCORE = 0.62
+DEFAULT_PLACE_MARKER_MIN_MARGIN = 0.12
+DEFAULT_PLACE_MARKER_ROTATION_ANGLES = (-15, -10, -5, 0, 5, 10, 15)
+DEFAULT_PLACE_MARKER_CONFIRM_WINDOW = 7
+DEFAULT_PLACE_MARKER_CONFIRM_FRAMES = 5
+DEFAULT_PLACE_MARKER_MIN_CONFIDENCE = 0.75
 
 DEFAULT_WARNING_TEMPLATE_IMAGES = {
     'electric_shock': (
@@ -421,6 +435,35 @@ class ColorRule:
     hsv_ranges: Tuple[Tuple[int, int, int, int, int, int], ...]
     min_area_fraction: float
     min_confidence: float
+
+
+@dataclass(frozen=True)
+class PlaceMarkerFrameResult:
+    """单帧平台标志评分，unknown 表示拒绝做平台选择。"""
+
+    candidate: Optional[SignCandidate]
+    place_1_score: float = 0.0
+    place_2_score: float = 0.0
+
+
+class PlaceMarkerConfirmation:
+    """平台标志多帧确认器，只在稳定且无冲突时给出最终类别。"""
+
+    def __init__(self, window_size, confirm_frames, min_confidence):
+        self.window_size = max(1, int(window_size))
+        self.confirm_frames = max(1, int(confirm_frames))
+        self.min_confidence = float(min_confidence)
+        self.history = deque(maxlen=self.window_size)
+
+    def update(self, frame_result):
+        """记录一帧结果并返回状态；未确认时严格保持 unknown。"""
+        self.history.append(frame_result)
+        return confirm_place_marker_history(
+            self.history,
+            self.window_size,
+            self.confirm_frames,
+            self.min_confidence,
+        )
 
 
 def parse_color_rules(raw_json):
@@ -862,6 +905,240 @@ def _rotate_mask(mask, angle_deg):
     return rotated
 
 
+def _red_place_marker_mask(image_bgr):
+    """提取红色外环；红色仅用于缩小后续黑白模板的搜索范围。"""
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    lower_a = np.array([0, 95, 65], dtype=np.uint8)
+    upper_a = np.array([12, 255, 255], dtype=np.uint8)
+    lower_b = np.array([168, 95, 65], dtype=np.uint8)
+    upper_b = np.array([180, 255, 255], dtype=np.uint8)
+    mask = cv2.bitwise_or(
+        cv2.inRange(hsv, lower_a, upper_a),
+        cv2.inRange(hsv, lower_b, upper_b),
+    )
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    return mask
+
+
+def _contour_circularity(contour):
+    perimeter = float(cv2.arcLength(contour, True))
+    if perimeter <= 1e-6:
+        return 0.0
+    return float(4.0 * math.pi * cv2.contourArea(contour) / (perimeter ** 2))
+
+
+def normalize_place_marker_roi(image_bgr, contour, size=DEFAULT_PLACE_MARKER_TEMPLATE_SIZE):
+    """裁剪红环内区并提取黑色图案，统一为固定大小的二值模板输入。"""
+    if image_bgr is None or image_bgr.size == 0 or contour is None:
+        return None
+
+    height, width = image_bgr.shape[:2]
+    (center_x, center_y), radius = cv2.minEnclosingCircle(contour)
+    radius = int(round(radius))
+    if radius < 8:
+        return None
+    x0 = max(0, int(round(center_x)) - radius)
+    y0 = max(0, int(round(center_y)) - radius)
+    x1 = min(width, int(round(center_x)) + radius)
+    y1 = min(height, int(round(center_y)) + radius)
+    if x1 - x0 < 16 or y1 - y0 < 16:
+        return None
+
+    roi = image_bgr[y0:y1, x0:x1]
+    roi_height, roi_width = roi.shape[:2]
+    # 只保留红环内侧，排除红色边缘和环外深色背景，避免形状泄漏到分类器。
+    support = np.zeros((roi_height, roi_width), dtype=np.uint8)
+    cv2.circle(
+        support,
+        (roi_width // 2, roi_height // 2),
+        max(1, int(min(roi_width, roi_height) * 0.34)),
+        255,
+        thickness=-1,
+    )
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    _, dark_mask = cv2.threshold(gray, 105, 255, cv2.THRESH_BINARY_INV)
+    dark_mask = cv2.bitwise_and(dark_mask, support)
+    foreground_fraction = float(cv2.countNonZero(dark_mask)) / max(
+        1.0, float(cv2.countNonZero(support)))
+    # 实体标志的旋涡图案在内圆中占比较高（现场标定约 0.65）；上限仍拒绝
+    # 几乎填满的黑色圆，避免放宽后把纯色物体当作有效编号图案。
+    if foreground_fraction < 0.012 or foreground_fraction > 0.75:
+        return None
+    normalized = cv2.resize(
+        dark_mask,
+        (int(size), int(size)),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    _, normalized = cv2.threshold(normalized, 60, 255, cv2.THRESH_BINARY)
+    return normalized
+
+
+def load_place_marker_templates(resource_dir=None, size=DEFAULT_PLACE_MARKER_TEMPLATE_SIZE):
+    """从可审计资源目录加载 place_1/place_2 的内部图案模板。"""
+    templates = {}
+    search_dirs = []
+    if resource_dir and os.path.isdir(resource_dir):
+        search_dirs.append(resource_dir)
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    bundled_dir = os.path.join(
+        this_dir, '..', 'resources', 'place_marker_templates')
+    if os.path.isdir(bundled_dir):
+        search_dirs.append(bundled_dir)
+    for prefix in os.environ.get('AMENT_PREFIX_PATH', '').split(':'):
+        share_dir = os.path.join(
+            prefix, 'share', 'rk_perception', 'place_marker_templates')
+        if os.path.isdir(share_dir):
+            search_dirs.append(share_dir)
+
+    for directory in search_dirs:
+        for filename in sorted(os.listdir(directory)):
+            if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                continue
+            sign_value = normalize_label(os.path.splitext(filename)[0])
+            if sign_value not in ('place_1', 'place_2'):
+                continue
+            image = cv2.imread(
+                os.path.join(directory, filename), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                continue
+            image = cv2.resize(
+                image, (int(size), int(size)), interpolation=cv2.INTER_NEAREST)
+            _, image = cv2.threshold(image, 60, 255, cv2.THRESH_BINARY)
+            templates[sign_value] = image
+    return templates
+
+
+def score_place_marker_templates(candidate_mask, templates, rotation_angles=None):
+    """按指定小角度搜索评分；刻意不支持 180/360 度旋转不变匹配。"""
+    if candidate_mask is None or not templates:
+        return {}
+    angles = rotation_angles or DEFAULT_PLACE_MARKER_ROTATION_ANGLES
+    scores = {}
+    for sign_value, template in templates.items():
+        best_score = -1.0
+        for angle in angles:
+            rotated = candidate_mask
+            if float(angle) != 0.0:
+                rotated = _rotate_mask(candidate_mask, float(angle))
+            score = _ncc_score(rotated, template)
+            best_score = max(best_score, score)
+        scores[sign_value] = float(best_score)
+    return scores
+
+
+def detect_place_marker_candidates(
+    image_bgr,
+    templates,
+    min_area_fraction=DEFAULT_PLACE_MARKER_MIN_AREA_FRACTION,
+    max_area_fraction=DEFAULT_PLACE_MARKER_MAX_AREA_FRACTION,
+    min_circularity=DEFAULT_PLACE_MARKER_MIN_CIRCULARITY,
+    min_score=DEFAULT_PLACE_MARKER_MIN_SCORE,
+    min_margin=DEFAULT_PLACE_MARKER_MIN_MARGIN,
+    rotation_angles=None,
+):
+    """通过红环定位并以内部黑白模板分类；任一门限不满足即返回 unknown。"""
+    empty = PlaceMarkerFrameResult(candidate=None)
+    if image_bgr is None or image_bgr.size == 0 or not templates:
+        return empty
+    height, width = image_bgr.shape[:2]
+    image_area = max(1.0, float(height * width))
+    best_result = empty
+    for contour in _find_external_contours(_red_place_marker_mask(image_bgr)):
+        area_fraction = float(cv2.contourArea(contour)) / image_area
+        circularity = _contour_circularity(contour)
+        if (area_fraction < min_area_fraction or
+                area_fraction > max_area_fraction or
+                circularity < min_circularity):
+            continue
+        normalized = normalize_place_marker_roi(image_bgr, contour)
+        if normalized is None:
+            continue
+        scores = score_place_marker_templates(
+            normalized, templates, rotation_angles)
+        if not scores:
+            continue
+        ranked = sorted(scores.items(), key=lambda item: -item[1])
+        best_value, best_score = ranked[0]
+        second_score = ranked[1][1] if len(ranked) > 1 else -1.0
+        margin = best_score - second_score
+        result = PlaceMarkerFrameResult(
+            candidate=None,
+            place_1_score=float(scores.get('place_1', 0.0)),
+            place_2_score=float(scores.get('place_2', 0.0)),
+        )
+        if best_score < min_score or margin < min_margin:
+            if max(result.place_1_score, result.place_2_score) > max(
+                    best_result.place_1_score, best_result.place_2_score):
+                best_result = result
+            continue
+        moments = cv2.moments(contour)
+        center_x = moments['m10'] / moments['m00'] if moments['m00'] else 0.0
+        center_y = moments['m01'] / moments['m00'] if moments['m00'] else 0.0
+        confidence = clamp(0.42 + 0.46 * best_score + 0.18 * margin, 0.0, 0.99)
+        candidate = SignCandidate(
+            sign_type='place_marker',
+            sign_value=best_value,
+            confidence=float(confidence),
+            source='place_template:%.3f margin:%.3f circularity:%.3f' % (
+                best_score, margin, circularity),
+            center_x=float(center_x),
+            center_y=float(center_y),
+            area_fraction=float(area_fraction),
+            contour=contour,
+        )
+        result = PlaceMarkerFrameResult(
+            candidate=candidate,
+            place_1_score=float(scores.get('place_1', 0.0)),
+            place_2_score=float(scores.get('place_2', 0.0)),
+        )
+        if (best_result.candidate is None or
+                candidate.confidence > best_result.candidate.confidence):
+            best_result = result
+    return best_result
+
+
+def confirm_place_marker_history(
+    history,
+    window_size=DEFAULT_PLACE_MARKER_CONFIRM_WINDOW,
+    confirm_frames=DEFAULT_PLACE_MARKER_CONFIRM_FRAMES,
+    min_confidence=DEFAULT_PLACE_MARKER_MIN_CONFIDENCE,
+):
+    """最近窗口内同类至少 N 帧且无另一高置信类别冲突，才确认结果。"""
+    window = list(history)[-max(1, int(window_size)):]
+    counts = {'place_1': 0, 'place_2': 0}
+    valid = []
+    for frame in window:
+        candidate = frame.candidate if frame is not None else None
+        if (candidate is None or candidate.sign_value not in counts or
+                candidate.confidence < min_confidence):
+            continue
+        counts[candidate.sign_value] += 1
+        valid.append(candidate)
+    best_value = max(counts, key=counts.get)
+    other_value = 'place_2' if best_value == 'place_1' else 'place_1'
+    confirmed = (counts[best_value] >= int(confirm_frames) and
+                 counts[other_value] == 0)
+    best_candidate = next(
+        (candidate for candidate in reversed(valid)
+         if candidate.sign_value == best_value), None)
+    latest = window[-1] if window else PlaceMarkerFrameResult(None)
+    return {
+        'current_candidate': (latest.candidate.sign_value
+                              if latest.candidate is not None else 'unknown'),
+        'candidate_confidence': (latest.candidate.confidence
+                                 if latest.candidate is not None else 0.0),
+        'place_1_score': latest.place_1_score,
+        'place_2_score': latest.place_2_score,
+        'confirm_count': counts[best_value],
+        'window_size': max(1, int(window_size)),
+        'confirmed': confirmed,
+        'confirmed_value': best_value if confirmed else 'unknown',
+        'confirmed_candidate': best_candidate if confirmed else None,
+    }
+
+
 def detect_warning_template_signs(
     image_bgr,
     templates,
@@ -977,6 +1254,7 @@ class RealSignDetectorNode(Node):
             'sign_detections_topic'
         )
         self.debug_image_topic = self._string_parameter('debug_image_topic')
+        self.status_topic = self._string_parameter('status_topic')
         self.frame_id = self._string_parameter('frame_id')
         self.min_confidence = self._float_parameter('min_confidence', 0.55)
         self.enable_qr = self._bool_parameter('enable_qr')
@@ -984,6 +1262,10 @@ class RealSignDetectorNode(Node):
             'enable_warning_templates'
         )
         self.enable_color = self._bool_parameter('enable_color')
+        self.enable_place_markers = (
+            self._bool_parameter('enable_place_markers') and
+            self._bool_parameter('place_marker_enabled')
+        )
         self.enable_debug_image = self._bool_parameter('enable_debug_image')
         self.debug_log = self._bool_parameter('debug_log')
         self.log_period_sec = self._float_parameter('log_period_sec', 1.0)
@@ -1001,6 +1283,33 @@ class RealSignDetectorNode(Node):
         self.qr_max_width = int(max(1.0, self._float_parameter(
             'qr_max_width', DEFAULT_QR_MAX_WIDTH
         )))
+        self.place_marker_min_area_fraction = self._float_parameter(
+            'place_marker_min_area_fraction',
+            DEFAULT_PLACE_MARKER_MIN_AREA_FRACTION)
+        self.place_marker_max_area_fraction = self._float_parameter(
+            'place_marker_max_area_fraction',
+            DEFAULT_PLACE_MARKER_MAX_AREA_FRACTION)
+        self.place_marker_min_circularity = self._float_parameter(
+            'place_marker_min_circularity',
+            DEFAULT_PLACE_MARKER_MIN_CIRCULARITY)
+        self.place_marker_min_score = self._float_parameter(
+            'place_marker_min_score', DEFAULT_PLACE_MARKER_MIN_SCORE)
+        self.place_marker_min_margin = self._float_parameter(
+            'place_marker_min_margin', DEFAULT_PLACE_MARKER_MIN_MARGIN)
+        self.place_marker_min_confidence = self._float_parameter(
+            'place_marker_min_confidence',
+            DEFAULT_PLACE_MARKER_MIN_CONFIDENCE)
+        self.place_marker_rotation_angles = self._rotation_angles_parameter()
+        self.place_marker_confirmation = PlaceMarkerConfirmation(
+            self._integer_parameter(
+                'place_marker_confirm_window',
+                DEFAULT_PLACE_MARKER_CONFIRM_WINDOW),
+            self._integer_parameter(
+                'place_marker_confirm_frames',
+                DEFAULT_PLACE_MARKER_CONFIRM_FRAMES),
+            self.place_marker_min_confidence,
+        )
+        self.place_marker_status = confirm_place_marker_history([])
         self._last_log_time = 0.0
         # 这些计数只服务于可观测性与 readiness，绝不驱动重启或动作。
         self.input_frame_count = 0
@@ -1024,6 +1333,13 @@ class RealSignDetectorNode(Node):
             resource_dir=str(
                 self.get_parameter('template_resource_dir').value).strip()
             or None)
+        self.place_marker_templates = load_place_marker_templates(
+            resource_dir=str(self.get_parameter(
+                'place_marker_template_resource_dir').value).strip() or None,
+            size=self._integer_parameter(
+                'place_marker_template_size',
+                DEFAULT_PLACE_MARKER_TEMPLATE_SIZE),
+        )
         self.qr_detector = cv2.QRCodeDetector() if self.enable_qr else None
 
         self.publisher = self.create_publisher(
@@ -1031,7 +1347,6 @@ class RealSignDetectorNode(Node):
             self.sign_detections_topic,
             10
         )
-        self.status_topic = self._string_parameter('status_topic')
         self.status_publisher = self.create_publisher(
             String, self.status_topic, 10
         )
@@ -1060,13 +1375,15 @@ class RealSignDetectorNode(Node):
             'Real sign detector ready: '
             f'image_topic={self.image_topic}, '
             f'sign_topic={self.sign_detections_topic}, '
+            f'status_topic={self.status_topic}, '
             f'qr={self.enable_qr}, '
             f'templates={self.enable_warning_templates}, '
-            f'color={self.enable_color}'
+            f'color={self.enable_color}, '
+            f'place_markers={self.enable_place_markers}'
         )
 
     def _declare_parameters(self):
-        self.declare_parameter('image_topic', '/camera/color/image_raw')
+        self.declare_parameter('image_topic', '/go2/front_camera/image_raw')
         self.declare_parameter(
             'sign_detections_topic',
             '/perception/sign_detections'
@@ -1074,6 +1391,9 @@ class RealSignDetectorNode(Node):
         self.declare_parameter(
             'debug_image_topic',
             '/perception/sign_debug_image'
+        )
+        self.declare_parameter(
+            'status_topic', '/perception/sign_detector_status'
         )
         self.declare_parameter('frame_id', 'd435i_color_optical_frame')
         self.declare_parameter('min_confidence', 0.55)
@@ -1091,12 +1411,39 @@ class RealSignDetectorNode(Node):
         self.declare_parameter('template_min_margin', 0.06)
         self.declare_parameter('template_resource_dir', '')
         self.declare_parameter('enable_color', True)
+        self.declare_parameter('enable_place_markers', True)
+        self.declare_parameter('place_marker_enabled', True)
+        self.declare_parameter(
+            'place_marker_template_size', DEFAULT_PLACE_MARKER_TEMPLATE_SIZE)
+        self.declare_parameter('place_marker_template_resource_dir', '')
+        self.declare_parameter(
+            'place_marker_min_area_fraction',
+            DEFAULT_PLACE_MARKER_MIN_AREA_FRACTION)
+        self.declare_parameter(
+            'place_marker_max_area_fraction',
+            DEFAULT_PLACE_MARKER_MAX_AREA_FRACTION)
+        self.declare_parameter(
+            'place_marker_min_circularity',
+            DEFAULT_PLACE_MARKER_MIN_CIRCULARITY)
+        self.declare_parameter(
+            'place_marker_min_score', DEFAULT_PLACE_MARKER_MIN_SCORE)
+        self.declare_parameter(
+            'place_marker_min_margin', DEFAULT_PLACE_MARKER_MIN_MARGIN)
+        self.declare_parameter(
+            'place_marker_rotation_angles',
+            list(DEFAULT_PLACE_MARKER_ROTATION_ANGLES))
+        self.declare_parameter(
+            'place_marker_confirm_window',
+            DEFAULT_PLACE_MARKER_CONFIRM_WINDOW)
+        self.declare_parameter(
+            'place_marker_confirm_frames',
+            DEFAULT_PLACE_MARKER_CONFIRM_FRAMES)
+        self.declare_parameter(
+            'place_marker_min_confidence',
+            DEFAULT_PLACE_MARKER_MIN_CONFIDENCE)
         self.declare_parameter('enable_debug_image', False)
         self.declare_parameter('debug_log', False)
         self.declare_parameter('log_period_sec', 1.0)
-        self.declare_parameter(
-            'status_topic', '/perception/sign_detector_status'
-        )
         self.declare_parameter('status_publish_rate_hz', 2.0)
         self.declare_parameter(
             'color_rules_json',
@@ -1154,6 +1501,25 @@ class RealSignDetectorNode(Node):
                 self.last_error = 'color_failure:{}'.format(error)
                 self.get_logger().error(self.last_error)
 
+        if self.enable_place_markers:
+            # 新路径先完成多帧确认；未确认不向检测 Topic 发布平台选择。
+            place_frame = detect_place_marker_candidates(
+                image,
+                self.place_marker_templates,
+                self.place_marker_min_area_fraction,
+                self.place_marker_max_area_fraction,
+                self.place_marker_min_circularity,
+                self.place_marker_min_score,
+                self.place_marker_min_margin,
+                self.place_marker_rotation_angles,
+            )
+            self.place_marker_status = self.place_marker_confirmation.update(
+                place_frame)
+            confirmed_candidate = self.place_marker_status[
+                'confirmed_candidate']
+            if confirmed_candidate is not None:
+                candidates.append(confirmed_candidate)
+
         detections = merge_candidates(candidates, self.min_confidence)
         try:
             self._publish_detections(msg, detections)
@@ -1210,6 +1576,10 @@ class RealSignDetectorNode(Node):
             'processing_time_ms': self.last_processing_time_ms,
             'state': 'RUNNING' if self.last_input_time is not None else 'READY',
             'last_error': self.last_error,
+            'place_marker': {
+                key: value for key, value in self.place_marker_status.items()
+                if key != 'confirmed_candidate'
+            },
         }
         message = String()
         message.data = json.dumps(
@@ -1264,12 +1634,25 @@ class RealSignDetectorNode(Node):
         self._last_log_time = now
         if not detections:
             self.get_logger().info('No sign detected')
-            return
-        summary = ', '.join(
-            f'{item.sign_type}:{item.sign_value}:{item.confidence:.2f}'
-            for item in detections
-        )
-        self.get_logger().info(f'Sign detections: {summary}')
+        else:
+            summary = ', '.join(
+                f'{item.sign_type}:{item.sign_value}:{item.confidence:.2f}'
+                for item in detections
+            )
+            self.get_logger().info(f'Sign detections: {summary}')
+
+        if self.enable_place_markers:
+            status = self.place_marker_status
+            self.get_logger().info(
+                'Place marker status: '
+                f"current={status['current_candidate']} "
+                f"confidence={status['candidate_confidence']:.2f} "
+                f"scores=({status['place_1_score']:.3f},"
+                f"{status['place_2_score']:.3f}) "
+                f"confirm={status['confirm_count']}/{status['window_size']} "
+                f"confirmed={status['confirmed']} "
+                f"value={status['confirmed_value']}"
+            )
 
     def _string_parameter(self, name):
         return str(self.get_parameter(name).value)
@@ -1288,6 +1671,24 @@ class RealSignDetectorNode(Node):
         if not math.isfinite(value):
             return float(default)
         return value
+
+    def _integer_parameter(self, name, default):
+        try:
+            value = int(self.get_parameter(name).value)
+        except (TypeError, ValueError):
+            return int(default)
+        return value if value > 0 else int(default)
+
+    def _rotation_angles_parameter(self):
+        """仅接受小角度列表，防止配置意外开启 360 度旋转不变匹配。"""
+        raw = self.get_parameter('place_marker_rotation_angles').value
+        try:
+            values = tuple(int(value) for value in raw)
+        except (TypeError, ValueError):
+            return DEFAULT_PLACE_MARKER_ROTATION_ANGLES
+        allowed = set(DEFAULT_PLACE_MARKER_ROTATION_ANGLES)
+        values = tuple(value for value in values if value in allowed)
+        return values or DEFAULT_PLACE_MARKER_ROTATION_ANGLES
 
 
 def main(args=None):
