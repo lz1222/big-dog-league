@@ -14,6 +14,8 @@
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/go2/video/video_client.hpp>
 
+#include "rk_go2_sdk_bridge/jpeg_frame_validation.hpp"
+
 namespace
 {
 
@@ -123,6 +125,27 @@ int Run(const StreamConfig& config)
       total_failures++;
       std::cerr << "[stream_helper] GetImageSample failed: ret="
                 << sdk_ret << " bytes=" << jpeg_buffer.size()
+                << " consecutive=" << consecutive_failures << std::endl;
+
+      if (consecutive_failures > config.max_consecutive_retries) {
+        std::cerr << "[stream_helper] Too many consecutive failures, "
+                     "exiting" << std::endl;
+        return 1;
+      }
+      if (config.retry_sleep_sec > 0.0) {
+        std::this_thread::sleep_for(
+            std::chrono::duration<double>(config.retry_sleep_sec));
+      }
+      continue;
+    }
+
+    // SDK 偶发返回长度正常但缺少 JPEG 结束标记的截断帧。该帧若写入
+    // 管道会在 bridge 侧触发解码错误；此处丢弃并走现有受限重试策略。
+    if (!rk_go2_sdk_bridge::IsCompleteJpegFrame(jpeg_buffer)) {
+      consecutive_failures++;
+      total_failures++;
+      std::cerr << "[stream_helper] Incomplete JPEG dropped: bytes="
+                << jpeg_buffer.size()
                 << " consecutive=" << consecutive_failures << std::endl;
 
       if (consecutive_failures > config.max_consecutive_retries) {

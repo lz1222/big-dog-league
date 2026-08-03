@@ -78,6 +78,19 @@ real_sign_detector_node:
     template_min_score: 0.34
     template_min_area_fraction: 0.010
     enable_color: true
+    # 平台编号必须来自红环内黑白模板，避免红色背景或警示牌造成平台选择。
+    enable_place_markers: true
+    place_marker_enabled: true
+    place_marker_template_size: 128
+    place_marker_min_area_fraction: 0.007
+    place_marker_max_area_fraction: 0.45
+    place_marker_min_circularity: 0.70
+    place_marker_min_score: 0.62
+    place_marker_min_margin: 0.12
+    place_marker_rotation_angles: [-15, -10, -5, 0, 5, 10, 15]
+    place_marker_confirm_window: 7
+    place_marker_confirm_frames: 5
+    place_marker_min_confidence: 0.75
     enable_debug_image: false
     debug_log: false
     log_period_sec: 1.0

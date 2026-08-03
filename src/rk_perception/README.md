@@ -32,6 +32,14 @@ so `electric_shock`, `strong_oxidizer`, and `radiation` can be separated even
 though their outer color is the same. HSV color rules are kept only as a
 field-tunable fallback for older colored signs and platform markers.
 
+For the Go2 front camera, platform markers use a separate safe path. A red
+outer ring only locates a candidate; the inner black-and-white `place_1` or
+`place_2` pattern is matched against the auditable templates in
+`resources/place_marker_templates`. The detector searches only ±15 degrees
+and publishes this path only after 5 matching frames in a 7-frame window with
+no high-confidence conflict. Ambiguous or non-marker red objects produce no
+platform detection.
+
 `realsense2_camera` is intentionally not a hard dependency of this package.
 Install and start the RealSense ROS 2 wrapper separately:
 

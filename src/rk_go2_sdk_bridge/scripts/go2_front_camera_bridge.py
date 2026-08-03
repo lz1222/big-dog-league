@@ -73,6 +73,19 @@ def _build_image_msg(array, frame_id, stamp):
     return msg
 
 
+def _resize_to_max_width(array, max_output_width):
+    """仅在输入过宽时缩小图像，保持比例且避免无意义放大。"""
+    if not _validate_bgr_image(array):
+        return array
+    if max_output_width <= 0 or array.shape[1] <= max_output_width:
+        return array
+    scale = float(max_output_width) / float(array.shape[1])
+    target_height = max(1, int(round(array.shape[0] * scale)))
+    return cv2.resize(
+        array, (int(max_output_width), target_height),
+        interpolation=cv2.INTER_AREA)
+
+
 def _resolve_helper(stream_helper_param):
     """Resolve the stream helper executable from the ROS parameter.
 
@@ -225,6 +238,8 @@ class Go2FrontCameraBridgeNode(Node):
         self.declare_parameter('publish_status_topic',
                                '/go2/front_camera/status')
         self.declare_parameter('max_publish_rate_hz', 10.0)
+        # 限制感知链带宽；0 表示不限制，且不会对低分辨率图像放大。
+        self.declare_parameter('max_output_width', 960)
         self.declare_parameter('sdk_timeout_sec', 2.0)
         self.declare_parameter('retry_sleep_sec', 0.20)
         self.declare_parameter('max_consecutive_retries', 10)
@@ -238,6 +253,7 @@ class Go2FrontCameraBridgeNode(Node):
         self.frame_id = self._str_param('frame_id')
         self.status_topic = self._str_param('publish_status_topic')
         self.max_publish_rate_hz = self._pos_float('max_publish_rate_hz')
+        self.max_output_width = self._pos_int('max_output_width')
         self.sdk_timeout_sec = self._pos_float('sdk_timeout_sec')
         self.retry_sleep_sec = self._pos_float('retry_sleep_sec',
                                                 positive=False)
@@ -456,6 +472,7 @@ class Go2FrontCameraBridgeNode(Node):
             self._consecutive_failures += 1
             self._last_error = 'jpeg_decode_failed_or_invalid'
             return
+        array = _resize_to_max_width(array, self.max_output_width)
 
         self._consecutive_failures = 0
         self._last_error = ''

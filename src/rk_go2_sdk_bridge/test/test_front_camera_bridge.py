@@ -229,6 +229,19 @@ class TestBuildImageMsg(unittest.TestCase):
         self.assertEqual(msg.data[2], 30)
 
 
+class TestResizeToMaxWidth(unittest.TestCase):
+
+    def test_wide_image_is_downscaled_without_distortion(self):
+        image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        resized = bridge_mod._resize_to_max_width(image, 960)
+        self.assertEqual(resized.shape, (540, 960, 3))
+
+    def test_small_image_is_not_upscaled(self):
+        image = np.zeros((540, 960, 3), dtype=np.uint8)
+        resized = bridge_mod._resize_to_max_width(image, 960)
+        self.assertIs(resized, image)
+
+
 class TestJpegDecodeValidation(unittest.TestCase):
 
     def test_valid_jpeg_passes(self):
