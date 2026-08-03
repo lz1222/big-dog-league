@@ -22,6 +22,8 @@ for package_name in ('rk_navigation', 'rk_mission', 'rk_locomotion'):
 
 from rk_bringup.non_arm_competition_contract import (  # noqa: E402
     DEFAULT_IMAGE_TOPIC,
+    DEFAULT_LINE_IMAGE_TOPIC,
+    DEFAULT_SIGN_IMAGE_TOPIC,
     FORBIDDEN_FORMAL_NODE_MARKERS,
     REQUIRED_FORMAL_NODES,
     TEST_ONLY_SMOKE_HELPER_MARKER,
@@ -241,11 +243,28 @@ def test_formal_launch_declares_all_required_nodes_without_excluded_nodes():
 
 
 def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
+    """巡线与标识相机必须独立配置，并由 launch 覆盖 YAML 默认值。"""
     source = FORMAL_LAUNCH.read_text(encoding='utf-8')
+    config = read_formal_config()
 
     assert DEFAULT_IMAGE_TOPIC == '/camera/color/image_raw'
-    assert "LaunchConfiguration('image_topic')" in source
-    assert "'image_topic': image_topic" in source
+    assert DEFAULT_LINE_IMAGE_TOPIC == DEFAULT_IMAGE_TOPIC
+    assert DEFAULT_SIGN_IMAGE_TOPIC == '/go2/front_camera/image_raw'
+    assert "LaunchConfiguration('line_image_topic')" in source
+    assert "LaunchConfiguration('sign_image_topic')" in source
+    # 两个感知节点均把各自的启动参数置于 YAML 之后，避免 YAML 默认值
+    # 覆盖正式图的话题分流；不得恢复已废弃的全局 image_topic 启动参数。
+    assert "'image_topic': line_image_topic" in source
+    assert "'image_topic': sign_image_topic" in source
+    assert "LaunchConfiguration('image_topic')" not in source
+    assert (
+        config['real_line_tracker_node']['ros__parameters']['image_topic']
+        == DEFAULT_LINE_IMAGE_TOPIC
+    )
+    assert (
+        config['real_sign_detector_node']['ros__parameters']['image_topic']
+        == DEFAULT_SIGN_IMAGE_TOPIC
+    )
     assert "LaunchConfiguration('software_smoke_mode')" in source
     assert "use_hardware_realsense" in source
     assert "use_hardware_sdk_server" in source
@@ -261,7 +280,10 @@ def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
     assert "ParameterValue(" in source
     assert "value_type=str" in source
     assert "front_jump.software_smoke_mode" in source
-    assert "'fake_sdk_action_executable', default_value=''" in source
+    # smoke helper 必须由安装树提供的带标识假程序默认注入，不能回退为空
+    # 或 production basename；这保证 smoke 不会触碰真实 SDK helper。
+    assert "'fake_sdk_action_executable'" in source
+    assert "'/lib/rk_go2_sdk_bridge/fake_sdk_motion_helper'" in source
 
 
 @pytest.mark.parametrize(
@@ -590,6 +612,12 @@ def test_readiness_smoke_checks_are_gated_by_software_smoke_mode():
     assert 'elif self.hardware_mode:' in readiness_source, (
         'hardware checks must be under elif self.hardware_mode gate'
     )
+    # smoke 不启动 Go2 相机桥；只有该模式可接受合成相机输入，生产仍要求桥接。
+    assert 'software_smoke_synthetic' in readiness_source
+    smoke_source = (
+        PACKAGE_ROOT / 'rk_bringup' / 'non_arm_smoke_publisher.py'
+    ).read_text(encoding='utf-8')
+    assert 'DEFAULT_SIGN_CAMERA_FRAME_ID' in smoke_source
 
 
 # ---------------------------------------------------------------------------

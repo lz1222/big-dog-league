@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import time
+from typing import Set
 
 from geometry_msgs.msg import Twist
 import rclpy
@@ -310,7 +311,9 @@ class CompetitionReadinessNode(Node):
         同一 GID 被 Foxy/CycloneDDS 重复返回时只保留一个。
         无法读取 GID 的端点返回空列表（fail-closed）。
         """
-        seen: set[bytes] = set()
+        # Foxy 固定使用 Python 3.8；使用 typing.Set 保持 GID 去重逻辑可导入。
+        # 此处仍以不可读取 GID 返回空列表 fail-closed，不能放宽唯一发布者约束。
+        seen: Set[bytes] = set()
         unique = []
         for endpoint in topic_infos:
             gid = CompetitionReadinessNode._normalized_gid(endpoint)
@@ -562,15 +565,23 @@ class CompetitionReadinessNode(Node):
             'missing' if sign_image_age is None else '{:.3f}s'.format(sign_image_age),
         ))
 
-        # B2. 桥接节点存在且 frame_id 正确
+        # B2. 生产必须观察真实 Go2 桥接节点；software smoke 使用合成 Image
+        # 输入且禁止启动该硬件节点，因此只在 smoke 放行“桥接存在”这一项。
         sign_bridge_nodes = [
             name for name in self._node_names()
             if name.endswith('/' + SIGN_CAMERA_BRIDGE_NODE)
         ]
+        sign_bridge_ready = (
+            self.software_smoke_mode or bool(sign_bridge_nodes)
+        )
         checks.append(ReadinessCheck(
             'sign_camera_bridge_ready',
-            bool(sign_bridge_nodes),
-            'found' if sign_bridge_nodes else 'missing',
+            sign_bridge_ready,
+            (
+                'software_smoke_synthetic'
+                if self.software_smoke_mode
+                else ('found' if sign_bridge_nodes else 'missing')
+            ),
         ))
         sign_frame_ok = (
             sign_image_value is not None
