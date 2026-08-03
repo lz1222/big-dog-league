@@ -6,8 +6,8 @@
 |---|---|---|---|---|---|---|---|---|---|
 | ROUND15_PHYSICAL | `/home/unitree/maze_bags/b2_round15_20260802_144706` | 未登记 | `docs/B2_MAZE_NAVIGATION_POLICY_DRY_RUN.md` | `config/maze_navigation_dry_run.yaml` | `f69616e`附近 | 未登记 | 转后左侧约9cm，过程中轻触 | 左侧机身/内侧板 | FAIL |
 | ROUND15_LEGACY_REPLAY | 同上 | 不适用 | 旧B2约4.52deg、left约0.362m触发 `turn_sweep_unsafe` | `config/maze_navigation_dry_run.yaml` | `f69616e`附近 | 不适用 | 固定0.413m粗门限 | 不执行 | DRY_RUN_PASS |
-| B2_1_A_ROUND15_REPLAY | `/home/unitree/maze_bags/b2_round15_20260802_144706`，当前开发机不可用 | 不适用 | 待生成 `/tmp/b2_1_a_round15_replay_summary.json` 和前5候选JSON | `config/maze_round15_replay.yaml`、`config/maze_first_turn_dry_run.yaml` | 未提交 | 不适用 | UNVERIFIED | 不执行 | BLOCKED |
-| B2_1_A_SYNTHETIC_REPLAY_UNIT | 无，纯逻辑合成数据 | 不适用 | `tests/test_maze_round15_replay_core.py` | 测试内固定几何 | 未提交 | 不适用 | 合成旧左弧被提前拒绝 | 不执行 | UNIT_TEST_PASS |
+| B2_1_A_ROUND15_REPLAY | `/home/unitree/maze_bags/b2_round15_20260802_144706`，当前开发机不可用 | 不适用 | 待生成 `/tmp/b2_1_a_round15_replay_summary.json` 和前5候选JSON | `config/maze_round15_replay.yaml`、`config/maze_first_turn_dry_run.yaml` | `16251ae` | 不适用 | UNVERIFIED | 不执行 | BLOCKED |
+| B2_1_A_SYNTHETIC_REPLAY_UNIT | 无，纯逻辑合成数据 | 不适用 | `tests/test_maze_round15_replay_core.py` | 测试内固定几何 | `16251ae` | 不适用 | 合成旧左弧被提前拒绝 | 不执行 | UNIT_TEST_PASS |
 
 ## Round15 已知物理事实
 

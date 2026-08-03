@@ -36,6 +36,6 @@ unverified_items:
   - motion_model
   - watchdog_and_estop_status_topics
 last_update: '2026-08-02'
-git_sha: f69616e
+git_sha: 16251ae
 working_tree_dirty: true
 nonzero_motion_generated: false
