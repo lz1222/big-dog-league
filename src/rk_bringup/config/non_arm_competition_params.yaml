@@ -6,7 +6,7 @@
 
 real_line_tracker_node:
   ros__parameters:
-    # 软件默认安全值：现场图像话题由 launch 的 image_topic 统一覆盖。
+    # 默认值；launch 通过 line_image_topic 显式注入 D435i 话题。
     image_topic: /camera/color/image_raw
     line_track_topic: /perception/line_track
     red_circle_topic: /perception/red_circle_detection
@@ -67,17 +67,30 @@ real_line_tracker_node:
 
 real_sign_detector_node:
   ros__parameters:
-    # 与 tracker 共享 image_topic；launch 覆盖两者，禁止分别写死话题。
-    image_topic: /camera/color/image_raw
+    # 默认值；launch 通过 sign_image_topic 显式注入本体相机话题。
+    image_topic: /go2/front_camera/image_raw
     sign_detections_topic: /perception/sign_detections
     debug_image_topic: /perception/sign_debug_image
-    frame_id: d435i_color_optical_frame
+    frame_id: go2_front_camera_optical_frame
     min_confidence: 0.55
     enable_qr: true
     enable_warning_templates: true
     template_min_score: 0.34
     template_min_area_fraction: 0.010
     enable_color: true
+    # 平台编号必须来自红环内黑白模板，避免红色背景或警示牌造成平台选择。
+    enable_place_markers: true
+    place_marker_enabled: true
+    place_marker_template_size: 128
+    place_marker_min_area_fraction: 0.007
+    place_marker_max_area_fraction: 0.45
+    place_marker_min_circularity: 0.70
+    place_marker_min_score: 0.62
+    place_marker_min_margin: 0.12
+    place_marker_rotation_angles: [-15, -10, -5, 0, 5, 10, 15]
+    place_marker_confirm_window: 7
+    place_marker_confirm_frames: 5
+    place_marker_min_confidence: 0.75
     enable_debug_image: false
     debug_log: false
     log_period_sec: 1.0

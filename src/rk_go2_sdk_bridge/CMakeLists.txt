@@ -106,6 +106,7 @@ install(PROGRAMS
   scripts/cmd_vel_udp_forwarder.py
   scripts/warning_sign_image_classifier.py
   scripts/go2_warning_sign_sdk_loop.sh
+  scripts/go2_front_camera_bridge.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -125,6 +126,17 @@ if(unitree_sdk2_FOUND)
     src/go2_sdk_capture_image.cpp
   )
   rk_configure_unitree_sdk_target(go2_sdk_capture_image)
+  add_executable(go2_front_camera_stream_helper
+    src/go2_front_camera_stream_helper.cpp
+  )
+  target_include_directories(go2_front_camera_stream_helper PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  rk_configure_unitree_sdk_target(go2_front_camera_stream_helper)
+  # 使用 DT_RPATH 而非 RUNPATH，使 SDK 的 libddsc 优先于 ROS 环境中
+  # 同名但 ABI 不兼容的库，避免 helper 在启动时出现符号解析失败。
+  set_property(TARGET go2_front_camera_stream_helper APPEND_STRING
+    PROPERTY LINK_FLAGS " -Wl,--disable-new-dtags")
   add_executable(go2_sdk_speed_sweep src/go2_sdk_speed_sweep.cpp)
   rk_configure_unitree_sdk_target(go2_sdk_speed_sweep)
   add_executable(go2_sdk_motion_action
@@ -139,6 +151,9 @@ if(unitree_sdk2_FOUND)
     src/go2_sdk_sport_state_monitor.cpp
   )
   rk_configure_unitree_sdk_target(go2_sdk_sport_state_monitor)
+  add_executable(fake_sdk_motion_helper
+    src/fake_sdk_motion_helper.cpp
+  )
   install(TARGETS
     go2_sdk_udp_server
     go2_sdk_capture_image
@@ -146,6 +161,8 @@ if(unitree_sdk2_FOUND)
     go2_sdk_motion_action
     go2_sdk_velocity_action
     go2_sdk_sport_state_monitor
+    go2_front_camera_stream_helper
+    fake_sdk_motion_helper
     DESTINATION lib/${PROJECT_NAME}
   )
 else()
@@ -157,6 +174,14 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(test_jpeg_frame_validation
+    test/test_jpeg_frame_validation.cpp
+  )
+  target_include_directories(test_jpeg_frame_validation PRIVATE include)
+  add_test(
+    NAME test_jpeg_frame_validation
+    COMMAND test_jpeg_frame_validation
+  )
   add_executable(test_udp_motion_core
     test/test_udp_motion_core.cpp
   )
@@ -166,6 +191,13 @@ if(BUILD_TESTING)
   add_test(
     NAME test_udp_motion_core
     COMMAND test_udp_motion_core
+  )
+  add_test(
+    NAME test_front_camera_bridge
+    COMMAND python3 -m pytest
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_front_camera_bridge.py"
+      -v --tb=short
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   )
 endif()
 
