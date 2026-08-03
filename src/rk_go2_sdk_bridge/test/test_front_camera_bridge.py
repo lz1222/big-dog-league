@@ -2,28 +2,24 @@
 """Tests for go2_front_camera_bridge: image construction, JPEG decode,
 and comprehensive process lifecycle management."""
 
-import json
 import os
 import shutil
-import signal
-import stat
-import struct
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 
 import cv2
 import numpy as np
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, ReliabilityPolicy
 
 # Add the scripts dir to import the bridge module
 _scripts_dir = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
 sys.path.insert(0, _scripts_dir)
 
-import go2_front_camera_bridge as bridge_mod
+import go2_front_camera_bridge as bridge_mod  # noqa: E402
 
 # We import rclpy lazily because initialization is expensive and must only
 # happen once per process.  setUpModule / tearDownModule handle the lifecycle.
@@ -140,6 +136,16 @@ def _count_children():
         return 0
 
 
+def wait_until(predicate, timeout_sec, poll_interval_sec=0.02):
+    """在有限时间内等待异步桥接状态，超时后由断言输出明确失败。"""
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(poll_interval_sec)
+    return predicate()
+
+
 # ---- Original image-construction / JPEG tests (kept from prior suite) ----
 
 
@@ -229,6 +235,46 @@ class TestBuildImageMsg(unittest.TestCase):
         self.assertEqual(msg.data[2], 30)
 
 
+class TestOutputResizeAndQos(unittest.TestCase):
+    """验证 DDS 前缩图边界，避免大 BGR 消息再次压垮可靠交付链。"""
+
+    def test_1920x1080_is_reduced_to_960x540(self):
+        source = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        output = bridge_mod._resize_output_bgr(source, 960)
+        self.assertEqual(output.shape, (540, 960, 3))
+        self.assertTrue(output.flags.c_contiguous)
+        self.assertEqual(output.dtype, np.uint8)
+
+    def test_1280x720_is_reduced_to_960x540(self):
+        source = np.zeros((720, 1280, 3), dtype=np.uint8)
+        output = bridge_mod._resize_output_bgr(source, 960)
+        self.assertEqual(output.shape, (540, 960, 3))
+        self.assertAlmostEqual(output.shape[1] / output.shape[0], 16 / 9)
+
+    def test_640x360_is_not_upscaled(self):
+        source = np.zeros((360, 640, 3), dtype=np.uint8)
+        output = bridge_mod._resize_output_bgr(source, 960)
+        self.assertEqual(output.shape, source.shape)
+        self.assertTrue(output.flags.c_contiguous)
+        self.assertIsNot(output, source)
+
+    def test_output_message_length_and_bytes_are_reduced(self):
+        source = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        output = bridge_mod._resize_output_bgr(source, 960)
+        msg = bridge_mod._build_image_msg(output, 'camera',
+                                          TestBuildImageMsg()._fake_stamp())
+        self.assertEqual(len(msg.data), 960 * 540 * 3)
+        self.assertEqual(len(msg.data), output.nbytes)
+        self.assertLess(output.nbytes, source.nbytes)
+
+    def test_publisher_qos_is_reliable_keep_last_one(self):
+        qos = bridge_mod.image_transport_qos()
+        self.assertEqual(qos.history, HistoryPolicy.KEEP_LAST)
+        self.assertEqual(qos.depth, 1)
+        self.assertEqual(qos.reliability, ReliabilityPolicy.RELIABLE)
+        self.assertEqual(qos.durability, DurabilityPolicy.VOLATILE)
+
+
 class TestJpegDecodeValidation(unittest.TestCase):
 
     def test_valid_jpeg_passes(self):
@@ -276,7 +322,6 @@ class TestHelperLifecycle(unittest.TestCase):
     def _make_node(self, stream_helper=None, max_helper_restarts=3,
                    env_overrides=None):
         """Create a bridge node wired to the fake stream helper."""
-        import rclpy
         if stream_helper is None:
             stream_helper = _FAKE_HELPER_PATH
 
@@ -327,7 +372,12 @@ class TestHelperLifecycle(unittest.TestCase):
         node = self._make_node(
             env_overrides={'FAKE_FRAME_INTERVAL': '0.02'})
         try:
-            time.sleep(0.5)
+            self.assertTrue(
+                wait_until(lambda: node._frame_count >= 1,
+                           timeout_sec=2.0, poll_interval_sec=0.02),
+                'timeout waiting for first decoded frame: start=%d restart=%d '
+                'frames=%d' % (node._start_count, node._restart_count,
+                               node._frame_count))
             self.assertEqual(node._start_count, 1)
             self.assertEqual(node._restart_count, 0)
             self.assertIsNotNone(node._active_process)
@@ -344,13 +394,26 @@ class TestHelperLifecycle(unittest.TestCase):
         node = self._make_node(
             env_overrides={'FAKE_FRAME_INTERVAL': '0.02'})
         try:
-            time.sleep(0.6)
+            self.assertTrue(
+                wait_until(lambda: node._frame_count >= 2,
+                           timeout_sec=2.0, poll_interval_sec=0.02),
+                'timeout waiting for initial frames: start=%d restart=%d '
+                'frames=%d' % (node._start_count, node._restart_count,
+                               node._frame_count))
             first_pid = node._helper_pid
             self.assertIsNotNone(first_pid)
             self.assertEqual(node._start_count, 1)
             self.assertEqual(node._restart_count, 0)
-            time.sleep(0.3)
+            self.assertTrue(
+                wait_until(lambda: node._frame_count >= 5,
+                           timeout_sec=2.0, poll_interval_sec=0.02),
+                'timeout waiting for continuous frames: pid=%s start=%d '
+                'restart=%d frames=%d' % (
+                    first_pid, node._start_count, node._restart_count,
+                    node._frame_count))
             self.assertEqual(node._helper_pid, first_pid)
+            self.assertEqual(node._start_count, 1)
+            self.assertEqual(node._restart_count, 0)
             self.assertGreaterEqual(node._frame_count, 5)
         finally:
             node.destroy_node()
@@ -480,11 +543,21 @@ class TestHelperLifecycle(unittest.TestCase):
                 'FAKE_EXIT_CODE': '0',
                 'FAKE_FRAME_INTERVAL': '0.02',
             })
-        time.sleep(0.5)
-        node.destroy_node()
-        self.assertTrue(node._intentional_shutdown)
-        self.assertIsNone(node._active_process)
-        time.sleep(0.2)
+        try:
+            self.assertTrue(
+                wait_until(lambda: node._start_count == 1
+                           and node._active_process is not None,
+                           timeout_sec=2.0, poll_interval_sec=0.02),
+                'timeout waiting for first helper before shutdown: '
+                'start=%d restart=%d' % (
+                    node._start_count, node._restart_count))
+            node.destroy_node()
+            self.assertTrue(node._intentional_shutdown)
+            self.assertIsNone(node._active_process)
+        finally:
+            if not node._intentional_shutdown:
+                node.destroy_node()
+            time.sleep(0.2)
 
     # ----------------------------------------------------------------
     # Test 9: truncated frame → helper recycled
