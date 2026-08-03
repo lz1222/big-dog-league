@@ -521,7 +521,6 @@ class Go2FrontCameraBridgeNode(Node):
             self._consecutive_failures += 1
             self._last_error = 'jpeg_decode_failed_or_invalid'
             return
-
         self._source_height, self._source_width = array.shape[:2]
         try:
             array = _resize_output_bgr(array, self.max_output_width)

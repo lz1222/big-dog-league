@@ -129,7 +129,14 @@ if(unitree_sdk2_FOUND)
   add_executable(go2_front_camera_stream_helper
     src/go2_front_camera_stream_helper.cpp
   )
+  target_include_directories(go2_front_camera_stream_helper PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
   rk_configure_unitree_sdk_target(go2_front_camera_stream_helper)
+  # 使用 DT_RPATH 而非 RUNPATH，使 SDK 的 libddsc 优先于 ROS 环境中
+  # 同名但 ABI 不兼容的库，避免 helper 在启动时出现符号解析失败。
+  set_property(TARGET go2_front_camera_stream_helper APPEND_STRING
+    PROPERTY LINK_FLAGS " -Wl,--disable-new-dtags")
   add_executable(go2_sdk_speed_sweep src/go2_sdk_speed_sweep.cpp)
   rk_configure_unitree_sdk_target(go2_sdk_speed_sweep)
   add_executable(go2_sdk_motion_action
@@ -167,6 +174,14 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(test_jpeg_frame_validation
+    test/test_jpeg_frame_validation.cpp
+  )
+  target_include_directories(test_jpeg_frame_validation PRIVATE include)
+  add_test(
+    NAME test_jpeg_frame_validation
+    COMMAND test_jpeg_frame_validation
+  )
   add_executable(test_udp_motion_core
     test/test_udp_motion_core.cpp
   )

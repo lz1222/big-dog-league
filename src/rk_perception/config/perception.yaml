@@ -55,7 +55,7 @@ real_line_tracker_node:
 
 real_sign_detector_node:
   ros__parameters:
-    image_topic: /camera/color/image_raw
+    image_topic: /go2/front_camera/image_raw
     sign_detections_topic: /perception/sign_detections
     debug_image_topic: /perception/sign_debug_image
     frame_id: d435i_color_optical_frame
@@ -65,6 +65,19 @@ real_sign_detector_node:
     template_min_score: 0.34
     template_min_area_fraction: 0.010
     enable_color: true
+    # 红环只定位，内部黑白模板决定 place_1/place_2；未确认不发布平台结果。
+    enable_place_markers: true
+    place_marker_enabled: true
+    place_marker_template_size: 128
+    place_marker_min_area_fraction: 0.007
+    place_marker_max_area_fraction: 0.45
+    place_marker_min_circularity: 0.70
+    place_marker_min_score: 0.62
+    place_marker_min_margin: 0.12
+    place_marker_rotation_angles: [-15, -10, -5, 0, 5, 10, 15]
+    place_marker_confirm_window: 7
+    place_marker_confirm_frames: 5
+    place_marker_min_confidence: 0.75
     enable_debug_image: true
     debug_log: true
     log_period_sec: 1.0
