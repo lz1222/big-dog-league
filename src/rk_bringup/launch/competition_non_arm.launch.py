@@ -10,6 +10,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, LogInfo
 from launch.conditions import IfCondition
+from launch.substitution import Substitution
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.substitutions import PythonExpression
 from launch_ros.actions import Node
@@ -17,6 +18,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 
 from rk_bringup.non_arm_competition_contract import DEFAULT_IMAGE_TOPIC
+from rk_bringup.inspection_helper_path import select_sdk_action_helper
 
 
 def _truthy_expression(configuration):
@@ -64,17 +66,41 @@ def _smoke_only_timeout_expression(
     return PythonExpression(expression)
 
 
+class _SelectedSdkActionHelper(Substitution):
+    """延迟选择并验证 inspection/gait SDK helper，避免 smoke 解析真实路径。"""
+
+    def __init__(
+        self, hardware_mode, software_smoke_mode, fake_helper, package_prefix
+    ):
+        super().__init__()
+        self._hardware_mode = hardware_mode
+        self._software_smoke_mode = software_smoke_mode
+        self._fake_helper = fake_helper
+        self._package_prefix = package_prefix
+
+    def describe(self):
+        return 'selected inspection SDK action helper'
+
+    def perform(self, context):
+        """仅 production 分支从安装树解析；异常会阻止节点获得不安全参数。"""
+        return select_sdk_action_helper(
+            self._hardware_mode.perform(context),
+            self._software_smoke_mode.perform(context),
+            self._fake_helper.perform(context),
+            self._package_prefix.perform(context),
+        )
+
+
 def _selected_helper_expression(
     hardware_mode,
     software_smoke_mode,
     fake_helper,
-    production_value='go2_sdk_motion_action',
+    production_value='',
 ):
     """选择 helper：非硬件或 smoke 路径永远不用 Unitree SDK helper。
 
-    production_value 为硬件非 smoke 模式的回退值；对于 SDK helper 是 basename，
-    对于 cleanup guard 是生产 guard 路径字符串。避免 PathJoinSubstitution 在
-    PythonExpression 内部未完全解析导致回退到参数默认值。
+    此函数仅供 cleanup guard 等纯字符串参数使用。SDK helper 使用
+    :class:`_SelectedSdkActionHelper`，保证 production 不会退化为 basename。
     """
     expression = [
         "'", fake_helper, "' if not (",
@@ -123,10 +149,11 @@ def generate_launch_description():
     gait_config = PathJoinSubstitution([
         FindPackageShare('rk_locomotion'), 'config', 'gait_params.yaml',
     ])
-    selected_sdk_helper = _selected_helper_expression(
+    selected_sdk_helper = _SelectedSdkActionHelper(
         hardware_mode,
         software_smoke_mode,
         fake_sdk_action_executable,
+        FindPackagePrefix('rk_go2_sdk_bridge'),
     )
     selected_cleanup_guard = _selected_helper_expression(
         hardware_mode,
@@ -496,12 +523,10 @@ def generate_launch_description():
                     'rk_go2_sdk_bridge',
                     'go2_sdk_udp_server',
                 ]),
+                # readiness 与实际执行器必须看到同一 helper：smoke 时只能是
+                # 带测试标识的 fake helper，生产时才解析安装树绝对路径。
                 'sdk_action_executable': ParameterValue(
-                    [
-                        FindPackagePrefix('rk_go2_sdk_bridge'),
-                        '/lib/rk_go2_sdk_bridge/go2_sdk_motion_action',
-                    ],
-                    value_type=str,
+                    selected_sdk_helper, value_type=str
                 ),
                 'cleanup_guard_path': ParameterValue(
                     selected_cleanup_guard, value_type=str

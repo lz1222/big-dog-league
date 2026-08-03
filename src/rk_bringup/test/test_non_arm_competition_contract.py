@@ -274,6 +274,7 @@ def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
     # B2 修复后使用 ParameterValue(..., value_type=str) 包装
     assert "front_jump.sdk_action_executable" in source
     assert 'selected_sdk_helper' in source
+    assert '_SelectedSdkActionHelper' in source
     assert "sdk_action_executable" in source
     assert "front_jump.cleanup_guard_path" in source
     assert 'selected_cleanup_guard' in source
@@ -439,20 +440,26 @@ def test_launch_uses_parameter_value_with_str_type_for_helper_paths():
                 )
 
 
-def test_launch_helper_expression_conditions():
-    """验证 helper 选择表达式始终存在且覆盖 hardware/smoke 两种模式。"""
+def test_launch_helper_selection_uses_checked_production_install_path():
+    """production helper 不得退化为 basename，smoke 仍经 fake 参数选择。"""
     launch_path = (
         PACKAGE_ROOT / 'launch' / 'competition_non_arm.launch.py'
     )
     source = launch_path.read_text(encoding='utf-8')
 
-    assert '_selected_helper_expression' in source
+    assert 'class _SelectedSdkActionHelper(Substitution):' in source
+    assert 'select_sdk_action_helper(' in source
     assert (
         "ParameterValue(\n                    "
         "selected_sdk_helper, value_type=str\n                )"
     ) in source
-    # production 路径必须是安装目录中的 go2_sdk_motion_action
-    assert 'go2_sdk_motion_action' in source
+    # gait、inspection executor 与 readiness 必须共享一次选定结果；少任一
+    # 消费者都会让 smoke/production 对 helper 的安全校验出现分叉。
+    assert source.count(
+        "ParameterValue(\n                    "
+        "selected_sdk_helper, value_type=str\n                )"
+    ) == 3
+    assert "FindPackagePrefix('rk_go2_sdk_bridge')" in source
     # smoke 路径使用 fake 参数
     assert 'fake_sdk_action_executable' in source
 
