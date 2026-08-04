@@ -7,12 +7,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P)"
 READINESS_SERVICE="${RK_COMPETITION_READINESS_SERVICE:-/competition/check_readiness}"
 READINESS_TIMEOUT_SEC="${RK_COMPETITION_READINESS_TIMEOUT_SEC:-30}"
 START_CONFIRM_TIMEOUT_SEC="${RK_COMPETITION_START_CONFIRM_TIMEOUT_SEC:-20}"
-# 一次性 publisher 必须等到关键任务订阅者完成 DDS 发现；VM 冷启动下
-# 5 秒不足会造成“未发送 start”的假失败。此上限只约束发布准备，不增加消息次数。
+# 双 ACK 交付在路线和循线器都确认前，最多发送有限条可靠 VOLATILE 消息；
+# 这是同一个逻辑请求的底层传输补偿，绝不创建第二轮任务。
 START_PUBLISH_TIMEOUT_SEC="${RK_COMPETITION_START_PUBLISH_TIMEOUT_SEC:-20}"
 START_MIN_SUBSCRIBERS="${RK_COMPETITION_START_MIN_SUBSCRIBERS:-2}"
-# 冷启动的 ROS CLI 订阅建立可能慢于一个控制周期；只延长只读状态采样。
-TOPIC_SAMPLE_TIMEOUT_SEC="${RK_COMPETITION_TOPIC_SAMPLE_TIMEOUT_SEC:-6}"
+START_MAX_TRANSPORT_PUBLISHES="${RK_COMPETITION_START_MAX_TRANSPORT_PUBLISHES:-3}"
+START_RETRANSMIT_INTERVAL_SEC="${RK_COMPETITION_START_RETRANSMIT_INTERVAL_SEC:-0.35}"
 
 resolve_workspace_dir() {
     local candidate
@@ -142,113 +142,16 @@ PY
     printf '%s\n' "$response" | grep -Eq '"success":true'
 }
 
-publish_formal_start_once() {
-    # 只在至少两个核心消费者（路线和循线）已发现时发布一条 start；发布后
-    # 保持 publisher 一秒以完成 DDS 发送。发现不足即失败，不重发第二条命令。
-    timeout "${START_PUBLISH_TIMEOUT_SEC}s" python3 - \
-        "$START_PUBLISH_TIMEOUT_SEC" "$START_MIN_SUBSCRIBERS" <<'PY'
-import os
-import sys
-import time
-
-import rclpy
-from std_msgs.msg import Bool
-
-timeout_sec = float(sys.argv[1])
-required_subscribers = int(sys.argv[2])
-if required_subscribers < 1:
-    raise ValueError('START_MIN_SUBSCRIBERS must be at least one')
-
-rclpy.init()
-node = rclpy.create_node('competition_start_publisher_{}'.format(os.getpid()))
-try:
-    publisher = node.create_publisher(Bool, '/mission/start', 10)
-    deadline = time.monotonic() + max(0.1, timeout_sec - 1.1)
-    while publisher.get_subscription_count() < required_subscribers:
-        if time.monotonic() >= deadline:
-            raise RuntimeError(
-                'mission_start_subscriber_discovery_timeout_{}'.format(
-                    publisher.get_subscription_count()
-                )
-            )
-        rclpy.spin_once(node, timeout_sec=0.1)
-
-    message = Bool(data=True)
-    publisher.publish(message)
-    # 与旧 CLI 的 keep-alive 等价，但不会额外 publish；确保一次消息有传输窗口。
-    drain_deadline = time.monotonic() + 1.0
-    while rclpy.ok() and time.monotonic() < drain_deadline:
-        rclpy.spin_once(node, timeout_sec=0.1)
-    print(
-        'MISSION_START_PUBLISHED subscriber_count={}'.format(
-            publisher.get_subscription_count()
-        )
-    )
-finally:
-    node.destroy_node()
-    if rclpy.ok():
-        rclpy.shutdown()
-PY
-}
-
-start_state_confirmed() {
-    local sample
-
-    # Foxy 兼容：使用原生 rclpy observer 替代不支持的 ros2 topic echo --field
-    sample="$(timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" \
-        python3 "${SCRIPT_DIR}/non_arm_smoke_observer.py" \
-        /mission/line_course_state \
-        --once --dump \
-        --timeout-sec "$TOPIC_SAMPLE_TIMEOUT_SEC" \
-        2>/dev/null || true)"
-    if [ -z "$sample" ]; then
-        return 1
-    fi
-    printf '%s' "$sample" | python3 -c '
-import ast
-import json
-import sys
-
-rows = [row.strip() for row in sys.stdin.read().splitlines() if row.strip()]
-if not rows:
-    raise SystemExit(1)
-payload = None
-for text in reversed(rows):
-    try:
-        value = json.loads(text)
-    except (TypeError, ValueError):
-        try:
-            value = json.loads(ast.literal_eval(text))
-        except (SyntaxError, TypeError, ValueError):
-            continue
-    if isinstance(value, dict):
-        payload = value
-        break
-if payload is None:
-    raise SystemExit(1)
-route_phase = str(payload.get("route_phase", "")).strip()
-accepted = (
-    payload.get("mission_started") is True
-    and bool(str(payload.get("run_id", "")).strip())
-    # 若视觉输入已就绪，路线可在同一状态采样周期离开 START_STAGE；确认
-    # start 只要求 run 已建立且未回到 WAIT_START/故障，不把正常推进误判失败。
-    and route_phase not in (
-        "",
-        "WAIT_START",
-        "EMERGENCY_STOP",
-        "FAULTED",
-    )
-)
-if accepted:
-    print(
-        "MISSION_START_STATE run_id={} state={} route_phase={}".format(
-            str(payload.get("run_id", "")).strip(),
-            str(payload.get("state", "")).strip(),
-            route_phase,
-        )
-    )
-raise SystemExit(not accepted)
-'
+deliver_formal_start_with_dual_ack() {
+    # 不用固定 sleep 猜测 DDS 是否送达：交付器订阅路线和循线状态，只有双 ACK
+    # 同时成立才成功。输出 JSON 供验收记录逻辑请求数、传输数和唯一 run_id。
+    PYTHONPATH="${WORKSPACE_DIR}/src/rk_bringup${PYTHONPATH:+:${PYTHONPATH}}" \
+        timeout "${START_CONFIRM_TIMEOUT_SEC}s" python3 -m \
+        rk_bringup.mission_start_delivery \
+        --timeout-sec "$START_CONFIRM_TIMEOUT_SEC" \
+        --min-subscribers "$START_MIN_SUBSCRIBERS" \
+        --max-transport-publishes "$START_MAX_TRANSPORT_PUBLISHES" \
+        --retransmit-interval-sec "$START_RETRANSMIT_INTERVAL_SEC"
 }
 
 ENV_SCRIPT="$(resolve_env_script)"
@@ -259,19 +162,10 @@ if ! readiness_passes; then
     exit 1
 fi
 
-if ! publish_formal_start_once; then
-    echo "ERROR: failed to publish one /mission/start message." >&2
+if ! deliver_formal_start_with_dual_ack; then
+    echo "ERROR: mission start dual-ACK delivery failed; no unconfirmed task start is accepted." >&2
+    # 已发送但未获得双 ACK 时不能假定两个消费者状态一致，主动请求安全停止。
+    safe_stop_after_start_failure
     exit 1
 fi
-
-deadline=$(( $(date +%s) + START_CONFIRM_TIMEOUT_SEC ))
-while [ "$(date +%s)" -lt "$deadline" ]; do
-    if start_state_confirmed; then
-        echo "Mission start accepted once; run_id established and route left WAIT_START."
-        exit 0
-    fi
-    sleep 0.2
-done
-
-safe_stop_after_start_failure
-exit 1
+echo "Mission start accepted once; route and follower dual ACK established."

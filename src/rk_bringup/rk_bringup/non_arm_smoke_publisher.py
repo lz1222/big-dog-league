@@ -48,6 +48,9 @@ class NonArmSmokePublisher(Node):
         self._started_at = time.monotonic()
         self._started = False
         self._mission_started_at = None
+        # 交付器可为同一个逻辑请求进行有限 DDS 重传；输入器只记首条并冻结
+        # START_READY 时间窗，后续重复消息绝不能把路线或 follower 重置回起点。
+        self._mission_start_messages = 0
         self._prestart_sent = False
         self._white_pulses = {'START': 0, 'FINISH': 0}
         self._red_pulses = 0
@@ -160,9 +163,11 @@ class NonArmSmokePublisher(Node):
                 self._started = True
 
     def _on_mission_start(self, msg):
-        """与 follower 同时观察 start，立即冻结新线帧以验证 START_READY 零速。"""
-        if bool(msg.data) and self._mission_started_at is None:
-            self._mission_started_at = time.monotonic()
+        """观察同一逻辑 start 的重传；只首条影响 smoke 输入状态机。"""
+        if bool(msg.data):
+            self._mission_start_messages += 1
+            if self._mission_started_at is None:
+                self._mission_started_at = time.monotonic()
 
     def _on_line_follower_status(self, msg):
         """只观察真实 follower 的 ready 状态，绝不伪造 START_READY 结果。"""
@@ -378,6 +383,7 @@ class NonArmSmokePublisher(Node):
         payload = {
             'scenario': self.scenario,
             'started': self._started,
+            'mission_start_messages_observed': self._mission_start_messages,
             'start_ready_hold_active': bool(
                 self._mission_started_at is not None
                 and time.monotonic() - self._mission_started_at

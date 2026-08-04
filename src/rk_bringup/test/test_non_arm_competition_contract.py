@@ -350,7 +350,7 @@ def test_smoke_helper_requires_normalized_marked_elf(tmp_path):
     )
 
 
-def test_start_script_publishes_one_start_and_acceptance_uses_compiled_elf():
+def test_start_script_uses_bounded_dual_ack_delivery_and_compiled_elf():
     start_script = (
         PACKAGE_ROOT / 'scripts' / 'mission_start.sh'
     ).read_text(encoding='utf-8')
@@ -358,12 +358,13 @@ def test_start_script_publishes_one_start_and_acceptance_uses_compiled_elf():
         WORKSPACE_ROOT / 'scripts' / 'accept_non_arm_competition.sh'
     ).read_text(encoding='utf-8')
 
-    # 失败回滚可以发布 /mission/stop；正式 start 先等关键订阅者发现，
-    # 仍只执行一次 native publisher.publish，不能退化成多次 topic pub 重试。
-    assert 'publish_formal_start_once' in start_script
-    assert 'publisher.get_subscription_count() < required_subscribers' in start_script
-    assert start_script.count('publisher.publish(message)') == 1
-    assert 'MISSION_START_STATE run_id=' in start_script
+    # 一次逻辑请求可有有限可靠重传，但必须等路线和循线双 ACK，不能用
+    # 单条消息或固定 sleep 推测 DDS 已交付。
+    assert 'deliver_formal_start_with_dual_ack' in start_script
+    assert 'mission_start_delivery' in start_script
+    assert 'START_MAX_TRANSPORT_PUBLISHES' in start_script
+    assert 'START_RETRANSMIT_INTERVAL_SEC' in start_script
+    assert 'safe_stop_after_start_failure' in start_script
     assert '/competition/check_readiness' in start_script
     assert 'fake_sdk_motion_helper.c' in acceptance_script
     assert 'fake_sdk_action_executable:="$FAKE_HELPER"' in acceptance_script
@@ -757,6 +758,36 @@ def test_gid_gate_no_publishers_fail():
     )
     assert not ok, 'no publishers must fail'
     assert 'raw_count=0' in detail, detail
+
+
+def test_mission_start_uses_reliable_volatile_dual_ack_delivery():
+    """正式 start 不能以单次 publish 或固定 sleep 假定两个消费者已接收。"""
+    delivery_source = (
+        PACKAGE_ROOT / 'rk_bringup' / 'mission_start_delivery.py'
+    ).read_text(encoding='utf-8')
+    start_script = (
+        PACKAGE_ROOT / 'scripts' / 'mission_start.sh'
+    ).read_text(encoding='utf-8')
+    smoke_source = (
+        PACKAGE_ROOT / 'rk_bringup' / 'non_arm_smoke_publisher.py'
+    ).read_text(encoding='utf-8')
+
+    assert 'ReliabilityPolicy.RELIABLE' in delivery_source
+    assert 'DurabilityPolicy.VOLATILE' in delivery_source
+    assert 'HistoryPolicy.KEEP_LAST' in delivery_source
+    assert 'depth=10' in delivery_source
+    assert 'TRANSIENT_LOCAL' not in delivery_source
+    assert "'/mission/line_course_state'" in delivery_source
+    assert "'/navigation/line_follow_status'" in delivery_source
+    assert 'route_start_ack' in delivery_source
+    assert 'follower_start_ack' in delivery_source
+    assert 'route_run_id_changed' in delivery_source
+    assert 'start_delivery_ack_timeout' in delivery_source
+    assert 'mission_start_delivery' in start_script
+    assert 'START_MAX_TRANSPORT_PUBLISHES' in start_script
+    # smoke 只对首个 start 改变输入时序，重传不会重置其状态机。
+    assert '_mission_start_messages' in smoke_source
+    assert 'mission_start_messages_observed' in smoke_source
 
 
 def test_gait_inspection_readiness_see_consistent_mode():
