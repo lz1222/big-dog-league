@@ -118,3 +118,11 @@ def test_acceptance_uses_one_preflighted_path_and_stream_final_stop():
     )
     assert 'topic_stream_json_matches "$LINE_COURSE_STREAM" route_phase FINAL_STOP' in source
     assert '"$WHITE_STAGE_PUBLISHER_STREAM" sequence 2' in source
+
+
+def test_acceptance_uses_native_twist_observer_to_avoid_foxy_discovery_race():
+    """Twist 流必须是只读 rclpy 订阅，不能依赖一次性 ros2 CLI 发现。"""
+    source = SCRIPT_PATH.read_text(encoding='utf-8')
+
+    assert '"$topic_name" --twist --timeout-sec' in source
+    assert 'ros2 topic echo "$topic_name"' not in source

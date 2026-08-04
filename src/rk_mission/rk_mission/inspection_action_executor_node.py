@@ -227,6 +227,7 @@ class InspectionActionExecutorNode(Node):
         self.declare_parameter('sdk_network_interface', 'eth0')
         # 正式 launch 必须传入 install 下的可解析绝对路径，不能依赖 cwd 猜测。
         self.declare_parameter('sdk_action_executable', '')
+        self.declare_parameter('sdk_runtime_wrapper', '')
         self.declare_parameter('software_smoke_mode', False)
         self.declare_parameter('helper_poll_interval_sec', 0.05)
         self.declare_parameter('helper_terminate_grace_sec', 0.50)
@@ -301,6 +302,9 @@ class InspectionActionExecutorNode(Node):
             raise ValueError('sdk_network_interface must not be empty')
         self.sdk_action_executable = str(
             self.get_parameter('sdk_action_executable').value
+        ).strip()
+        self.sdk_runtime_wrapper = str(
+            self.get_parameter('sdk_runtime_wrapper').value
         ).strip()
         self.software_smoke_mode = self._bool_parameter(
             'software_smoke_mode'
@@ -489,16 +493,13 @@ class InspectionActionExecutorNode(Node):
                     terminate_grace_sec=self.helper_terminate_grace_sec,
                     kill_grace_sec=self.helper_kill_grace_sec,
                 )
+                command = self._sdk_helper_command(executable, sdk_action)
                 result = runner.run(
-                    [
-                        executable,
-                        self.sdk_network_interface,
-                        sdk_action,
-                        '0',
-                    ],
+                    command,
                     self.sdk_action_timeout_sec,
                     cancel_event,
                     environment=os.environ.copy(),
+                    expected_executable=executable,
                 )
                 result_state = result.terminal_state
                 reason = result.reason
@@ -565,6 +566,23 @@ class InspectionActionExecutorNode(Node):
         ):
             raise RuntimeError('software_smoke_helper_identity_rejected')
         return resolved
+
+    def _sdk_helper_command(self, executable, sdk_action):
+        """生产 helper 经 exec wrapper 启动；smoke 保留测试 ELF 原路径。"""
+        command = [
+            executable,
+            self.sdk_network_interface,
+            sdk_action,
+            '0',
+        ]
+        if self.software_smoke_mode:
+            return command
+        wrapper = self.sdk_runtime_wrapper
+        if not os.path.isabs(wrapper):
+            raise RuntimeError('sdk_runtime_wrapper_must_be_absolute')
+        if not os.path.isfile(wrapper) or not os.access(wrapper, os.X_OK):
+            raise RuntimeError('sdk_runtime_wrapper_not_executable')
+        return [wrapper] + command
 
     def _validate_network_interface(self):
         """software smoke 的假 helper 不碰 Unitree SDK，其余模式验证真实接口。"""

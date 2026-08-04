@@ -27,6 +27,7 @@ set(RK_UNITREE_SDK2_INSTALL_CANDIDATES
 set(RK_UNITREE_SDK2_PREFIX "")
 set(RK_UNITREE_SDK2_RUNTIME_DIRS "")
 set(RK_UNITREE_SDK2_INCLUDE_DIRS "")
+set(RK_UNITREE_DDS_RUNTIME_INSTALL_DIR "unitree_sdk_runtime")
 
 foreach(candidate ${RK_UNITREE_SDK2_INSTALL_CANDIDATES})
   if(candidate AND
@@ -89,6 +90,19 @@ foreach(include_candidate
 endforeach()
 list(REMOVE_DUPLICATES RK_UNITREE_SDK2_INCLUDE_DIRS)
 
+# SDK 进程必须携带同一对 CycloneDDS 库，不能依赖开发机源码树或 ROS shell。
+# 配置仅保存相对安装目录，wrapper 会相对自身安装位置解析它。
+if(RK_UNITREE_SDK2_RUNTIME_DIRS)
+  list(GET RK_UNITREE_SDK2_RUNTIME_DIRS 0 RK_UNITREE_SDK2_RUNTIME_DIR)
+  set(RK_UNITREE_SDK2_RUNTIME_RELATIVE_DIR
+    "${RK_UNITREE_DDS_RUNTIME_INSTALL_DIR}")
+  configure_file(
+    scripts/go2_sdk_runtime_dir.txt.in
+    "${CMAKE_CURRENT_BINARY_DIR}/go2_sdk_runtime_dir.txt"
+    @ONLY
+  )
+endif()
+
 function(rk_configure_unitree_sdk_target target_name)
   target_include_directories(${target_name} BEFORE PRIVATE
     ${RK_UNITREE_SDK2_INCLUDE_DIRS}
@@ -98,8 +112,11 @@ function(rk_configure_unitree_sdk_target target_name)
   )
   set_target_properties(${target_name} PROPERTIES
     BUILD_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
-    INSTALL_RPATH "${RK_UNITREE_SDK2_RUNTIME_DIRS}"
+    INSTALL_RPATH "\$ORIGIN/${RK_UNITREE_DDS_RUNTIME_INSTALL_DIR}"
   )
+  # DT_RPATH 优先于父 LD_LIBRARY_PATH，阻止所有 SDK 工具混入 ROS DDS 库。
+  set_property(TARGET ${target_name} APPEND_STRING
+    PROPERTY LINK_FLAGS " -Wl,--disable-new-dtags")
 endfunction()
 
 install(PROGRAMS
@@ -107,8 +124,29 @@ install(PROGRAMS
   scripts/warning_sign_image_classifier.py
   scripts/go2_warning_sign_sdk_loop.sh
   scripts/go2_front_camera_bridge.py
+  scripts/go2_sdk_server_runtime.py
   DESTINATION lib/${PROJECT_NAME}
 )
+
+if(RK_UNITREE_SDK2_RUNTIME_DIRS)
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/go2_sdk_runtime_dir.txt"
+    DESTINATION lib/${PROJECT_NAME}
+  )
+  # 保留 SONAME 名称和开发链接名，确保安装树可脱离源码树独立解析。
+  install(FILES
+    "${RK_UNITREE_SDK2_RUNTIME_DIR}/libddsc.so"
+    "${RK_UNITREE_SDK2_RUNTIME_DIR}/libddscxx.so"
+    DESTINATION lib/${PROJECT_NAME}/${RK_UNITREE_DDS_RUNTIME_INSTALL_DIR}
+  )
+  install(FILES "${RK_UNITREE_SDK2_RUNTIME_DIR}/libddsc.so"
+    DESTINATION lib/${PROJECT_NAME}/${RK_UNITREE_DDS_RUNTIME_INSTALL_DIR}
+    RENAME libddsc.so.0
+  )
+  install(FILES "${RK_UNITREE_SDK2_RUNTIME_DIR}/libddscxx.so"
+    DESTINATION lib/${PROJECT_NAME}/${RK_UNITREE_DDS_RUNTIME_INSTALL_DIR}
+    RENAME libddscxx.so.0
+  )
+endif()
 
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
@@ -133,10 +171,6 @@ if(unitree_sdk2_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
   rk_configure_unitree_sdk_target(go2_front_camera_stream_helper)
-  # 使用 DT_RPATH 而非 RUNPATH，使 SDK 的 libddsc 优先于 ROS 环境中
-  # 同名但 ABI 不兼容的库，避免 helper 在启动时出现符号解析失败。
-  set_property(TARGET go2_front_camera_stream_helper APPEND_STRING
-    PROPERTY LINK_FLAGS " -Wl,--disable-new-dtags")
   add_executable(go2_sdk_speed_sweep src/go2_sdk_speed_sweep.cpp)
   rk_configure_unitree_sdk_target(go2_sdk_speed_sweep)
   add_executable(go2_sdk_motion_action
@@ -196,6 +230,13 @@ if(BUILD_TESTING)
     NAME test_front_camera_bridge
     COMMAND python3 -m pytest
       "${CMAKE_CURRENT_SOURCE_DIR}/test/test_front_camera_bridge.py"
+      -v --tb=short
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  add_test(
+    NAME test_sdk_server_runtime
+    COMMAND python3 -m pytest
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sdk_server_runtime.py"
       -v --tb=short
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   )

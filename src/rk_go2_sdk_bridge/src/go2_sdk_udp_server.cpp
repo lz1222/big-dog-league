@@ -8,10 +8,12 @@
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <sys/select.h>
@@ -138,6 +140,54 @@ double WallTimeSeconds()
 {
   return std::chrono::duration<double>(
       std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::string EnvironmentValue(const char* name)
+{
+  const char* value = std::getenv(name);
+  return value == nullptr ? "<unset>" : value;
+}
+
+std::uint64_t Fingerprint(const std::string& value)
+{
+  // FNV-1a 只用于比对启动环境，不输出完整的库搜索路径。
+  std::uint64_t hash = 1469598103934665603ULL;
+  for (const unsigned char character : value) {
+    hash ^= character;
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+void LogLoadedDdsLibraries()
+{
+  // /proc/self/maps 是动态加载器的实际结果，可避免日志只记录期望路径。
+  std::ifstream maps("/proc/self/maps");
+  std::string line;
+  while (std::getline(maps, line)) {
+    if (line.find("/libddsc.so") != std::string::npos ||
+        line.find("/libddscxx.so") != std::string::npos) {
+      const std::size_t path_begin = line.find('/');
+      if (path_begin != std::string::npos) {
+        std::cout << "[SDK] runtime loaded_dds_library="
+                  << line.substr(path_begin) << std::endl;
+      }
+    }
+  }
+}
+
+void LogRuntimeDiagnostics(const ServerConfig& config)
+{
+  const std::string library_path = EnvironmentValue("LD_LIBRARY_PATH");
+  std::cout << "[SDK] runtime pid=" << getpid()
+            << " executable=/proc/self/exe"
+            << " interface=" << config.network_interface
+            << " channel_factory_domain=0"
+            << " ld_library_path_fingerprint=0x" << std::hex
+            << Fingerprint(library_path) << std::dec
+            << " cyclonedds_uri=" << EnvironmentValue("CYCLONEDDS_URI")
+            << std::endl;
+  LogLoadedDdsLibraries();
 }
 
 double MonotonicSeconds(
@@ -284,6 +334,8 @@ int RunServer(const ServerConfig& config)
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
+  LogRuntimeDiagnostics(config);
+
   std::cout << "[SDK] Init ChannelFactory on "
             << config.network_interface << std::endl;
   unitree::robot::ChannelFactory::Instance()->Init(
@@ -291,7 +343,12 @@ int RunServer(const ServerConfig& config)
 
   unitree::robot::go2::SportClient client;
   client.SetTimeout(10.0F);
+  const double init_started = WallTimeSeconds();
   client.Init();
+  std::cout << std::fixed << std::setprecision(6)
+            << "[SDK] time=" << WallTimeSeconds()
+            << " SportClient::Init elapsed_sec="
+            << (WallTimeSeconds() - init_started) << std::endl;
   EmergencyStopGuard stop_guard(client);
 
   // 启动时只清除残留运动，不调用 BalanceStand，避免擅自改变当前步态。

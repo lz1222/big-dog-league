@@ -122,6 +122,7 @@ def generate_launch_description():
     start_go2_front_camera = LaunchConfiguration('start_go2_front_camera')
     enable_debug_image = LaunchConfiguration('enable_debug_image')
     sdk_network_interface = LaunchConfiguration('sdk_network_interface')
+    sdk_server_runtime = LaunchConfiguration('sdk_server_runtime')
     stream_helper = LaunchConfiguration('stream_helper')
     line_image_topic = LaunchConfiguration('line_image_topic')
     sign_image_topic = LaunchConfiguration('sign_image_topic')
@@ -255,6 +256,15 @@ def generate_launch_description():
             default_value=[FindPackagePrefix('rk_go2_sdk_bridge'),
                            '/lib/rk_go2_sdk_bridge/go2_sdk_udp_server'],
             description='Production Go2 UDP server executable.',
+        ),
+        DeclareLaunchArgument(
+            'sdk_server_runtime',
+            default_value=[FindPackagePrefix('rk_go2_sdk_bridge'),
+                           '/lib/rk_go2_sdk_bridge/go2_sdk_server_runtime.py'],
+            description=(
+                'Installed wrapper that isolates the Unitree SDK DDS '
+                'runtime before starting sdk_server.'
+            ),
         ),
         DeclareLaunchArgument(
             'sdk_udp_host', default_value='127.0.0.1',
@@ -424,6 +434,9 @@ def generate_launch_description():
                 'front_jump.sdk_action_executable': ParameterValue(
                     selected_sdk_helper, value_type=str
                 ),
+                'front_jump.sdk_runtime_wrapper': ParameterValue(
+                    sdk_server_runtime, value_type=str
+                ),
                 'front_jump.cleanup_guard_path': ParameterValue(
                     selected_cleanup_guard, value_type=str
                 ),
@@ -443,6 +456,9 @@ def generate_launch_description():
                 ),
                 'sdk_action_executable': ParameterValue(
                     selected_sdk_helper, value_type=str
+                ),
+                'sdk_runtime_wrapper': ParameterValue(
+                    sdk_server_runtime, value_type=str
                 ),
                 'estop_state_stale_timeout_sec': smoke_estop_stale_timeout,
                 'software_smoke_mode': ParameterValue(
@@ -499,6 +515,9 @@ def generate_launch_description():
                 'stream_helper': ParameterValue(
                     stream_helper, value_type=str
                 ),
+                'sdk_runtime_wrapper': ParameterValue(
+                    sdk_server_runtime, value_type=str
+                ),
             }],
         ),
         Node(
@@ -534,8 +553,11 @@ def generate_launch_description():
             }],
         ),
         # SDK server/forwarder 仅在真实硬件模式存在，软件测试没有网络出口。
+        # ROS Foxy 节点继续继承其自身环境；SDK server 经安装树 wrapper 启动，
+        # 仅加载构建时确认的一对 Unitree CycloneDDS 库。
         ExecuteProcess(
-            cmd=[sdk_server], output='log', condition=use_hardware_sdk_server,
+            cmd=[sdk_server_runtime, sdk_server], output='log',
+            condition=use_hardware_sdk_server,
         ),
         Node(
             package='rk_go2_sdk_bridge',

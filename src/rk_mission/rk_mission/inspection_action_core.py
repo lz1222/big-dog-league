@@ -699,7 +699,10 @@ class ProcessGroupHelperRunner:
         self._sleeper = sleeper or time.sleep
         self._popen_factory = popen_factory or subprocess.Popen
 
-    def run(self, argv, timeout_sec, cancel_event, *, environment=None):
+    def run(
+        self, argv, timeout_sec, cancel_event, *, environment=None,
+        expected_executable=None,
+    ):
         """运行固定 argv；timeout/cancel 均先 SIGTERM、后 SIGKILL、最后 wait。"""
         timeout_sec = finite_float(
             timeout_sec, 'sdk_action_timeout_sec', positive=True
@@ -728,7 +731,9 @@ class ProcessGroupHelperRunner:
                 True,
             )
 
-        identity = self._capture_identity(process, command[0])
+        identity = self._capture_identity(
+            process, expected_executable or command[0]
+        )
         if identity is False:
             self._best_effort_leader_cleanup(process)
             return HelperRunResult(

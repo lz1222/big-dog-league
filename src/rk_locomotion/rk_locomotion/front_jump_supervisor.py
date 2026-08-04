@@ -863,6 +863,8 @@ class FrontJumpConfig:
     zero_publish_rate_hz: float
     final_cmd_stale_timeout: float
     estop_state_stale_timeout: float
+    # 正式链由安装树 wrapper exec 真 helper；smoke 则故意保持 fake ELF 直启。
+    sdk_runtime_wrapper: str = ''
     # smoke 只允许仓库测试 ELF，绝不允许调用 Unitree SDK helper。
     software_smoke_mode: bool = False
 
@@ -879,6 +881,12 @@ class FrontJumpConfig:
             )
         object.__setattr__(self, 'sdk_action_executable', executable)
         object.__setattr__(self, 'sdk_network_interface', interface)
+        if not isinstance(self.sdk_runtime_wrapper, str):
+            raise FrontJumpConfigurationError(
+                'sdk_runtime_wrapper must be a string'
+            )
+        object.__setattr__(self, 'sdk_runtime_wrapper',
+                           self.sdk_runtime_wrapper.strip())
         object.__setattr__(
             self,
             'zero_publish_rate_hz',
@@ -1214,7 +1222,8 @@ class _SubprocessHandle:
 class SubprocessRunner:
     """Start the real SDK helper as a fixed argv process."""
 
-    def start(self, argv):
+    def start(self, argv, *, expected_executable=None):
+        """启动 helper；wrapper exec 后按真实 helper 校验 PID 身份。"""
         stdout_file = tempfile.TemporaryFile(mode='w+b')
         stderr_file = tempfile.TemporaryFile(mode='w+b')
         process = None
@@ -1230,7 +1239,7 @@ class SubprocessRunner:
                 process,
                 stdout_file,
                 stderr_file,
-                argv[0],
+                expected_executable or argv[0],
             )
         except Exception as error:
             cleanup_completed = process is None
@@ -2337,6 +2346,20 @@ class FrontJumpSupervisor:
             'front_jump',
             '0',
         ]
+        if not self.config.software_smoke_mode \
+                and self.config.sdk_runtime_wrapper:
+            wrapper = os.path.realpath(self.config.sdk_runtime_wrapper)
+            if (
+                not os.path.isabs(wrapper)
+                or not os.path.isfile(wrapper)
+                or not os.access(wrapper, os.X_OK)
+            ):
+                raise _FlowExit(
+                    'abort', context.stage,
+                    'sdk_runtime_wrapper_not_executable',
+                )
+            # wrapper 使用 execve，不增加存活父进程；身份仍须是实际 SDK helper。
+            argv = [wrapper] + argv
         self._raise_if_interrupted(context, require_fresh_estop=True)
         if not self._final_zero_gate_is_ready(context, self._clock()):
             raise _FlowExit(
@@ -2345,7 +2368,13 @@ class FrontJumpSupervisor:
                 'final_cmd_zero_gate_lost_before_helper',
             )
         try:
-            process = self._process_runner.start(argv)
+            if isinstance(self._process_runner, SubprocessRunner):
+                process = self._process_runner.start(
+                    argv, expected_executable=executable
+                )
+            else:
+                # 注入 runner 的单参协议属于既有测试/故障注入接口，保持兼容。
+                process = self._process_runner.start(argv)
         except Exception as error:
             process_started = bool(
                 getattr(error, 'process_started', False)

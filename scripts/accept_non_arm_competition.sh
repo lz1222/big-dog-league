@@ -441,8 +441,8 @@ wait_until() {
 
 start_topic_observer() {
     # 先建立长期订阅再发布 start，避免冷启动 CLI 因 DDS 发现错过短暂阶段。
-    # Foxy 的 ros2 topic echo 不支持 --field，因此使用原生 rclpy observer
-    # 作为替代。Twist observer（无 field）仍保留 ros2 CLI。
+    # 全部使用原生 rclpy observer：Foxy 的 ros2 topic echo 会在图发现尚未
+    # 完成时直接退出，导致只读验收误报。observer 不会发布任何 ROS 消息。
     local topic_name="$1"
     local output_file="$2"
     local field_name="${3:-}"
@@ -456,9 +456,10 @@ start_topic_observer() {
             > "$output_file" 2>&1 &
         TOPIC_OBSERVER_PIDS+=("$!")
     else
-        # Twist observer：ros2 topic echo 在 Foxy 正常工作
+        # Twist observer 输出与原 ros2 topic echo 一致的 YAML 字段。
         env PYTHONUNBUFFERED=1 timeout "${TOPIC_OBSERVER_TIMEOUT_SEC}s" \
-            ros2 topic echo "$topic_name" \
+            python3 "$WORKSPACE_DIR/src/rk_bringup/scripts/non_arm_smoke_observer.py" \
+            "$topic_name" --twist --timeout-sec "$TOPIC_OBSERVER_TIMEOUT_SEC" \
             > "$output_file" 2>&1 &
         TOPIC_OBSERVER_PIDS+=("$!")
     fi
@@ -891,7 +892,16 @@ if ! wait_until 8 final_cmd_is_zero; then
     exit 1
 fi
 
-CMD_INFO="$(timeout 12s ros2 topic info -v /navigation/cmd_vel 2>&1 || true)"
+CMD_INFO=""
+# 新 CLI 进程的 DDS 图缓存需要短暂发现窗口；有界重试只读取图信息，避免
+# 已被长期 observer 证实存在的 topic 因单次查询过早而误报不可用。
+for _ in $(seq 1 25); do
+    CMD_INFO="$(timeout 2s ros2 topic info -v /navigation/cmd_vel 2>&1 || true)"
+    if printf '%s\n' "$CMD_INFO" | grep -Eq 'Type:|Publisher count:'; then
+        break
+    fi
+    sleep 0.2
+done
 if [ -z "$CMD_INFO" ]; then
     echo "ERROR: final cmd_vel topic info is unavailable." >&2
     exit 1

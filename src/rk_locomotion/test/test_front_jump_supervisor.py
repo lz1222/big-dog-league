@@ -315,6 +315,27 @@ class Harness:
         )
 
 
+def test_production_front_jump_uses_runtime_wrapper_before_sdk_helper(tmp_path):
+    """正式前跳必须经 exec wrapper；测试 runner 不会运行任何 SDK 程序。"""
+    wrapper = tmp_path / 'go2_sdk_server_runtime.py'
+    wrapper.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+    wrapper.chmod(0o700)
+    harness = successful_harness(
+        config_overrides={'sdk_runtime_wrapper': str(wrapper)},
+    )
+
+    outcome = harness.run()
+
+    assert outcome.success
+    assert harness.runner.calls[0] == [
+        str(wrapper.resolve()),
+        '/fake/helper',
+        'fake0',
+        'front_jump',
+        '0',
+    ]
+
+
 def successful_harness(**kwargs):
     harness = Harness(**kwargs)
     harness.on_wait = (

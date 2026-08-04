@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
-"""只读 String Topic observer，替代 Foxy 不支持的 ``ros2 topic echo --field``。
+"""只读 ROS Topic observer，避免 Foxy ``ros2 topic echo`` 的发现竞态。
 
-Twist Topic 仍使用 ``ros2 topic echo``（Foxy 原生支持，无需 --field）。
+String 主题逐行输出 ``msg.data``；Twist 主题输出稳定的 YAML 片段，供
+Software Smoke 检查最终速度。两种模式都只建立订阅，不创建会影响机器人的
+Publisher、Service 或 Action。
 
 本脚本不创建 Publisher、Service 或 Action，不会向机器人发送任何命令。
 
@@ -20,6 +22,7 @@ import time
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 
 _OBSERVER_PREAMBLE = '__NON_ARM_SMOKE_OBSERVER_READY__'
@@ -138,6 +141,28 @@ class StreamStringObserver(Node):
         sys.stdout.flush()
 
 
+class StreamTwistObserver(Node):
+    """持续订阅 Twist，并以现有 shell 检查兼容的 YAML 写入 stdout。"""
+
+    def __init__(self, topic_name):
+        super().__init__('smoke_twist_' + _unique_suffix())
+        self.create_subscription(Twist, topic_name, self._on_twist, 10)
+
+    @staticmethod
+    def _on_twist(msg):
+        # 字段顺序与 ros2 topic echo 保持一致，避免改变既有零速判定语义。
+        sys.stdout.write(
+            'linear:\n'
+            '  x: {}\n  y: {}\n  z: {}\n'
+            'angular:\n'
+            '  x: {}\n  y: {}\n  z: {}\n---\n'.format(
+                msg.linear.x, msg.linear.y, msg.linear.z,
+                msg.angular.x, msg.angular.y, msg.angular.z,
+            )
+        )
+        sys.stdout.flush()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Foxy-compatible read-only String topic observer'
@@ -150,12 +175,19 @@ def main():
     parser.add_argument('--match-key')
     parser.add_argument('--match-value', default='')
     parser.add_argument('--value-key')
+    parser.add_argument(
+        '--twist', action='store_true',
+        help='Observe geometry_msgs/Twist and emit compatible YAML samples',
+    )
     args = parser.parse_args()
 
     if args.once and not args.dump and not args.match_key and not args.value_key:
         sys.stderr.write(
             '--once requires --dump, --match-key or --value-key\n'
         )
+        sys.exit(2)
+    if args.twist and (args.once or args.dump or args.match_key or args.value_key):
+        sys.stderr.write('--twist only supports stream mode\n')
         sys.exit(2)
 
     rclpy.init(args=[])
@@ -174,6 +206,8 @@ def main():
             node = OnceValueObserver(
                 args.topic_name, args.value_key, args.timeout_sec,
             )
+        elif args.twist:
+            node = StreamTwistObserver(args.topic_name)
         else:
             node = StreamStringObserver(args.topic_name)
 

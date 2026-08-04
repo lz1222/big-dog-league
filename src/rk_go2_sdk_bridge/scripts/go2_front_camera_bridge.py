@@ -290,6 +290,7 @@ class Go2FrontCameraBridgeNode(Node):
         self.declare_parameter('max_helper_restarts', 3)
         self.declare_parameter('stream_helper', '')
         self.declare_parameter('sdk_library_path', '')
+        self.declare_parameter('sdk_runtime_wrapper', '')
 
     def _read_parameters(self):
         self.network_interface = self._str_param('network_interface')
@@ -307,6 +308,8 @@ class Go2FrontCameraBridgeNode(Node):
         self._resolved_stream_helper = _resolve_helper(stream_helper)
         self._sdk_library_path = self._str_param(
             'sdk_library_path', empty_ok=True)
+        self._sdk_runtime_wrapper = self._str_param(
+            'sdk_runtime_wrapper', empty_ok=True)
 
     # ---- helper lifecycle ----
 
@@ -326,6 +329,9 @@ class Go2FrontCameraBridgeNode(Node):
             str(self.retry_sleep_sec),
             str(self.max_consecutive_retries),
         ]
+        if self._sdk_runtime_wrapper:
+            # wrapper 以 exec 替换自身，bridge 现有进程组回收仍直接作用于 helper。
+            command.insert(0, self._sdk_runtime_wrapper)
         try:
             process = subprocess.Popen(
                 command,

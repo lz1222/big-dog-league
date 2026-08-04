@@ -463,6 +463,9 @@ class GaitControlNode(Node):
                     'front_jump.estop_state_stale_timeout'
                 )
             ),
+            sdk_runtime_wrapper=self._front_jump_optional_string_parameter(
+                'front_jump.sdk_runtime_wrapper'
+            ),
             software_smoke_mode=self._bool_parameter(
                 'front_jump.software_smoke_mode'
             ),
@@ -900,6 +903,7 @@ class GaitControlNode(Node):
             'front_jump.finish.sdk_timeout': 12.0,
             'front_jump.finish.post_settle_duration': 2.5,
             'front_jump.sdk_action_executable': 'go2_sdk_motion_action',
+            'front_jump.sdk_runtime_wrapper': '',
             'front_jump.sdk_network_interface': 'eth0',
             'front_jump.zero_publish_rate_hz': 10.0,
             'front_jump.final_cmd_topic': '/navigation/cmd_vel',
@@ -3862,6 +3866,13 @@ class GaitControlNode(Node):
         value = self.get_parameter(name).value
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f'{name} must be a non-empty string')
+        return value.strip()
+
+    def _front_jump_optional_string_parameter(self, name):
+        """读取可选 runtime wrapper；空值保留旧的非正式调用兼容性。"""
+        value = self.get_parameter(name).value
+        if not isinstance(value, str):
+            raise ValueError(f'{name} must be a string')
         return value.strip()
 
     def _front_jump_positive_float_parameter(self, name):
