@@ -783,6 +783,15 @@ def test_mission_start_uses_reliable_volatile_dual_ack_delivery():
     assert 'follower_start_ack' in delivery_source
     assert 'route_run_id_changed' in delivery_source
     assert 'start_delivery_ack_timeout' in delivery_source
+    # 订阅总数仅用于诊断；首发必须通过 ROS 图确认两个正式消费者，且两个
+    # 状态流已经由对应节点实际预热，避免 smoke 观察者抢占 DDS 匹配名额。
+    assert 'get_subscriptions_info_by_topic' in delivery_source
+    assert 'required_route_subscriber_discovered' in delivery_source
+    assert 'required_follower_subscriber_discovered' in delivery_source
+    assert 'route_status_stream_observed' in delivery_source
+    assert 'follower_status_stream_observed' in delivery_source
+    assert 'required_start_subscriber_lost' in delivery_source
+    assert 'transport_publish_limit_reached' in delivery_source
     assert 'mission_start_delivery' in start_script
     assert 'START_MAX_TRANSPORT_PUBLISHES' in start_script
     # smoke 只对首个 start 改变输入时序，重传不会重置其状态机。
