@@ -22,6 +22,8 @@ for package_name in ('rk_navigation', 'rk_mission', 'rk_locomotion'):
 
 from rk_bringup.non_arm_competition_contract import (  # noqa: E402
     DEFAULT_IMAGE_TOPIC,
+    DEFAULT_LINE_IMAGE_TOPIC,
+    DEFAULT_SIGN_IMAGE_TOPIC,
     FORBIDDEN_FORMAL_NODE_MARKERS,
     REQUIRED_FORMAL_NODES,
     TEST_ONLY_SMOKE_HELPER_MARKER,
@@ -241,11 +243,28 @@ def test_formal_launch_declares_all_required_nodes_without_excluded_nodes():
 
 
 def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
+    """巡线与标识相机必须独立配置，并由 launch 覆盖 YAML 默认值。"""
     source = FORMAL_LAUNCH.read_text(encoding='utf-8')
+    config = read_formal_config()
 
     assert DEFAULT_IMAGE_TOPIC == '/camera/color/image_raw'
-    assert "LaunchConfiguration('image_topic')" in source
-    assert "'image_topic': image_topic" in source
+    assert DEFAULT_LINE_IMAGE_TOPIC == DEFAULT_IMAGE_TOPIC
+    assert DEFAULT_SIGN_IMAGE_TOPIC == '/go2/front_camera/image_raw'
+    assert "LaunchConfiguration('line_image_topic')" in source
+    assert "LaunchConfiguration('sign_image_topic')" in source
+    # 两个感知节点均把各自的启动参数置于 YAML 之后，避免 YAML 默认值
+    # 覆盖正式图的话题分流；不得恢复已废弃的全局 image_topic 启动参数。
+    assert "'image_topic': line_image_topic" in source
+    assert "'image_topic': sign_image_topic" in source
+    assert "LaunchConfiguration('image_topic')" not in source
+    assert (
+        config['real_line_tracker_node']['ros__parameters']['image_topic']
+        == DEFAULT_LINE_IMAGE_TOPIC
+    )
+    assert (
+        config['real_sign_detector_node']['ros__parameters']['image_topic']
+        == DEFAULT_SIGN_IMAGE_TOPIC
+    )
     assert "LaunchConfiguration('software_smoke_mode')" in source
     assert "use_hardware_realsense" in source
     assert "use_hardware_sdk_server" in source
@@ -255,13 +274,17 @@ def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
     # B2 修复后使用 ParameterValue(..., value_type=str) 包装
     assert "front_jump.sdk_action_executable" in source
     assert 'selected_sdk_helper' in source
+    assert '_SelectedSdkActionHelper' in source
     assert "sdk_action_executable" in source
     assert "front_jump.cleanup_guard_path" in source
     assert 'selected_cleanup_guard' in source
     assert "ParameterValue(" in source
     assert "value_type=str" in source
     assert "front_jump.software_smoke_mode" in source
-    assert "'fake_sdk_action_executable', default_value=''" in source
+    # smoke helper 必须由安装树提供的带标识假程序默认注入，不能回退为空
+    # 或 production basename；这保证 smoke 不会触碰真实 SDK helper。
+    assert "'fake_sdk_action_executable'" in source
+    assert "'/lib/rk_go2_sdk_bridge/fake_sdk_motion_helper'" in source
 
 
 @pytest.mark.parametrize(
@@ -327,7 +350,7 @@ def test_smoke_helper_requires_normalized_marked_elf(tmp_path):
     )
 
 
-def test_start_script_publishes_one_start_and_acceptance_uses_compiled_elf():
+def test_start_script_uses_bounded_dual_ack_delivery_and_compiled_elf():
     start_script = (
         PACKAGE_ROOT / 'scripts' / 'mission_start.sh'
     ).read_text(encoding='utf-8')
@@ -335,12 +358,13 @@ def test_start_script_publishes_one_start_and_acceptance_uses_compiled_elf():
         WORKSPACE_ROOT / 'scripts' / 'accept_non_arm_competition.sh'
     ).read_text(encoding='utf-8')
 
-    # 失败回滚可以发布 /mission/stop；正式 start 先等关键订阅者发现，
-    # 仍只执行一次 native publisher.publish，不能退化成多次 topic pub 重试。
-    assert 'publish_formal_start_once' in start_script
-    assert 'publisher.get_subscription_count() < required_subscribers' in start_script
-    assert start_script.count('publisher.publish(message)') == 1
-    assert 'MISSION_START_STATE run_id=' in start_script
+    # 一次逻辑请求可有有限可靠重传，但必须等路线和循线双 ACK，不能用
+    # 单条消息或固定 sleep 推测 DDS 已交付。
+    assert 'deliver_formal_start_with_dual_ack' in start_script
+    assert 'mission_start_delivery' in start_script
+    assert 'START_MAX_TRANSPORT_PUBLISHES' in start_script
+    assert 'START_RETRANSMIT_INTERVAL_SEC' in start_script
+    assert 'safe_stop_after_start_failure' in start_script
     assert '/competition/check_readiness' in start_script
     assert 'fake_sdk_motion_helper.c' in acceptance_script
     assert 'fake_sdk_action_executable:="$FAKE_HELPER"' in acceptance_script
@@ -417,20 +441,26 @@ def test_launch_uses_parameter_value_with_str_type_for_helper_paths():
                 )
 
 
-def test_launch_helper_expression_conditions():
-    """验证 helper 选择表达式始终存在且覆盖 hardware/smoke 两种模式。"""
+def test_launch_helper_selection_uses_checked_production_install_path():
+    """production helper 不得退化为 basename，smoke 仍经 fake 参数选择。"""
     launch_path = (
         PACKAGE_ROOT / 'launch' / 'competition_non_arm.launch.py'
     )
     source = launch_path.read_text(encoding='utf-8')
 
-    assert '_selected_helper_expression' in source
+    assert 'class _SelectedSdkActionHelper(Substitution):' in source
+    assert 'select_sdk_action_helper(' in source
     assert (
         "ParameterValue(\n                    "
         "selected_sdk_helper, value_type=str\n                )"
     ) in source
-    # production 路径必须是安装目录中的 go2_sdk_motion_action
-    assert 'go2_sdk_motion_action' in source
+    # gait、inspection executor 与 readiness 必须共享一次选定结果；少任一
+    # 消费者都会让 smoke/production 对 helper 的安全校验出现分叉。
+    assert source.count(
+        "ParameterValue(\n                    "
+        "selected_sdk_helper, value_type=str\n                )"
+    ) == 3
+    assert "FindPackagePrefix('rk_go2_sdk_bridge')" in source
     # smoke 路径使用 fake 参数
     assert 'fake_sdk_action_executable' in source
 
@@ -590,6 +620,12 @@ def test_readiness_smoke_checks_are_gated_by_software_smoke_mode():
     assert 'elif self.hardware_mode:' in readiness_source, (
         'hardware checks must be under elif self.hardware_mode gate'
     )
+    # smoke 不启动 Go2 相机桥；只有该模式可接受合成相机输入，生产仍要求桥接。
+    assert 'software_smoke_synthetic' in readiness_source
+    smoke_source = (
+        PACKAGE_ROOT / 'rk_bringup' / 'non_arm_smoke_publisher.py'
+    ).read_text(encoding='utf-8')
+    assert 'DEFAULT_SIGN_CAMERA_FRAME_ID' in smoke_source
 
 
 # ---------------------------------------------------------------------------
@@ -722,6 +758,45 @@ def test_gid_gate_no_publishers_fail():
     )
     assert not ok, 'no publishers must fail'
     assert 'raw_count=0' in detail, detail
+
+
+def test_mission_start_uses_reliable_volatile_dual_ack_delivery():
+    """正式 start 不能以单次 publish 或固定 sleep 假定两个消费者已接收。"""
+    delivery_source = (
+        PACKAGE_ROOT / 'rk_bringup' / 'mission_start_delivery.py'
+    ).read_text(encoding='utf-8')
+    start_script = (
+        PACKAGE_ROOT / 'scripts' / 'mission_start.sh'
+    ).read_text(encoding='utf-8')
+    smoke_source = (
+        PACKAGE_ROOT / 'rk_bringup' / 'non_arm_smoke_publisher.py'
+    ).read_text(encoding='utf-8')
+
+    assert 'ReliabilityPolicy.RELIABLE' in delivery_source
+    assert 'DurabilityPolicy.VOLATILE' in delivery_source
+    assert 'HistoryPolicy.KEEP_LAST' in delivery_source
+    assert 'depth=10' in delivery_source
+    assert 'TRANSIENT_LOCAL' not in delivery_source
+    assert "'/mission/line_course_state'" in delivery_source
+    assert "'/navigation/line_follow_status'" in delivery_source
+    assert 'route_start_ack' in delivery_source
+    assert 'follower_start_ack' in delivery_source
+    assert 'route_run_id_changed' in delivery_source
+    assert 'start_delivery_ack_timeout' in delivery_source
+    # 订阅总数仅用于诊断；首发必须通过 ROS 图确认两个正式消费者，且两个
+    # 状态流已经由对应节点实际预热，避免 smoke 观察者抢占 DDS 匹配名额。
+    assert 'get_subscriptions_info_by_topic' in delivery_source
+    assert 'required_route_subscriber_discovered' in delivery_source
+    assert 'required_follower_subscriber_discovered' in delivery_source
+    assert 'route_status_stream_observed' in delivery_source
+    assert 'follower_status_stream_observed' in delivery_source
+    assert 'required_start_subscriber_lost' in delivery_source
+    assert 'transport_publish_limit_reached' in delivery_source
+    assert 'mission_start_delivery' in start_script
+    assert 'START_MAX_TRANSPORT_PUBLISHES' in start_script
+    # smoke 只对首个 start 改变输入时序，重传不会重置其状态机。
+    assert '_mission_start_messages' in smoke_source
+    assert 'mission_start_messages_observed' in smoke_source
 
 
 def test_gait_inspection_readiness_see_consistent_mode():

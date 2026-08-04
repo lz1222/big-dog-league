@@ -552,7 +552,9 @@ class InspectionActionExecutorNode(Node):
             raise RuntimeError('sdk_action_executable_not_configured')
         if not os.path.isabs(configured):
             raise RuntimeError('sdk_action_executable_must_be_absolute')
-        resolved = os.path.realpath(configured)
+        # 保留 launch 注入的 install 路径。symlink-install 的 helper 实体会指向
+        # build 树，若调用 realpath 会破坏“安装树参数”审计并错误拒绝合法路径。
+        resolved = os.path.normpath(configured)
         if resolved != configured:
             raise RuntimeError('sdk_action_executable_must_be_normalized')
         if not os.path.isfile(resolved) or not os.access(resolved, os.X_OK):

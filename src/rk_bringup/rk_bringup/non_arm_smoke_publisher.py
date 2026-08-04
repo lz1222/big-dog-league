@@ -18,6 +18,9 @@ from std_msgs.msg import Bool, String
 
 from rk_interfaces.msg import LineTrack, SignDetection, SignDetectionArray
 from rk_interfaces.msg import SpecialTargetDetection
+from rk_bringup.non_arm_competition_contract import (
+    DEFAULT_SIGN_CAMERA_FRAME_ID,
+)
 
 
 # 仅 smoke 保持 3 秒低置信新帧：预热订阅已完成 DDS 发现，足够观察真实
@@ -45,6 +48,9 @@ class NonArmSmokePublisher(Node):
         self._started_at = time.monotonic()
         self._started = False
         self._mission_started_at = None
+        # 交付器可为同一个逻辑请求进行有限 DDS 重传；输入器只记首条并冻结
+        # START_READY 时间窗，后续重复消息绝不能把路线或 follower 重置回起点。
+        self._mission_start_messages = 0
         self._prestart_sent = False
         self._white_pulses = {'START': 0, 'FINISH': 0}
         self._red_pulses = 0
@@ -157,9 +163,11 @@ class NonArmSmokePublisher(Node):
                 self._started = True
 
     def _on_mission_start(self, msg):
-        """与 follower 同时观察 start，立即冻结新线帧以验证 START_READY 零速。"""
-        if bool(msg.data) and self._mission_started_at is None:
-            self._mission_started_at = time.monotonic()
+        """观察同一逻辑 start 的重传；只首条影响 smoke 输入状态机。"""
+        if bool(msg.data):
+            self._mission_start_messages += 1
+            if self._mission_started_at is None:
+                self._mission_started_at = time.monotonic()
 
     def _on_line_follower_status(self, msg):
         """只观察真实 follower 的 ready 状态，绝不伪造 START_READY 结果。"""
@@ -175,9 +183,10 @@ class NonArmSmokePublisher(Node):
             and payload.get('ready') is True
         )
 
-    def _stamp_header(self, message):
+    def _stamp_header(self, message, frame_id='software_smoke'):
+        """统一写入测试时间戳；标识相机帧保留正式 Go2 frame 契约。"""
         message.header.stamp = self.get_clock().now().to_msg()
-        message.header.frame_id = 'software_smoke'
+        message.header.frame_id = frame_id
         return message
 
     def _publish_image(self):
@@ -191,8 +200,10 @@ class NonArmSmokePublisher(Node):
         msg.step = 6
         msg.data = bytes((0, 0, 0) * 4)
         self.line_image_publisher.publish(msg)
-        # sign 的 smoke frame_id 使用本体相机 frame
-        sign_msg = self._stamp_header(Image())
+        # sign 的合成帧必须满足正式 Go2 相机 frame_id 只读检查，但不会启动桥接。
+        sign_msg = self._stamp_header(
+            Image(), frame_id=DEFAULT_SIGN_CAMERA_FRAME_ID
+        )
         sign_msg.height = 2
         sign_msg.width = 2
         sign_msg.encoding = 'rgb8'
@@ -372,6 +383,7 @@ class NonArmSmokePublisher(Node):
         payload = {
             'scenario': self.scenario,
             'started': self._started,
+            'mission_start_messages_observed': self._mission_start_messages,
             'start_ready_hold_active': bool(
                 self._mission_started_at is not None
                 and time.monotonic() - self._mission_started_at
