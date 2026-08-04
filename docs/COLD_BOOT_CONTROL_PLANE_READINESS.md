@@ -60,3 +60,18 @@ export RK_COMPETITION_CONTROL_PLANE_MAX_FRAME_GAP_MS=<实测最大允许间隔>
 启动 UDP server；server 的 `startup StopMove` 最多尝试三次、记录每次耗时，
 成功并打印 `UDP server listening on` 后才启动相机、转发器和其余 ROS 图。任一
 阶段失败均不会进入 UDP listening 或 readiness 成功状态。
+
+## 冷启动标定采集模式
+
+在生产阈值尚未存在时，使用 `go2_control_plane_measure.py` 打破标定循环依赖。
+它只经运行时隔离 wrapper 启动 `go2_sdk_sport_state_monitor` 的
+`--calibration-stream`，持续记录网络和 `rt/sportmodestate` 原始帧；不调用
+`go2_control_plane_gate.py`，不产生 production readiness，也不启动 UDP server。
+
+采集协议固定为最多 300 秒、目标 200 个有效状态帧、ping 采样周期 0.25 秒。
+这些是防止采集无限挂起并保证统计样本量的**采集范围**，不是 production gate
+默认值，也不得自动推断为生产的网络/DDS/新鲜度阈值。输出
+`measurement_events.csv`、`ping_samples.csv`、`state_frames.csv`、JSON summary、
+可读报告、monitor 原始日志和进程映射；结果只可能是
+`MEASUREMENT_COMPLETE`、`MEASUREMENT_INCOMPLETE_NO_DDS_STATE` 或
+`MEASUREMENT_INCOMPLETE_INSUFFICIENT_FRAMES`。

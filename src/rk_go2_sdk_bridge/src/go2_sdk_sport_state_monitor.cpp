@@ -3,6 +3,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -21,6 +23,12 @@ namespace
 constexpr const char* kSportModeStateTopic = "rt/sportmodestate";
 constexpr double kDefaultDurationSec = 3.0;
 constexpr double kDefaultPrintRateHz = 2.0;
+volatile std::sig_atomic_t g_running = 1;
+
+struct CalibrationConfig
+{
+  int max_valid_frames{0};
+};
 
 struct GateConfig
 {
@@ -42,6 +50,24 @@ double MonotonicSeconds()
 {
   return std::chrono::duration<double>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+std::int64_t MonotonicNanoseconds()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+std::int64_t WallNanoseconds()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+void SignalHandler(int)
+{
+  // 只置位退出标志；监控进程不拥有 SportClient，因此退出不触发任何停车动作。
+  g_running = 0;
 }
 
 const char* GaitTypeName(uint8_t gait_type)
@@ -66,7 +92,8 @@ const char* GaitTypeName(uint8_t gait_type)
 class SportStateMonitor
 {
 public:
-  SportStateMonitor()
+  explicit SportStateMonitor(bool emit_calibration_frames = false)
+  : emit_calibration_frames_(emit_calibration_frames)
   {
     subscriber_.reset(
         new unitree::robot::ChannelSubscriber<
@@ -133,11 +160,25 @@ private:
     if (message == nullptr) {
       return;
     }
-    raw_frames_.fetch_add(1);
+    const int raw_frame = raw_frames_.fetch_add(1) + 1;
+    const std::int64_t monotonic_ns = MonotonicNanoseconds();
+    const std::int64_t wall_ns = WallNanoseconds();
+    if (emit_calibration_frames_ && raw_frame == 1) {
+      // DDS 发现的首个可观察证据就是本订阅收到的第一份样本；不伪造独立发现事件。
+      std::cout << "CALIBRATION_EVENT event=FIRST_DDS_DISCOVERY"
+                << " wall_ns=" << wall_ns
+                << " monotonic_ns=" << monotonic_ns << std::endl;
+    }
     const auto& received = *static_cast<const unitree_go::msg::dds_::SportModeState_*>(
         message);
     if (!IsFiniteState(received)) {
-      invalid_frames_.fetch_add(1);
+      const int invalid_frame = invalid_frames_.fetch_add(1) + 1;
+      if (emit_calibration_frames_) {
+        std::cout << "CALIBRATION_FRAME raw_index=" << raw_frame
+                  << " valid=0 invalid_index=" << invalid_frame
+                  << " reason=nonfinite_field wall_ns=" << wall_ns
+                  << " monotonic_ns=" << monotonic_ns << std::endl;
+      }
       return;
     }
     const auto now = std::chrono::steady_clock::now();
@@ -158,7 +199,13 @@ private:
     std::lock_guard<std::mutex> lock(mutex_);
     state_ = received;
     received_.store(true);
-    valid_frames_.fetch_add(1);
+    const int valid_frame = valid_frames_.fetch_add(1) + 1;
+    if (emit_calibration_frames_) {
+      std::cout << "CALIBRATION_FRAME raw_index=" << raw_frame
+                << " valid=1 valid_index=" << valid_frame
+                << " reason=none wall_ns=" << wall_ns
+                << " monotonic_ns=" << monotonic_ns << std::endl;
+    }
   }
 
   std::mutex mutex_;
@@ -170,6 +217,7 @@ private:
   std::atomic<int> max_frame_gap_ms_{0};
   bool has_valid_frame_{false};
   std::chrono::steady_clock::time_point last_valid_frame_;
+  bool emit_calibration_frames_{false};
   unitree_go::msg::dds_::SportModeState_ state_;
   unitree::robot::ChannelSubscriberPtr<
       unitree_go::msg::dds_::SportModeState_> subscriber_;
@@ -208,8 +256,72 @@ void PrintUsage(const char* program)
       << "  " << program
       << " <network_interface> --gate --timeout-sec SEC"
       << " --required-frames COUNT --max-frame-gap-ms MS\n\n"
+      << "  " << program
+      << " <network_interface> --calibration-stream"
+      << " --max-valid-frames COUNT\n\n"
       << "This tool is READ_ONLY and subscribes to "
       << kSportModeStateTopic << ".\n";
+}
+
+CalibrationConfig ParseCalibrationArguments(int argc, char** argv)
+{
+  CalibrationConfig config;
+  for (int index = 3; index < argc; ++index) {
+    const std::string option = argv[index];
+    if (option == "--calibration-stream") {
+      continue;
+    }
+    if (option != "--max-valid-frames" || index + 1 >= argc) {
+      throw std::runtime_error(
+          "--calibration-stream requires --max-valid-frames COUNT");
+    }
+    config.max_valid_frames = std::stoi(argv[++index]);
+  }
+  if (config.max_valid_frames <= 0) {
+    throw std::runtime_error(
+        "--calibration-stream requires positive --max-valid-frames");
+  }
+  return config;
+}
+
+int RunCalibrationStream(
+    const std::string& network_interface, const CalibrationConfig& config)
+{
+  // 此模式只采集原始状态帧；max_valid_frames 是采集范围，不是生产就绪阈值。
+  std::signal(SIGINT, SignalHandler);
+  std::signal(SIGTERM, SignalHandler);
+  std::cout << "CALIBRATION_EVENT event=CHANNEL_FACTORY_INIT_START"
+            << " wall_ns=" << WallNanoseconds()
+            << " monotonic_ns=" << MonotonicNanoseconds()
+            << " interface=" << network_interface << " domain=0" << std::endl;
+  unitree::robot::ChannelFactory::Instance()->Init(0, network_interface);
+  std::cout << "CALIBRATION_EVENT event=CHANNEL_FACTORY_INIT_COMPLETE"
+            << " wall_ns=" << WallNanoseconds()
+            << " monotonic_ns=" << MonotonicNanoseconds() << std::endl;
+  SportStateMonitor monitor(true);
+  while (g_running) {
+    int raw_frames = 0;
+    int valid_frames = 0;
+    int invalid_frames = 0;
+    int max_frame_gap_ms = 0;
+    monitor.GetStatistics(
+        raw_frames, valid_frames, invalid_frames, max_frame_gap_ms);
+    if (valid_frames >= config.max_valid_frames) {
+      std::cout << "CALIBRATION_EVENT event=MONITOR_TARGET_REACHED"
+                << " wall_ns=" << WallNanoseconds()
+                << " monotonic_ns=" << MonotonicNanoseconds()
+                << " raw_frames=" << raw_frames
+                << " valid_frames=" << valid_frames
+                << " invalid_frames=" << invalid_frames << std::endl;
+      return 0;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  std::cout << "CALIBRATION_EVENT event=MONITOR_PROCESS_EXIT"
+            << " wall_ns=" << WallNanoseconds()
+            << " monotonic_ns=" << MonotonicNanoseconds()
+            << " reason=signal" << std::endl;
+  return 0;
 }
 
 GateConfig ParseGateArguments(int argc, char** argv)
@@ -314,6 +426,10 @@ int main(int argc, char** argv)
     const std::string network_interface = argv[1];
     if (argc >= 3 && std::string(argv[2]) == "--gate") {
       return RunGate(network_interface, ParseGateArguments(argc, argv));
+    }
+    if (argc >= 3 && std::string(argv[2]) == "--calibration-stream") {
+      return RunCalibrationStream(
+          network_interface, ParseCalibrationArguments(argc, argv));
     }
     const double duration_sec =
         argc >= 3 ? ParsePositiveDouble(argv[2], "duration_sec")

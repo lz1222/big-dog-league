@@ -126,6 +126,7 @@ install(PROGRAMS
   scripts/go2_front_camera_bridge.py
   scripts/go2_sdk_server_runtime.py
   scripts/go2_control_plane_gate.py
+  scripts/go2_control_plane_measure.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -253,6 +254,13 @@ if(BUILD_TESTING)
     NAME test_control_plane_gate
     COMMAND python3 -m pytest
       "${CMAKE_CURRENT_SOURCE_DIR}/test/test_control_plane_gate.py"
+      -v --tb=short
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  add_test(
+    NAME test_control_plane_measure
+    COMMAND python3 -m pytest
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_control_plane_measure.py"
       -v --tb=short
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   )
