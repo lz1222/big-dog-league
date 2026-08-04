@@ -1,0 +1,1 @@
+[INFO] [1785754723.352136943] [real_sign_detector_node]: Real sign detector ready: image_topic=/go2/front_camera/image_raw, sign_topic=/perception/sign_detections, status_topic=/perception/sign_detector_status, qr=True, templates=True, color=True, place_markers=True

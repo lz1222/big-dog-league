@@ -1,0 +1,7 @@
+{
+  "automatic": "place_2",
+  "actual": "place_2",
+  "verdict": "PASS",
+  "recalibrated": false,
+  "regression": "rk_perception: 26 passed, 1 skipped"
+}

@@ -1,0 +1,5 @@
+{
+  "input_masks": 40,
+  "method": "per_pixel_median_then_binary_threshold",
+  "output": "/home/unitree/rk_inspection_ws/src/rk_perception/resources/place_marker_templates/place_2.png"
+}

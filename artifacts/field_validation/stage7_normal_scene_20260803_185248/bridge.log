@@ -1,0 +1,2 @@
+[INFO] [1785754370.009266246] [go2_front_camera_bridge_node]: Stream helper started: pid=21254 start=1 first (max_restarts=3)
+[INFO] [1785754370.010054717] [go2_front_camera_bridge_node]: Go2 front camera bridge ready: interface=eth0 output=/go2/front_camera/image_raw frame_id=go2_front_camera_optical_frame helper=/home/unitree/rk_inspection_ws/install/rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/go2_front_camera_stream_helper
