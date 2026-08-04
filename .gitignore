@@ -2,6 +2,12 @@
 /build/
 /install/
 /log/
+# CTest 从工作区根目录运行时生成的临时状态与测试记录
+/Testing/
+# 现场验证脚本生成的图片、JSON 报告与运行日志
+/artifacts/
+# 本地 legacy CLI 实验留下的嵌套 CMake/colcon 构建树
+/tools/go2_legacy_stair_cli/build/
 
 # Known generated workspaces inside third-party dependencies
 /third_party/unitree_ros2/cyclonedds_ws/build/
