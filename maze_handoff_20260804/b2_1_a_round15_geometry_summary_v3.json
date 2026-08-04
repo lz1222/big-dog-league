@@ -1,0 +1,100 @@
+{
+  "test_id": "B2_1_A_ROUND15_REPLAY_V3",
+  "physical_contact_result": "FAIL",
+  "leg_filter_enabled": true,
+  "gate_status": "DRY_RUN_PASS",
+  "motion_output": null,
+  "publisher_count": null,
+  "minimum_predicted_clearance_m": 0.0,
+  "dangerous_part_matches_round15": true,
+  "geometry_alert_before_contact": true,
+  "first_geometry_alert": {
+    "snapshot_time_sec": 1785654249.0308475,
+    "alert_turn_progress_deg": -0.010737043628699155,
+    "predicted_unsafe_after_sec": 0.0,
+    "predicted_unsafe_yaw_deg": -0.010737043628699155,
+    "predicted_minimum_clearance_m": 0.0,
+    "first_unsafe_pose": {
+      "x_m": 0.0,
+      "y_m": -0.0,
+      "yaw_rad": 0.0,
+      "yaw_deg": 0.0,
+      "time_sec": 0.0
+    },
+    "dangerous_footprint_part": "right_side",
+    "dangerous_geometry_type": "wall_endpoint",
+    "dangerous_point_m": [
+      0.1704521699218557,
+      -0.2863032106033644
+    ],
+    "wall_segment": {
+      "id": "wall_000",
+      "start_m": [
+        0.1704521699218557,
+        -0.2863032106033644
+      ],
+      "end_m": [
+        0.49296596881359156,
+        -0.32575123525280386
+      ],
+      "length_m": 0.324917369687005,
+      "angle_rad": -0.1217096687198625,
+      "angle_deg": -6.973450343583534,
+      "point_count": 16,
+      "residual_rms_m": 0.011819920713691662,
+      "confidence": 0.7045019821577084,
+      "endpoint_uncertainty_m": 0.03,
+      "evidence_kind": "full_wall",
+      "reliable_for_turn_model": true,
+      "association_eligible": true
+    },
+    "lead_to_contact_sec": 9.893233060836792
+  },
+  "first_round15_matching_geometry_alert": {
+    "snapshot_time_sec": 1785654249.0964053,
+    "alert_turn_progress_deg": 0.0006340222006920709,
+    "predicted_unsafe_after_sec": 8.558759689331055,
+    "predicted_unsafe_yaw_deg": 12.728696307311408,
+    "predicted_clearance_m": 0.049938267311892826,
+    "first_unsafe_pose": {
+      "x_m": 0.2704440995140142,
+      "y_m": 0.02783649488183606,
+      "yaw_rad": 0.22214659427409522,
+      "yaw_deg": 12.728062285110715,
+      "time_sec": 8.558759689331055
+    },
+    "dangerous_footprint_part": "left_side",
+    "dangerous_geometry_type": "wall_endpoint",
+    "dangerous_point_m": [
+      0.29000000000000004,
+      0.3500000000000001
+    ],
+    "wall_segment": {
+      "id": "fragment_001",
+      "start_m": [
+        0.29000000000000004,
+        0.3500000000000001
+      ],
+      "end_m": [
+        0.29000000000000004,
+        0.42999999999999994
+      ],
+      "length_m": 0.07999999999999985,
+      "angle_rad": 1.5707963267948966,
+      "angle_deg": 90.0,
+      "point_count": 3,
+      "residual_rms_m": 1.9998398486957913e-18,
+      "confidence": 0.3333333333333327,
+      "endpoint_uncertainty_m": 0.03,
+      "evidence_kind": "wall_fragment",
+      "reliable_for_turn_model": false,
+      "association_eligible": false
+    },
+    "lead_to_contact_sec": 9.827675342559814
+  },
+  "map_count": 322,
+  "odom_count": 3299,
+  "map_median_ms": 5.237774999841349,
+  "map_max_ms": 27.989232999971136,
+  "map_rate_hz": 14.636363636363637
+}

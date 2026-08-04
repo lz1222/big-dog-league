@@ -1,0 +1,25 @@
+rosbag2_bagfile_information:
+  version: 4
+  storage_identifier: sqlite3
+  relative_file_paths:
+    - b2_1_a_static_maze_entry_20260803_011605_0.db3
+  duration:
+    nanoseconds: 137778126958
+  starting_time:
+    nanoseconds_since_epoch: 1785690976404240961
+  message_count: 22585
+  topics_with_message_count:
+    - topic_metadata:
+        name: /utlidar/cloud_base
+        type: sensor_msgs/msg/PointCloud2
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 2020
+    - topic_metadata:
+        name: /utlidar/robot_odom
+        type: nav_msgs/msg/Odometry
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 20565
+  compression_format: ""
+  compression_mode: ""

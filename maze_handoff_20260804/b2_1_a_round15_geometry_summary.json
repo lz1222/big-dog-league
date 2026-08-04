@@ -1,0 +1,220 @@
+{
+  "test_id": "B2_1_A_ROUND15_REPLAY",
+  "physical_contact_result": "FAIL",
+  "result": "FAIL",
+  "gate_status": "FAIL",
+  "contact_progress_deg": 44.0,
+  "map_snapshot_count": 322,
+  "odom_sample_count": 3299,
+  "first_geometry_alert": {
+    "snapshot_time_sec": 1785654249.0308475,
+    "alert_turn_progress_deg": -0.010783514548778954,
+    "predicted_unsafe_after_sec": 0.0,
+    "predicted_unsafe_yaw_deg": -0.010783514548778954,
+    "predicted_minimum_clearance_m": 0.0,
+    "first_unsafe_pose": {
+      "x_m": 0.0,
+      "y_m": -0.0,
+      "yaw_rad": 0.0,
+      "yaw_deg": 0.0,
+      "time_sec": 0.0
+    },
+    "dangerous_footprint_part": "right_side",
+    "dangerous_geometry_type": "wall_endpoint",
+    "dangerous_point_m": [
+      0.1704521699218557,
+      -0.2863032106033644
+    ],
+    "wall_segment": {
+      "id": "wall_000",
+      "start_m": [
+        0.1704521699218557,
+        -0.2863032106033644
+      ],
+      "end_m": [
+        0.49296596881359156,
+        -0.32575123525280386
+      ],
+      "length_m": 0.324917369687005,
+      "angle_rad": -0.1217096687198625,
+      "angle_deg": -6.973450343583534,
+      "point_count": 16,
+      "residual_rms_m": 0.011819920713691662,
+      "confidence": 0.7045019821577084,
+      "endpoint_uncertainty_m": 0.03
+    },
+    "lead_to_contact_sec": 9.893233060836792
+  },
+  "first_legacy_0413_alert": null,
+  "minimum_predicted_clearance_m": 0.0,
+  "dangerous_wall_segment": {
+    "id": "wall_000",
+    "start_m": [
+      0.1704521699218557,
+      -0.2863032106033644
+    ],
+    "end_m": [
+      0.49296596881359156,
+      -0.32575123525280386
+    ],
+    "length_m": 0.324917369687005,
+    "angle_rad": -0.1217096687198625,
+    "angle_deg": -6.973450343583534,
+    "point_count": 16,
+    "residual_rms_m": 0.011819920713691662,
+    "confidence": 0.7045019821577084,
+    "endpoint_uncertainty_m": 0.03
+  },
+  "dangerous_footprint_part": "rear_edge",
+  "dangerous_part_matches_round15": false,
+  "geometry_alert_before_contact": true,
+  "legacy_only_explanation": false,
+  "failure_reason": "",
+  "dry_run": true,
+  "motion_output": false,
+  "publisher_count": 0,
+  "bag_db": "/home/unitree/maze_bags/b2_round15_20260802_144706/b2_round15_20260802_144706_0.db3",
+  "window_start_offset_sec": 1018.0,
+  "window_duration_sec": 22.0,
+  "replay_config": "/home/unitree/big-dog-league/config/maze_round15_replay.yaml",
+  "planner_config": "/home/unitree/big-dog-league/config/maze_first_turn_dry_run.yaml",
+  "rejected_cloud_frame_count": 0,
+  "map_build_time_median_ms": 4.619616499439871,
+  "map_build_time_max_ms": 27.777061000961112,
+  "recorded_map_rate_hz": 14.653015697047861,
+  "candidate_snapshot": {
+    "snapshot_time_sec": 1785654249.0308475,
+    "rear_coverage_status": "rear_coverage_insufficient",
+    "rear_unavailable_sectors": [
+      "rear",
+      "left_rear",
+      "right_rear"
+    ],
+    "has_robust_safe_candidate": false,
+    "wall_segment_count": 1,
+    "top_candidates": [
+      {
+        "rank": 1,
+        "name": "LEFT_ARC",
+        "verdict": "UNSAFE",
+        "minimum_clearance_m": 0.02630321060336438,
+        "danger_time_sec": 0.0,
+        "danger_pose": {
+          "x_m": 0.0,
+          "y_m": 0.0,
+          "yaw_rad": 0.0,
+          "yaw_deg": 0.0,
+          "time_sec": 0.0
+        },
+        "danger_part": "right_side",
+        "danger_wall_segment_id": "wall_000",
+        "robustness_ratio": 0.0,
+        "legacy_0413_guard_pass": false,
+        "blockers": [
+          "target_physical_clearance_not_met"
+        ],
+        "unknown_reasons": [
+          "sector_unavailable:left,right,left_rear,right_rear,rear"
+        ]
+      },
+      {
+        "rank": 2,
+        "name": "FINE_LEFT_ARC",
+        "verdict": "UNSAFE",
+        "minimum_clearance_m": 0.02630321060336438,
+        "danger_time_sec": 0.0,
+        "danger_pose": {
+          "x_m": 0.0,
+          "y_m": 0.0,
+          "yaw_rad": 0.0,
+          "yaw_deg": 0.0,
+          "time_sec": 0.0
+        },
+        "danger_part": "right_side",
+        "danger_wall_segment_id": "wall_000",
+        "robustness_ratio": 0.0,
+        "legacy_0413_guard_pass": false,
+        "blockers": [
+          "target_physical_clearance_not_met"
+        ],
+        "unknown_reasons": [
+          "sector_unavailable:left,right,left_rear,right_rear,rear"
+        ]
+      },
+      {
+        "rank": 3,
+        "name": "FORWARD_SHORT",
+        "verdict": "UNSAFE",
+        "minimum_clearance_m": 0.02630321060336438,
+        "danger_time_sec": 0.7,
+        "danger_pose": {
+          "x_m": 0.175,
+          "y_m": 0.0,
+          "yaw_rad": 0.0,
+          "yaw_deg": 0.0,
+          "time_sec": 0.7
+        },
+        "danger_part": "right_side",
+        "danger_wall_segment_id": "wall_000",
+        "robustness_ratio": 0.0,
+        "legacy_0413_guard_pass": false,
+        "blockers": [
+          "target_physical_clearance_not_met"
+        ],
+        "unknown_reasons": [
+          "sector_unavailable:left,right"
+        ]
+      },
+      {
+        "rank": 4,
+        "name": "REVERSE_SHORT",
+        "verdict": "UNSAFE",
+        "minimum_clearance_m": 0.02630321060336438,
+        "danger_time_sec": 0.6777777777777778,
+        "danger_pose": {
+          "x_m": -0.122,
+          "y_m": 6.123233995736766e-18,
+          "yaw_rad": 0.0,
+          "yaw_deg": 0.0,
+          "time_sec": 0.6777777777777778
+        },
+        "danger_part": "front_right",
+        "danger_wall_segment_id": "wall_000",
+        "robustness_ratio": 0.0,
+        "legacy_0413_guard_pass": false,
+        "blockers": [
+          "target_physical_clearance_not_met"
+        ],
+        "unknown_reasons": [
+          "sector_unavailable:rear,left_rear,right_rear,left,right",
+          "reverse_watchdog_not_ok",
+          "reverse_estop_not_clear"
+        ]
+      },
+      {
+        "rank": 5,
+        "name": "LEFT_ARC_OUTSIDE_VY",
+        "verdict": "UNSAFE",
+        "minimum_clearance_m": 0.01300796090103895,
+        "danger_time_sec": 0.7711630722733203,
+        "danger_pose": {
+          "x_m": 0.14123919947098557,
+          "y_m": -0.014225903414909787,
+          "yaw_rad": 0.175,
+          "yaw_deg": 10.026761414789405,
+          "time_sec": 0.7711630722733203
+        },
+        "danger_part": "right_side",
+        "danger_wall_segment_id": "wall_000",
+        "robustness_ratio": 0.0,
+        "legacy_0413_guard_pass": false,
+        "blockers": [
+          "target_physical_clearance_not_met"
+        ],
+        "unknown_reasons": [
+          "sector_unavailable:left,right,left_rear,right_rear,rear"
+        ]
+      }
+    ]
+  }
+}
