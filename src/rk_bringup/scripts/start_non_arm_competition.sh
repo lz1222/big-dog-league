@@ -19,6 +19,16 @@ SDK_SERVER="${RK_COMPETITION_SDK_SERVER:-}"
 SDK_UDP_HOST="${RK_COMPETITION_SDK_UDP_HOST:-127.0.0.1}"
 SDK_UDP_PORT="${RK_COMPETITION_SDK_UDP_PORT:-15001}"
 STARTUP_TIMEOUT_SEC="${RK_COMPETITION_STARTUP_TIMEOUT_SEC:-25}"
+# 下列门禁数值必须由本机冷启动实测填写。留空不是“使用方便的默认值”，
+# 而是明确拒绝启动，避免把 ping 成功误当作 Sport 控制面就绪。
+ROBOT_IP="${RK_COMPETITION_ROBOT_IP:-192.168.123.161}"
+CONTROL_PLANE_NETWORK_TIMEOUT_SEC="${RK_COMPETITION_CONTROL_PLANE_NETWORK_TIMEOUT_SEC:-}"
+CONTROL_PLANE_PING_COUNT="${RK_COMPETITION_CONTROL_PLANE_PING_COUNT:-}"
+CONTROL_PLANE_PING_POLL_SEC="${RK_COMPETITION_CONTROL_PLANE_PING_POLL_SEC:-}"
+CONTROL_PLANE_DDS_TIMEOUT_SEC="${RK_COMPETITION_CONTROL_PLANE_DDS_TIMEOUT_SEC:-}"
+CONTROL_PLANE_REQUIRED_FRAMES="${RK_COMPETITION_CONTROL_PLANE_REQUIRED_FRAMES:-}"
+CONTROL_PLANE_MAX_FRAME_GAP_MS="${RK_COMPETITION_CONTROL_PLANE_MAX_FRAME_GAP_MS:-}"
+SDK_LISTEN_TIMEOUT_SEC="${RK_COMPETITION_SDK_LISTEN_TIMEOUT_SEC:-10}"
 
 resolve_workspace_dir() {
     local candidate
@@ -71,6 +81,12 @@ link_node_log() {
     local label="$1"
     local pattern="$2"
     local candidate
+
+    # SDK server 在阶段 B 由本脚本直接监管，不是 ros2 launch 子进程；
+    # 保留它的原始诊断日志，不能用一个空 ROS 日志链接覆盖。
+    if [ "$label" = "sdk_server" ] && [ -f "${LOG_DIR}/sdk_server.log" ]; then
+        return 0
+    fi
 
     candidate="$(find "${LOG_DIR}/ros" -type f -name "*${pattern}*.log" \
         -print 2>/dev/null | head -n 1 || true)"
@@ -142,6 +158,38 @@ if ! ros2 pkg prefix rk_bringup >/dev/null 2>&1; then
     exit 1
 fi
 
+SDK_BRIDGE_PREFIX="$(ros2 pkg prefix rk_go2_sdk_bridge)"
+SDK_RUNTIME_WRAPPER="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_server_runtime.py"
+CONTROL_PLANE_GATE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_control_plane_gate.py"
+CONTROL_PLANE_PROBE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_sport_state_monitor"
+if [ -n "${SDK_SERVER}" ]; then
+    SDK_SERVER_BINARY="${SDK_SERVER}"
+else
+    SDK_SERVER_BINARY="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_udp_server"
+fi
+
+for required_file in "$SDK_RUNTIME_WRAPPER" "$CONTROL_PLANE_GATE" \
+    "$CONTROL_PLANE_PROBE" "$SDK_SERVER_BINARY"; do
+    if [ ! -x "$required_file" ]; then
+        echo "ERROR: required staged-start executable is missing: ${required_file}" >&2
+        exit 1
+    fi
+done
+
+if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ] \
+        && [ "$START_SDK_SERVER" = "true" ]; then
+    for measured_value in \
+        "$CONTROL_PLANE_NETWORK_TIMEOUT_SEC" "$CONTROL_PLANE_PING_COUNT" \
+        "$CONTROL_PLANE_PING_POLL_SEC" "$CONTROL_PLANE_DDS_TIMEOUT_SEC" \
+        "$CONTROL_PLANE_REQUIRED_FRAMES" "$CONTROL_PLANE_MAX_FRAME_GAP_MS"; do
+        if [ -z "$measured_value" ]; then
+            echo "ERROR: cold-start control-plane thresholds are not configured." >&2
+            echo "Set RK_COMPETITION_CONTROL_PLANE_{NETWORK_TIMEOUT_SEC,PING_COUNT,PING_POLL_SEC,DDS_TIMEOUT_SEC,REQUIRED_FRAMES,MAX_FRAME_GAP_MS} from a recorded cold-boot measurement." >&2
+            exit 1
+        fi
+    done
+fi
+
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR/ros"
 rm -f "${RUNTIME_DIR}/pids"
 touch "${RUNTIME_DIR}/pids"
@@ -150,7 +198,8 @@ LAUNCH_ARGS=(
     "hardware_mode:=${HARDWARE_MODE}"
     "software_smoke_mode:=${SOFTWARE_SMOKE_MODE}"
     "start_realsense:=${START_REALSENSE}"
-    "start_sdk_server:=${START_SDK_SERVER}"
+    # SDK server 由阶段 B 单独启动并确认 UDP listening；launch 仅负责阶段 C。
+    "start_sdk_server:=false"
     "start_udp_forwarder:=${START_UDP_FORWARDER}"
     "enable_debug_image:=${ENABLE_DEBUG_IMAGE}"
     "sdk_network_interface:=${SDK_NETWORK_INTERFACE}"
@@ -164,6 +213,25 @@ if [ -n "${SDK_SERVER}" ]; then
 fi
 QUOTED_ARGS="$(printf ' %q' "${LAUNCH_ARGS[@]}")"
 LAUNCH_COMMAND="source $(printf '%q' "$ENV_SCRIPT") && export ROS_LOG_DIR=$(printf '%q' "${LOG_DIR}/ros") && exec ros2 launch rk_bringup competition_non_arm.launch.py${QUOTED_ARGS}"
+
+if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ] \
+        && [ "$START_SDK_SERVER" = "true" ]; then
+    GATE_COMMAND="$(printf '%q ' "$CONTROL_PLANE_GATE" \
+        --interface "$SDK_NETWORK_INTERFACE" --robot-ip "$ROBOT_IP" \
+        --runtime-wrapper "$SDK_RUNTIME_WRAPPER" --probe "$CONTROL_PLANE_PROBE" \
+        --network-timeout-sec "$CONTROL_PLANE_NETWORK_TIMEOUT_SEC" \
+        --ping-count "$CONTROL_PLANE_PING_COUNT" \
+        --ping-poll-sec "$CONTROL_PLANE_PING_POLL_SEC" \
+        --dds-timeout-sec "$CONTROL_PLANE_DDS_TIMEOUT_SEC" \
+        --required-frames "$CONTROL_PLANE_REQUIRED_FRAMES" \
+        --max-frame-gap-ms "$CONTROL_PLANE_MAX_FRAME_GAP_MS")"
+    SERVER_COMMAND="$(printf '%q ' "$SDK_RUNTIME_WRAPPER" "$SDK_SERVER_BINARY" \
+        --interface "$SDK_NETWORK_INTERFACE" --listen-ip "$SDK_UDP_HOST" \
+        --port "$SDK_UDP_PORT")"
+    # 阶段 A 成功后才启动阶段 B；以 server 的明确 listening 日志作为阶段 C
+    # 放行条件。轮询只是观察状态，绝非用固定 sleep 猜测 DDS 是否完成发现。
+    LAUNCH_COMMAND="source $(printf '%q' "$ENV_SCRIPT"); set -e; ${GATE_COMMAND}; ${SERVER_COMMAND} > $(printf '%q' "${LOG_DIR}/sdk_server.log") 2>&1 & sdk_pid=\$!; deadline=\$(( \$(date +%s) + $(printf '%q' "$SDK_LISTEN_TIMEOUT_SEC") )); while [ \$(date +%s) -lt \$deadline ]; do if grep -Fq 'UDP server listening on' $(printf '%q' "${LOG_DIR}/sdk_server.log"); then break; fi; if ! kill -0 \$sdk_pid 2>/dev/null; then echo 'SDK_STARTUP_DIAG classification=SDK_RUNTIME_LIBRARY_ERROR'; cat $(printf '%q' "${LOG_DIR}/sdk_server.log"); exit 1; fi; sleep 0.1; done; if ! grep -Fq 'UDP server listening on' $(printf '%q' "${LOG_DIR}/sdk_server.log"); then echo 'SDK_STARTUP_DIAG classification=ROBOT_CONTROL_PLANE_NOT_READY'; kill \$sdk_pid 2>/dev/null || true; exit 1; fi; echo 'CONTROL_PLANE_DIAG event=SDK_UDP_LISTENING'; ${LAUNCH_COMMAND}"
+fi
 
 tmux new-session -d -s "$SESSION" "bash -lc $(printf '%q' "$LAUNCH_COMMAND")"
 tmux pipe-pane -o -t "$SESSION" "cat >> $(printf '%q' "${LOG_DIR}/launch.log")"

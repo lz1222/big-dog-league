@@ -12,6 +12,29 @@ ESTOP_SERVICE="${RK_COMPETITION_ESTOP_SERVICE:-/safety/estop}"
 source "${SCRIPT_DIR}/stop_safety_common.sh"
 FALLBACK_USED=0
 
+managed_pid_file_has_live_process() {
+    local pid_file="$1"
+    local name
+    local pid
+    local log_file
+
+    [ -f "$pid_file" ] || return 1
+    while IFS='|' read -r name pid log_file; do
+        if [ -n "$pid" ] && [[ "$pid" =~ ^[0-9]+$ ]] \
+                && kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    done < "$pid_file"
+    return 1
+}
+
+system_has_live_managed_process() {
+    # 冷启动门禁失败时 ROS 图和 UDP server 都未启动。此时发送 estop 或
+    # direct zero 会越过“无进程即无动作”的边界，故只能安全 no-op。
+    managed_pid_file_has_live_process "${COMPETITION_RUNTIME_DIR}/pids" \
+        || managed_pid_file_has_live_process "${LINE_RUNTIME_DIR}/pids"
+}
+
 resolve_workspace_dir() {
     local candidate
 
@@ -37,6 +60,11 @@ resolve_workspace_dir() {
 
 WORKSPACE_DIR="$(resolve_workspace_dir)" || exit 1
 export RK_INSPECTION_WS="$WORKSPACE_DIR"
+
+if ! system_has_live_managed_process; then
+    echo "No live managed process; stop_line_system is a safe no-op."
+    exit 0
+fi
 
 resolve_env_script() {
     local colocated_script="${SCRIPT_DIR}/ros_clean_env.sh"

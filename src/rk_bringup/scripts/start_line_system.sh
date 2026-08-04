@@ -6,7 +6,7 @@ RUNTIME_DIR="${RK_LINE_RUNTIME_DIR:-$HOME/rk_line_runtime}"
 LOG_DIR="${RK_LINE_LOG_DIR:-$HOME/rk_line_logs}"
 PID_FILE="${RUNTIME_DIR}/pids"
 
-SDK_SERVER="${RK_SDK_SERVER:-/home/unitree/unitree_go2_sdk_test/build/go2_sdk_udp_server}"
+SDK_SERVER="${RK_SDK_SERVER:-}"
 START_SDK_SERVER="${RK_START_SDK_SERVER:-true}"
 START_ECONOMIC_GAIT="${RK_START_ECONOMIC_GAIT:-true}"
 SDK_INTERFACE="${RK_SDK_INTERFACE:-eth0}"
@@ -29,7 +29,15 @@ SEARCH_LINEAR_SPEED="${RK_SEARCH_LINEAR_SPEED:-0.0}"
 BRIDGE_MAX_LINEAR_X="${RK_GO2_BRIDGE_MAX_LINEAR_X:-$LINE_BASE_SPEED}"
 BRIDGE_MAX_ANGULAR_Z="${RK_GO2_BRIDGE_MAX_ANGULAR_Z:-1.30}"
 
-SDK_LIBRARY_PATH="/usr/local/lib:/home/unitree/cyclonedds_ws/install/cyclonedds/lib"
+# 冷启动门禁的数值只能取自现场记录，绝不以固定 sleep 替代控制面证据。
+ROBOT_IP="${RK_ROBOT_IP:-192.168.123.161}"
+CONTROL_PLANE_NETWORK_TIMEOUT_SEC="${RK_CONTROL_PLANE_NETWORK_TIMEOUT_SEC:-}"
+CONTROL_PLANE_PING_COUNT="${RK_CONTROL_PLANE_PING_COUNT:-}"
+CONTROL_PLANE_PING_POLL_SEC="${RK_CONTROL_PLANE_PING_POLL_SEC:-}"
+CONTROL_PLANE_DDS_TIMEOUT_SEC="${RK_CONTROL_PLANE_DDS_TIMEOUT_SEC:-}"
+CONTROL_PLANE_REQUIRED_FRAMES="${RK_CONTROL_PLANE_REQUIRED_FRAMES:-}"
+CONTROL_PLANE_MAX_FRAME_GAP_MS="${RK_CONTROL_PLANE_MAX_FRAME_GAP_MS:-}"
+SDK_LISTEN_TIMEOUT_SEC="${RK_SDK_LISTEN_TIMEOUT_SEC:-10}"
 
 select_ros_setup() {
     local distro
@@ -277,19 +285,71 @@ touch "$PID_FILE"
 build_workspace_if_needed
 source "$ENV_SCRIPT"
 
+SDK_BRIDGE_PREFIX="$(ros2 pkg prefix rk_go2_sdk_bridge)"
+SDK_RUNTIME_WRAPPER="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_server_runtime.py"
+CONTROL_PLANE_GATE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_control_plane_gate.py"
+CONTROL_PLANE_PROBE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_sport_state_monitor"
+if [ -n "$SDK_SERVER" ]; then
+    SDK_SERVER_BINARY="$SDK_SERVER"
+else
+    SDK_SERVER_BINARY="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_udp_server"
+fi
+for required_file in "$SDK_RUNTIME_WRAPPER" "$CONTROL_PLANE_GATE" \
+    "$CONTROL_PLANE_PROBE" "$SDK_SERVER_BINARY"; do
+    if [ ! -x "$required_file" ]; then
+        echo "ERROR: required staged-start executable is missing: ${required_file}" >&2
+        exit 1
+    fi
+done
+
+if [ "$START_SDK_SERVER" = "true" ]; then
+    for measured_value in \
+        "$CONTROL_PLANE_NETWORK_TIMEOUT_SEC" "$CONTROL_PLANE_PING_COUNT" \
+        "$CONTROL_PLANE_PING_POLL_SEC" "$CONTROL_PLANE_DDS_TIMEOUT_SEC" \
+        "$CONTROL_PLANE_REQUIRED_FRAMES" "$CONTROL_PLANE_MAX_FRAME_GAP_MS"; do
+        if [ -z "$measured_value" ]; then
+            echo "ERROR: cold-start control-plane thresholds are not configured." >&2
+            echo "Set RK_CONTROL_PLANE_{NETWORK_TIMEOUT_SEC,PING_COUNT,PING_POLL_SEC,DDS_TIMEOUT_SEC,REQUIRED_FRAMES,MAX_FRAME_GAP_MS} from a recorded cold-boot measurement." >&2
+            exit 1
+        fi
+    done
+fi
+
 echo "Stopping old RK line system processes..."
 stop_existing_processes
 rm -f "$PID_FILE"
 touch "$PID_FILE"
 
 if [ "$START_SDK_SERVER" = "true" ]; then
+    # 阶段 A：网络连续稳定 + 只读 SportModeState；失败时尚未启动 UDP 输入口。
+    run_step "control_plane_gate" \
+        "exec \"${CONTROL_PLANE_GATE}\" --interface \"${SDK_INTERFACE}\" --robot-ip \"${ROBOT_IP}\" --runtime-wrapper \"${SDK_RUNTIME_WRAPPER}\" --probe \"${CONTROL_PLANE_PROBE}\" --network-timeout-sec \"${CONTROL_PLANE_NETWORK_TIMEOUT_SEC}\" --ping-count \"${CONTROL_PLANE_PING_COUNT}\" --ping-poll-sec \"${CONTROL_PLANE_PING_POLL_SEC}\" --dds-timeout-sec \"${CONTROL_PLANE_DDS_TIMEOUT_SEC}\" --required-frames \"${CONTROL_PLANE_REQUIRED_FRAMES}\" --max-frame-gap-ms \"${CONTROL_PLANE_MAX_FRAME_GAP_MS}\""
+    # 阶段 B：只有 startup StopMove 成功并打印 listening 后，才允许相机和 ROS 图启动。
     start_background "sdk_server" \
-        "export LD_LIBRARY_PATH=${SDK_LIBRARY_PATH}:\${LD_LIBRARY_PATH:-}; exec \"${SDK_SERVER}\""
+        "exec \"${SDK_RUNTIME_WRAPPER}\" \"${SDK_SERVER_BINARY}\" --interface \"${SDK_INTERFACE}\" --listen-ip \"${SDK_UDP_HOST}\" --port \"${SDK_UDP_PORT}\""
+    sdk_listen_deadline=$(( $(date +%s) + SDK_LISTEN_TIMEOUT_SEC ))
+    while [ "$(date +%s)" -lt "$sdk_listen_deadline" ]; do
+        if grep -Fq "UDP server listening on" "${LOG_DIR}/sdk_server.log"; then
+            break
+        fi
+        if ! kill -0 "$(awk -F'|' '$1 == \"sdk_server\" { print $2; exit }' "$PID_FILE")" 2>/dev/null; then
+            echo "ERROR: SDK_STARTUP_DIAG classification=SDK_RUNTIME_LIBRARY_ERROR" >&2
+            tail -n 80 "${LOG_DIR}/sdk_server.log" >&2 || true
+            exit 1
+        fi
+        sleep 0.1
+    done
+    if ! grep -Fq "UDP server listening on" "${LOG_DIR}/sdk_server.log"; then
+        echo "ERROR: SDK_STARTUP_DIAG classification=ROBOT_CONTROL_PLANE_NOT_READY" >&2
+        tail -n 80 "${LOG_DIR}/sdk_server.log" >&2 || true
+        exit 1
+    fi
+    echo "CONTROL_PLANE_DIAG event=SDK_UDP_LISTENING"
 fi
 
 if [ "$START_ECONOMIC_GAIT" = "true" ]; then
     run_step "economic_gait" \
-        "export LD_LIBRARY_PATH=${SDK_LIBRARY_PATH}:\${LD_LIBRARY_PATH:-}; ros2 run rk_go2_sdk_bridge go2_sdk_motion_action ${SDK_INTERFACE} economic_gait 1.0" \
+        "ros2 run rk_go2_sdk_bridge go2_sdk_motion_action ${SDK_INTERFACE} economic_gait 1.0" \
         || true
 fi
 

@@ -168,16 +168,42 @@ def test_estop_diagnostic_distinguishes_service_type_failures(
     assert 'operation=service_call' not in result.stdout
 
 
-def _run_stop_line(tmp_path, **overrides):
+def _run_stop_line(tmp_path, live_process=True, **overrides):
     fake_bin = _write_fake_ros2(tmp_path)
     environment = _fake_environment(tmp_path, fake_bin, **overrides)
-    return subprocess.run(
+    process = _add_live_managed_process(environment) if live_process else None
+    result = subprocess.run(
         ['bash', str(STOP_LINE_SCRIPT)],
         check=False,
         text=True,
         capture_output=True,
         env=environment,
-    ), environment
+    )
+    if process is not None:
+        process.wait(timeout=5)
+    return result, environment
+
+
+def _add_live_managed_process(environment):
+    """为正常停止路径建立受 PID 文件追踪的临时进程，避免触发冷启动 no-op。"""
+    runtime_dir = Path(environment['RK_COMPETITION_RUNTIME_DIR'])
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process = subprocess.Popen(['sleep', '60'])
+    (runtime_dir / 'pids').write_text(
+        'test_process|{}|/tmp/test.log\n'.format(process.pid),
+        encoding='utf-8',
+    )
+    return process
+
+
+def test_cold_boot_gate_failure_stop_is_safe_noop(tmp_path):
+    """尚未启动任何受管进程时，停止入口不得发布 estop 或 direct zero。"""
+    result, environment = _run_stop_line(tmp_path, live_process=False)
+
+    assert result.returncode == 0
+    assert 'safe no-op' in result.stdout
+    call_log = Path(environment['FAKE_ROS2_CALL_LOG'])
+    assert not call_log.exists() or not call_log.read_text(encoding='utf-8')
 
 
 def test_first_estop_failure_second_success_completes_without_fallback(
