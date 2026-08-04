@@ -39,7 +39,10 @@ WATCHDOG_PID=""
 MISSION_START_PID=""
 TOPIC_OBSERVER_PIDS=()
 FAKE_HELPER="${CHECK_DIR}/fake_sdk_motion_helper"
-SMOKE_GUARD="${CHECK_DIR}/front_jump_cleanup_guard.json"
+# cleanup guard 的父目录必须独立于可能由调用方以 0775 创建的验收根目录；
+# PersistentCleanupGuard 会严格拒绝不安全父目录，smoke 不得放宽该生产规则。
+SMOKE_GUARD_DIR="${CHECK_DIR}/cleanup_guard_private"
+SMOKE_GUARD="${SMOKE_GUARD_DIR}/front_jump_cleanup_guard.json"
 PROCESS_GUARD_FAILURE="${CHECK_DIR}/process_guard_failure.txt"
 PROCESS_GUARD_DETAIL="${CHECK_DIR}/process_guard_detail.txt"
 FAKE_HELPER_SEEN_FILE="${CHECK_DIR}/fake_helper_seen.txt"
@@ -122,6 +125,49 @@ resolve_env_script() {
         return 0
     fi
     return 1
+}
+
+prepare_smoke_guard_dir() {
+    # 在 launch 之前一次完成路径、owner、权限和 symlink 校验。gait、
+    # readiness 与 acceptance 共享同一个绝对 guard 文件路径，任何异常均
+    # fail-closed，不能启动可能锁存 cleanup_guard_fault 的 ROS 图。
+    local owner_uid
+    local actual_uid
+    local actual_mode
+
+    case "$CHECK_DIR" in
+        /*) ;;
+        *) echo "ERROR: smoke CHECK_DIR is not absolute: ${CHECK_DIR}" >&2; return 1 ;;
+    esac
+    case "$SMOKE_GUARD_DIR" in
+        "${CHECK_DIR}"/*) ;;
+        *) echo "ERROR: private guard directory escapes CHECK_DIR." >&2; return 1 ;;
+    esac
+    if [ -e "$SMOKE_GUARD_DIR" ] || [ -L "$SMOKE_GUARD_DIR" ]; then
+        echo "ERROR: private guard directory already exists or is a symlink." >&2
+        return 1
+    fi
+    if ! mkdir "$SMOKE_GUARD_DIR"; then
+        echo "ERROR: failed to create private guard directory." >&2
+        return 1
+    fi
+    if ! chmod 0700 "$SMOKE_GUARD_DIR"; then
+        echo "ERROR: failed to set private guard directory mode 0700." >&2
+        return 1
+    fi
+    owner_uid="$(id -u)"
+    actual_uid="$(stat -c '%u' "$SMOKE_GUARD_DIR" 2>/dev/null || true)"
+    actual_mode="$(stat -c '%a' "$SMOKE_GUARD_DIR" 2>/dev/null || true)"
+    if [ ! -d "$SMOKE_GUARD_DIR" ] || [ -L "$SMOKE_GUARD_DIR" ] \
+        || [ "$actual_uid" != "$owner_uid" ] || [ "$actual_mode" != "700" ]; then
+        echo "ERROR: private guard directory verification failed: uid=${actual_uid:-missing} mode=${actual_mode:-missing}." >&2
+        return 1
+    fi
+    if [ -e "$SMOKE_GUARD" ] || [ -L "$SMOKE_GUARD" ]; then
+        echo "ERROR: smoke guard file already exists or is a symlink." >&2
+        return 1
+    fi
+    printf '%s\n' "$SMOKE_GUARD" > "${CHECK_DIR}/smoke_cleanup_guard_path.txt"
 }
 
 source_selected_overlay() {
@@ -625,13 +671,15 @@ smoke_hardware_is_suppressed() {
 }
 
 smoke_route_completed() {
-    topic_json_matches /mission/line_course_state route_phase FINAL_STOP \
-        && topic_json_matches /mission/line_course_state final_zone_armed __true__ \
-        && topic_json_matches /mission/line_course_state start_jump_completed __true__ \
-        && topic_json_matches /mission/line_course_state inspection_completed __true__ \
-        && topic_json_matches /mission/line_course_state finish_jump_completed __true__ \
-        && topic_json_matches \
-            /mission/white_bar_stage_command_publisher_status sequence 2
+    # FINAL_STOP 是短暂状态后仍可能继续发布 WAIT_START；Foxy 的临时订阅
+    # 会错过已发生的终态。只读预热流保留本轮完整历史，且不改变路线超时。
+    topic_stream_json_matches "$LINE_COURSE_STREAM" route_phase FINAL_STOP \
+        && topic_stream_json_matches "$LINE_COURSE_STREAM" final_zone_armed __true__ \
+        && topic_stream_json_matches "$LINE_COURSE_STREAM" start_jump_completed __true__ \
+        && topic_stream_json_matches "$LINE_COURSE_STREAM" inspection_completed __true__ \
+        && topic_stream_json_matches "$LINE_COURSE_STREAM" finish_jump_completed __true__ \
+        && topic_stream_json_matches \
+            "$WHITE_STAGE_PUBLISHER_STREAM" sequence 2
 }
 
 capture_line_course_state() {
@@ -644,6 +692,10 @@ capture_line_course_state() {
 
 cd "$WORKSPACE_DIR"
 mkdir -p "$CHECK_DIR" "$ROS_LOG_DIR"
+if ! prepare_smoke_guard_dir; then
+    echo "ERROR: smoke cleanup guard preflight failed before launch." >&2
+    exit 1
+fi
 ENV_SCRIPT="$(resolve_env_script)" || {
     echo "ERROR: clean ROS environment script is unavailable." >&2
     exit 1
