@@ -3,6 +3,14 @@
 /install/
 /log/
 
+# Archived in branch: archive/local-workspace-snapshot-20260804
+# 本地 CTest 状态、现场验证数据和历史快照均已按原始字节远程归档。
+/Testing/
+/artifacts/
+/inspection_action_executor.yaml
+/maze_handoff_20260804/
+/tools/
+
 # Known generated workspaces inside third-party dependencies
 /third_party/unitree_ros2/cyclonedds_ws/build/
 /third_party/unitree_ros2/cyclonedds_ws/install/
