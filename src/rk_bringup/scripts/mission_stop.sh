@@ -5,6 +5,7 @@ set -u
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P)"
 ESTOP_SERVICE="${RK_COMPETITION_ESTOP_SERVICE:-/safety/estop}"
+source "${SCRIPT_DIR}/stop_safety_common.sh"
 ACTION_CANCEL_TIMEOUT_SEC="${RK_COMPETITION_ACTION_CANCEL_TIMEOUT_SEC:-12}"
 # 仅用于 CLI 新订阅读取状态/最终零速度，避免慢机误把状态缺失当作安全完成。
 TOPIC_SAMPLE_TIMEOUT_SEC="${RK_COMPETITION_TOPIC_SAMPLE_TIMEOUT_SEC:-6}"
@@ -163,21 +164,6 @@ wait_for_continuous_mux_zero() {
     return 1
 }
 
-call_mux_estop() {
-    local service_type
-    local response
-
-    service_type="$(timeout 3s ros2 service type "$ESTOP_SERVICE" 2>/dev/null || true)"
-    if [ "$service_type" != "std_srvs/srv/SetBool" ]; then
-        echo "ERROR: command_mux estop service unavailable: ${ESTOP_SERVICE}" >&2
-        return 1
-    fi
-    response="$(timeout 5s ros2 service call "$ESTOP_SERVICE" \
-        std_srvs/srv/SetBool '{data: true}' 2>&1)" || return 1
-    printf '%s\n' "$response"
-    printf '%s\n' "$response" | grep -Eq 'success[=:][[:space:]]*(true|True)'
-}
-
 ENV_SCRIPT="$(resolve_env_script)" || exit 1
 source "$ENV_SCRIPT" || exit 1
 
@@ -197,7 +183,7 @@ INSPECTION_OK=0
 wait_for_action_terminal /mission/white_bar_action_status "white-bar Action" || WHITE_OK=1
 wait_for_action_terminal /mission/inspection_action_status "inspection Action" || INSPECTION_OK=1
 
-if ! call_mux_estop; then
+if ! rk_call_mux_estop mission_stop_primary; then
     echo "ERROR: normal stop could not enable command_mux estop." >&2
     exit 1
 fi

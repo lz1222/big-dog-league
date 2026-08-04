@@ -9,6 +9,7 @@ COMPETITION_RUNTIME_DIR="${RK_COMPETITION_RUNTIME_DIR:-$HOME/rk_non_arm_competit
 LINE_SESSION="${RK_LINE_TMUX_SESSION:-rk_line}"
 COMPETITION_SESSION="${RK_COMPETITION_TMUX_SESSION:-rk_non_arm_competition}"
 ESTOP_SERVICE="${RK_COMPETITION_ESTOP_SERVICE:-/safety/estop}"
+source "${SCRIPT_DIR}/stop_safety_common.sh"
 FALLBACK_USED=0
 
 resolve_workspace_dir() {
@@ -110,20 +111,6 @@ wait_for_mux_zero() {
     return 1
 }
 
-call_mux_estop() {
-    local service_type
-    local response
-
-    service_type="$(timeout 3s ros2 service type "$ESTOP_SERVICE" 2>/dev/null)"
-    if [ "$service_type" != "std_srvs/srv/SetBool" ]; then
-        return 1
-    fi
-    response="$(timeout 5s ros2 service call "$ESTOP_SERVICE" \
-        std_srvs/srv/SetBool '{data: true}' 2>&1)" || return 1
-    printf '%s\n' "$response"
-    printf '%s\n' "$response" | grep -Eq 'success[=:][[:space:]]*(true|True)'
-}
-
 emergency_cmd_vel_fallback() {
     echo "!!!!!!!!!!!!!!!! EMERGENCY FALLBACK !!!!!!!!!!!!!!!!" >&2
     echo "Normal command_mux estop/zero verification failed." >&2
@@ -177,7 +164,7 @@ else
 fi
 
 # 顺序要求 4--5：即使 mission_stop 已调用，也重复幂等 estop 并复核 mux 输出。
-if ! call_mux_estop || ! wait_for_mux_zero; then
+if ! rk_call_mux_estop stop_line_system_retry || ! wait_for_mux_zero; then
     emergency_cmd_vel_fallback
 fi
 

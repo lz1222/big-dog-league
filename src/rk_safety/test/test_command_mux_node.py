@@ -2,6 +2,7 @@ from importlib import import_module
 from pathlib import Path
 import sys
 import time
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -21,6 +22,38 @@ CommandMuxNode = command_mux_node.CommandMuxNode
 Twist = geometry_msgs.Twist
 Bool = std_msgs.Bool
 SetBool = std_srvs.SetBool
+
+
+def test_estop_service_logs_delivery_diagnostics_without_changing_response():
+    """服务端日志必须区分请求到达与 CLI 响应丢失，且保持 success=true。"""
+    node = object.__new__(CommandMuxNode)
+    node._core = SimpleNamespace(estop=False)
+    log_messages = []
+
+    class Logger:
+        def info(self, message):
+            log_messages.append(message)
+
+    def transition(enabled):
+        previous = bool(node._core.estop)
+        node._core.estop = bool(enabled)
+        return previous != bool(enabled)
+
+    node._transition_estop = transition
+    node.get_logger = lambda: Logger()
+    request = SimpleNamespace(data=True)
+    response = SimpleNamespace(success=False, message='')
+
+    result = CommandMuxNode._on_estop_service(node, request, response)
+
+    assert result is response
+    assert response.success is True
+    assert node._core.estop is True
+    assert len(log_messages) == 1
+    assert 'requested=true previous=false current=true changed=true' in (
+        log_messages[0]
+    )
+    assert 'success=true elapsed_ms=' in log_messages[0]
 
 
 def test_mission_estop_and_safe_recovery():

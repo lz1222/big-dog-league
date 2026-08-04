@@ -205,10 +205,15 @@ class CommandMuxNode(Node):
         self._transition_estop(message.data)
 
     def _on_estop_service(self, request, response):
-        changed = self._transition_estop(request.data)
+        """处理幂等急停请求，并输出一次低频服务端交付诊断。"""
+        started_at = time.monotonic()
+        requested = bool(request.data)
+        previous = bool(self._core.estop)
+        changed = self._transition_estop(requested)
+        current = bool(self._core.estop)
         response.success = True
         if changed:
-            if request.data:
+            if requested:
                 response.message = (
                     'Emergency stop enabled; command caches cleared'
                 )
@@ -217,10 +222,23 @@ class CommandMuxNode(Node):
                     'Emergency stop cleared; waiting for new command'
                 )
         else:
-            state = 'enabled' if request.data else 'cleared'
+            state = 'enabled' if requested else 'cleared'
             response.message = (
                 'Emergency stop already {}; state unchanged'.format(state)
             )
+        # 日志设施异常不能影响 fail-closed 服务回复，避免可观测性反向破坏急停。
+        try:
+            self.get_logger().info(
+                'Estop service request: requested={} previous={} current={} '
+                'changed={} success={} elapsed_ms={:.3f}'.format(
+                    str(requested).lower(), str(previous).lower(),
+                    str(current).lower(), str(bool(changed)).lower(),
+                    str(bool(response.success)).lower(),
+                    (time.monotonic() - started_at) * 1000.0,
+                )
+            )
+        except Exception:
+            pass
         return response
 
     def _transition_estop(self, enabled):
