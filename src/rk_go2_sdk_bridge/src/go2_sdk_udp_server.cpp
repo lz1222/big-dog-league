@@ -1,4 +1,5 @@
 #include "rk_go2_sdk_bridge/udp_motion_core.hpp"
+#include "rk_go2_sdk_bridge/startup_stop_retry_core.hpp"
 
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/go2/sport/sport_client.hpp>
@@ -18,6 +19,7 @@
 #include <string>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 
 namespace
@@ -219,7 +221,8 @@ int32_t SendStop(
   return result;
 }
 
-// 只要 SDK 初始化完成，任何异常离开作用域都会再次尝试停车。
+// SDK 已确认可控后，任何异常离开作用域都会再次尝试停车。启动门禁失败前
+// 不 arm，避免把“启动 StopMove 最多三次”的上限悄悄变成第四次动作调用。
 class EmergencyStopGuard
 {
 public:
@@ -235,6 +238,11 @@ public:
     }
   }
 
+  void Arm()
+  {
+    armed_ = true;
+  }
+
   void Disarm()
   {
     armed_ = false;
@@ -242,8 +250,47 @@ public:
 
 private:
   unitree::robot::go2::SportClient& client_;
-  bool armed_{true};
+  bool armed_{false};
 };
+
+int32_t SendStartupStopWithRetry(unitree::robot::go2::SportClient& client)
+{
+  // 这只是控制面已经就绪后的第二层保护，不能替代只读 DDS 门禁。
+  rk_go2_sdk_bridge::StartupStopRetryCore retry_core;
+  int32_t result = -1;
+  while (true) {
+    if (retry_core.NextAttempt() == 1) {
+      std::cout << "CONTROL_PLANE_DIAG event=FIRST_STOPMOVE_ATTEMPT"
+                << " time=" << WallTimeSeconds()
+                << std::endl;
+    }
+    const auto started = std::chrono::steady_clock::now();
+    result = client.StopMove();
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
+    const auto decision = retry_core.RecordResult(result);
+    std::cout << "SDK_STARTUP_DIAG attempt=" << decision.attempt
+              << " ret=" << result
+              << " elapsed_ms=" << elapsed_ms << std::endl;
+    if (decision.success) {
+      std::cout << "CONTROL_PLANE_DIAG event=FIRST_STOPMOVE_SUCCESS"
+                << " time=" << WallTimeSeconds()
+                << " attempt=" << decision.attempt << std::endl;
+      std::cout << "SDK_STARTUP_DIAG classification=SUCCESS attempts="
+                << decision.attempt << std::endl;
+      return 0;
+    }
+    if (decision.retry) {
+      std::cout << "SDK_STARTUP_DIAG backoff_ms=" << decision.backoff_ms
+                << std::endl;
+      std::this_thread::sleep_for(std::chrono::milliseconds(decision.backoff_ms));
+      continue;
+    }
+    std::cerr << "SDK_STARTUP_DIAG classification=FAILED attempts="
+              << decision.attempt << " final_ret=" << result << std::endl;
+    return result;
+  }
+}
 
 class SocketGuard
 {
@@ -352,9 +399,11 @@ int RunServer(const ServerConfig& config)
   EmergencyStopGuard stop_guard(client);
 
   // 启动时只清除残留运动，不调用 BalanceStand，避免擅自改变当前步态。
-  if (SendStop(client, "startup") != 0) {
-    throw std::runtime_error("startup StopMove failed");
+  // UDP socket 必须在此成功之后才可 bind，失败路径没有任何运动输入出口。
+  if (SendStartupStopWithRetry(client) != 0) {
+    throw std::runtime_error("STARTUP_STOPMOVE_RETRY_EXHAUSTED");
   }
+  stop_guard.Arm();
 
   const int socket_fd = CreateUdpSocket(config);
   SocketGuard socket_guard(socket_fd);
@@ -457,6 +506,13 @@ int main(int argc, char** argv)
   try {
     return RunServer(ParseArguments(argc, argv));
   } catch (const std::exception& error) {
+    const std::string message = error.what();
+    if (message.find("STARTUP_STOPMOVE_RETRY_EXHAUSTED") != std::string::npos) {
+      std::cerr << "SDK_STARTUP_DIAG classification="
+                << "STARTUP_STOPMOVE_RETRY_EXHAUSTED" << std::endl;
+    } else if (message.find("bind failed") != std::string::npos) {
+      std::cerr << "SDK_STARTUP_DIAG classification=UDP_BIND_ERROR" << std::endl;
+    }
     std::cerr << "[SDK] fatal: " << error.what() << std::endl;
     return 1;
   }

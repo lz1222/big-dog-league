@@ -1,8 +1,10 @@
-// 只读订阅 Go2 高层运动状态，用于在发送 Move 前确认当前步态和反馈速度。
+// 只读订阅 Go2 高层运动状态。它既可供人工观察，也可作为冷启动控制面门禁；
+// 全文件不创建 SportClient，因而不会向机器狗发送任何动作请求。
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
@@ -20,6 +22,13 @@ constexpr const char* kSportModeStateTopic = "rt/sportmodestate";
 constexpr double kDefaultDurationSec = 3.0;
 constexpr double kDefaultPrintRateHz = 2.0;
 
+struct GateConfig
+{
+  double timeout_sec{0.0};
+  int required_frames{0};
+  int max_frame_gap_ms{0};
+};
+
 double ParsePositiveDouble(const char* raw, const std::string& name)
 {
   const double value = std::stod(raw);
@@ -27,6 +36,12 @@ double ParsePositiveDouble(const char* raw, const std::string& name)
     throw std::runtime_error(name + " must be finite and positive");
   }
   return value;
+}
+
+double MonotonicSeconds()
+{
+  return std::chrono::duration<double>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 const char* GaitTypeName(uint8_t gait_type)
@@ -72,20 +87,89 @@ public:
     return true;
   }
 
+  /** 返回自启动以来收到的原始、有效状态帧和相邻有效帧最大间隔。
+   * 时间戳使用本机单调时钟，只用于判断 DDS 数据连续性，绝不信任机器人墙钟。
+   */
+  void GetStatistics(
+      int& raw_frames, int& valid_frames, int& invalid_frames,
+      int& max_frame_gap_ms) const
+  {
+    raw_frames = raw_frames_.load();
+    valid_frames = valid_frames_.load();
+    invalid_frames = invalid_frames_.load();
+    max_frame_gap_ms = max_frame_gap_ms_.load();
+  }
+
 private:
+  static bool IsFiniteState(const unitree_go::msg::dds_::SportModeState_& state)
+  {
+    // 这些数组来自固定 IDL；校验所有会被诊断输出的数值，避免坏帧伪装成就绪。
+    const auto& position = state.position();
+    const auto& velocity = state.velocity();
+    const auto& rpy = state.imu_state().rpy();
+    for (const auto value : position) {
+      if (!std::isfinite(value)) {
+        return false;
+      }
+    }
+    for (const auto value : velocity) {
+      if (!std::isfinite(value)) {
+        return false;
+      }
+    }
+    for (const auto value : rpy) {
+      if (!std::isfinite(value)) {
+        return false;
+      }
+    }
+    return std::isfinite(state.progress()) &&
+           std::isfinite(state.yaw_speed()) &&
+           std::isfinite(state.body_height()) &&
+           std::isfinite(state.foot_raise_height());
+  }
+
   void OnState(const void* message)
   {
     if (message == nullptr) {
       return;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    state_ = *static_cast<const unitree_go::msg::dds_::SportModeState_*>(
+    raw_frames_.fetch_add(1);
+    const auto& received = *static_cast<const unitree_go::msg::dds_::SportModeState_*>(
         message);
+    if (!IsFiniteState(received)) {
+      invalid_frames_.fetch_add(1);
+      return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    {
+      std::lock_guard<std::mutex> statistics_lock(statistics_mutex_);
+      if (has_valid_frame_) {
+        const int gap_ms = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - last_valid_frame_).count());
+        int previous_max = max_frame_gap_ms_.load();
+        while (gap_ms > previous_max &&
+               !max_frame_gap_ms_.compare_exchange_weak(previous_max, gap_ms)) {
+        }
+      }
+      last_valid_frame_ = now;
+      has_valid_frame_ = true;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_ = received;
     received_.store(true);
+    valid_frames_.fetch_add(1);
   }
 
   std::mutex mutex_;
+  std::mutex statistics_mutex_;
   std::atomic<bool> received_{false};
+  std::atomic<int> raw_frames_{0};
+  std::atomic<int> valid_frames_{0};
+  std::atomic<int> invalid_frames_{0};
+  std::atomic<int> max_frame_gap_ms_{0};
+  bool has_valid_frame_{false};
+  std::chrono::steady_clock::time_point last_valid_frame_;
   unitree_go::msg::dds_::SportModeState_ state_;
   unitree::robot::ChannelSubscriberPtr<
       unitree_go::msg::dds_::SportModeState_> subscriber_;
@@ -120,9 +204,101 @@ void PrintUsage(const char* program)
   std::cerr
       << "Usage:\n"
       << "  " << program
-      << " <network_interface> [duration_sec] [print_rate_hz]\n\n"
+      << " <network_interface> [duration_sec] [print_rate_hz]\n"
+      << "  " << program
+      << " <network_interface> --gate --timeout-sec SEC"
+      << " --required-frames COUNT --max-frame-gap-ms MS\n\n"
       << "This tool is READ_ONLY and subscribes to "
       << kSportModeStateTopic << ".\n";
+}
+
+GateConfig ParseGateArguments(int argc, char** argv)
+{
+  GateConfig config;
+  for (int index = 3; index < argc; ++index) {
+    const std::string option = argv[index];
+    if (option == "--gate") {
+      continue;
+    }
+    if (index + 1 >= argc) {
+      throw std::runtime_error("missing value for " + option);
+    }
+    const std::string value = argv[++index];
+    if (option == "--timeout-sec") {
+      config.timeout_sec = ParsePositiveDouble(value.c_str(), "timeout_sec");
+    } else if (option == "--required-frames") {
+      config.required_frames = std::stoi(value);
+    } else if (option == "--max-frame-gap-ms") {
+      config.max_frame_gap_ms = std::stoi(value);
+    } else {
+      throw std::runtime_error("unknown option: " + option);
+    }
+  }
+  if (config.timeout_sec <= 0.0 || config.required_frames <= 0 ||
+      config.max_frame_gap_ms <= 0) {
+    throw std::runtime_error(
+        "--gate requires positive --timeout-sec, --required-frames and "
+        "--max-frame-gap-ms");
+  }
+  return config;
+}
+
+int RunGate(const std::string& network_interface, const GateConfig& config)
+{
+  std::cout << "CONTROL_PLANE_DIAG event=PROBE_START interface="
+            << network_interface << " topic=" << kSportModeStateTopic
+            << " timeout_sec=" << config.timeout_sec
+            << " required_frames=" << config.required_frames
+            << " max_frame_gap_ms=" << config.max_frame_gap_ms << std::endl;
+  unitree::robot::ChannelFactory::Instance()->Init(0, network_interface);
+  SportStateMonitor monitor;
+  const auto start_time = std::chrono::steady_clock::now();
+  bool first_dds_state_logged = false;
+  while (std::chrono::steady_clock::now() - start_time <
+         std::chrono::duration<double>(config.timeout_sec)) {
+    int raw_frames = 0;
+    int valid_frames = 0;
+    int invalid_frames = 0;
+    int max_frame_gap_ms = 0;
+    monitor.GetStatistics(
+        raw_frames, valid_frames, invalid_frames, max_frame_gap_ms);
+    if (raw_frames > 0 && !first_dds_state_logged) {
+      std::cout << "CONTROL_PLANE_DIAG event=FIRST_DDS_STATE"
+                << " monotonic_sec=" << MonotonicSeconds()
+                << " raw_frames=" << raw_frames << std::endl;
+      first_dds_state_logged = true;
+    }
+    if (valid_frames >= config.required_frames && invalid_frames == 0 &&
+        max_frame_gap_ms <= config.max_frame_gap_ms) {
+      std::cout << "CONTROL_PLANE_DIAG event=FIRST_STABLE_DDS_STATE"
+                << " monotonic_sec=" << MonotonicSeconds()
+                << " valid_frames=" << valid_frames << std::endl;
+      std::cout << "CONTROL_PLANE_DIAG classification=SUCCESS"
+                << " raw_frames=" << raw_frames
+                << " valid_frames=" << valid_frames
+                << " max_frame_gap_ms=" << max_frame_gap_ms << std::endl;
+      return 0;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  int raw_frames = 0;
+  int valid_frames = 0;
+  int invalid_frames = 0;
+  int max_frame_gap_ms = 0;
+  monitor.GetStatistics(raw_frames, valid_frames, invalid_frames, max_frame_gap_ms);
+  std::string classification = "ROBOT_STATE_STREAM_NOT_FRESH";
+  if (raw_frames == 0) {
+    classification = "ROBOT_DDS_NOT_DISCOVERED";
+  } else if (invalid_frames > 0) {
+    classification = "ROBOT_STATE_STREAM_FORMAT_INVALID";
+  }
+  std::cerr << "CONTROL_PLANE_DIAG classification=" << classification
+            << " raw_frames=" << raw_frames
+            << " valid_frames=" << valid_frames
+            << " invalid_frames=" << invalid_frames
+            << " max_frame_gap_ms=" << max_frame_gap_ms << std::endl;
+  return 1;
 }
 
 }  // namespace
@@ -136,6 +312,9 @@ int main(int argc, char** argv)
 
   try {
     const std::string network_interface = argv[1];
+    if (argc >= 3 && std::string(argv[2]) == "--gate") {
+      return RunGate(network_interface, ParseGateArguments(argc, argv));
+    }
     const double duration_sec =
         argc >= 3 ? ParsePositiveDouble(argv[2], "duration_sec")
                   : kDefaultDurationSec;

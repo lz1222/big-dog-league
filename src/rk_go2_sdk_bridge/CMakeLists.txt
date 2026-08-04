@@ -125,6 +125,7 @@ install(PROGRAMS
   scripts/go2_warning_sign_sdk_loop.sh
   scripts/go2_front_camera_bridge.py
   scripts/go2_sdk_server_runtime.py
+  scripts/go2_control_plane_gate.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -226,6 +227,14 @@ if(BUILD_TESTING)
     NAME test_udp_motion_core
     COMMAND test_udp_motion_core
   )
+  add_executable(test_startup_stop_retry_core
+    test/test_startup_stop_retry_core.cpp
+  )
+  target_include_directories(test_startup_stop_retry_core PRIVATE include)
+  add_test(
+    NAME test_startup_stop_retry_core
+    COMMAND test_startup_stop_retry_core
+  )
   add_test(
     NAME test_front_camera_bridge
     COMMAND python3 -m pytest
@@ -237,6 +246,13 @@ if(BUILD_TESTING)
     NAME test_sdk_server_runtime
     COMMAND python3 -m pytest
       "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sdk_server_runtime.py"
+      -v --tb=short
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  add_test(
+    NAME test_control_plane_gate
+    COMMAND python3 -m pytest
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_control_plane_gate.py"
       -v --tb=short
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   )
