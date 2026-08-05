@@ -225,12 +225,14 @@ def main(argv=None):
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1, env=environment,
         )
-        threading.Thread(
+        stdout_thread = threading.Thread(
             target=reader, args=(monitor.stdout, stdout_file, monitor_queue), daemon=True
-        ).start()
-        threading.Thread(
+        )
+        stdout_thread.start()
+        stderr_thread = threading.Thread(
             target=reader, args=(monitor.stderr, stderr_file, queue.Queue()), daemon=True
-        ).start()
+        )
+        stderr_thread.start()
         try:
             with open('/proc/{}/maps'.format(monitor.pid), 'r') as maps:
                 with open(os.path.join(args.run_root, 'process_maps.txt'), 'w') as output:
@@ -239,11 +241,8 @@ def main(argv=None):
             with open(os.path.join(args.run_root, 'process_maps.txt'), 'w') as maps:
                 maps.write('unavailable: {}\n'.format(error))
 
-        while True:
-            current_ns = time.monotonic_ns()
-            if current_ns - start_ns >= int(MEASUREMENT_HARD_TIMEOUT_SEC * 1e9):
-                write_event(events, start_ns, 'MEASUREMENT_HARD_TIMEOUT')
-                break
+        def drain_monitor_queue():
+            """将已落入 stdout 管道的末尾帧全部记账，避免目标退出时少计帧。"""
             while True:
                 try:
                     line = monitor_queue.get_nowait()
@@ -282,6 +281,13 @@ def main(argv=None):
                     if valid and 'first_valid_state_ns' not in first:
                         first['first_valid_state_ns'] = frame_ns
                         write_event(events, start_ns, 'FIRST_VALID_STATE')
+
+        while True:
+            current_ns = time.monotonic_ns()
+            if current_ns - start_ns >= int(MEASUREMENT_HARD_TIMEOUT_SEC * 1e9):
+                write_event(events, start_ns, 'MEASUREMENT_HARD_TIMEOUT')
+                break
+            drain_monitor_queue()
             if current_ns >= next_ping:
                 ping_sequence += 1
                 link = run_read_only(['ip', '-br', 'link', 'show', args.interface])
@@ -338,6 +344,11 @@ def main(argv=None):
             # 仅结束本脚本创建的只读订阅子进程；不会触及 SDK Server 或机器人。
             monitor.kill()
             monitor_returncode = monitor.wait(timeout=10)
+        # wait() 仅保证子进程退出，不保证后台 reader 已把管道最后几帧放入队列。
+        # 先等待 reader EOF 再排空队列，防止完整 200 帧采集被误判为不完整。
+        stdout_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
+        drain_monitor_queue()
         write_event(events, start_ns, 'MONITOR_PROCESS_EXIT', returncode=monitor_returncode)
         write_event(events, start_ns, 'MEASUREMENT_END')
 
