@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import shutil
 import statistics
 import subprocess
@@ -75,12 +76,9 @@ def write_post_exit_snapshots(run_root):
 
 def parse_rtt_ms(text):
     """从 iputils ping 输出提取 RTT；缺失时保留空值而非猜测零延迟。"""
-    for token in text.replace('=', ' ').split():
-        if token.endswith('ms'):
-            try:
-                return float(token[:-2])
-            except ValueError:
-                pass
+    match = re.search(r'(?:time|时间)\s*[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*ms', text)
+    if match:
+        return float(match.group(1))
     return ''
 
 

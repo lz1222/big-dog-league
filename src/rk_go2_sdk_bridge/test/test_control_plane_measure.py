@@ -68,6 +68,15 @@ def test_frame_statistics_cover_average_percentiles_and_interruptions():
     assert stats['longest_state_interruption_ms'] == 80.0
 
 
+def test_ping_rtt_parser_records_iputils_time_value():
+    """每次成功 ping 必须保留真实 RTT，不能把“time=… ms”误写为空。"""
+    measure = _load_measure_module()
+    output = ('64 bytes from 192.168.123.161: icmp_seq=1 ttl=64 '
+              'time=0.482 ms\n')
+    assert measure.parse_rtt_ms(output) == 0.482
+    assert measure.parse_rtt_ms('timeout') == ''
+
+
 def test_measurement_classification_never_becomes_production_readiness():
     """硬上限和帧数只表达采集完成度，三种结果均不等于生产 gate 成功。"""
     measure = _load_measure_module()
