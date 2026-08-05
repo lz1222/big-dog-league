@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import array
 from dataclasses import dataclass, replace
 import math
 from typing import Optional, Sequence, Tuple
@@ -32,6 +33,35 @@ except ImportError:
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
+
+
+def make_debug_image_message(image, encoding):
+    """直接封装调试数组，避开 OpenCV5 与 Foxy cv_bridge 输出不兼容。"""
+    if not isinstance(image, np.ndarray) or image.dtype != np.uint8:
+        raise ValueError('debug image must be a uint8 numpy array')
+    if encoding == 'mono8':
+        if image.ndim != 2:
+            raise ValueError('mono8 debug image must have two dimensions')
+        height, width = image.shape
+        channels = 1
+    elif encoding == 'bgr8':
+        if image.ndim != 3 or image.shape[2] != 3:
+            raise ValueError('bgr8 debug image must have three channels')
+        height, width, channels = image.shape
+    else:
+        raise ValueError(f'unsupported debug encoding: {encoding}')
+
+    if not image.flags.c_contiguous:
+        image = np.ascontiguousarray(image)
+    message = Image()
+    message.height = int(height)
+    message.width = int(width)
+    message.encoding = encoding
+    message.is_bigendian = 0
+    message.step = int(width) * int(channels)
+    # array('B') 避免 Foxy 为 bytes 执行逐字节 Python 类型检查。
+    message.data = array.array('B', image.tobytes())
+    return message
 
 
 PENDING_SWITCH_STABLE_FRAMES = 3
@@ -2471,8 +2501,10 @@ class RealLineTrackerNode(Node):
             status['mask_shape'] = self.shape_text(mask)
             status['overlay_shape'] = self.shape_text(overlay)
 
-            mask_msg = self.bridge.cv2_to_imgmsg(mask, encoding='mono8')
-            overlay_msg = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
+            mask_msg = make_debug_image_message(mask, encoding='mono8')
+            overlay_msg = make_debug_image_message(
+                overlay, encoding='bgr8'
+            )
             mask_msg.header = image_msg.header
             overlay_msg.header = image_msg.header
 

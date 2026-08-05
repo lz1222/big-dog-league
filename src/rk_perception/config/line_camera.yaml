@@ -1,0 +1,13 @@
+usb_line_camera_node:
+  ros__parameters:
+    # 稳定 by-id 路径避免 /dev/video 编号因插拔顺序改变。
+    device: /dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB_2.0_Camera_SN0001-video-index0
+    image_topic: /camera/color/image_raw
+    frame_id: line_camera_optical_frame
+    width: 640
+    height: 480
+    fps: 15.0
+    fourcc: MJPG
+    buffer_size: 1
+    read_failure_limit: 10
+    frame_stall_timeout_sec: 1.0

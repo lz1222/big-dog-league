@@ -7,6 +7,7 @@ from rk_perception.real_line_tracker_node import (
     detect_line_in_image,
     detect_red_circle,
     detect_white_bar,
+    make_debug_image_message,
 )
 
 
@@ -160,3 +161,16 @@ def test_white_horizontal_bar_is_detected_but_white_block_is_rejected():
     rejected = detect_white_bar(square)
 
     assert rejected.visible is False
+
+
+def test_debug_images_use_native_ros_layout_without_cv_bridge_output():
+    mask = np.zeros((4, 5), dtype=np.uint8)
+    overlay = np.zeros((4, 5, 3), dtype=np.uint8)
+
+    mask_message = make_debug_image_message(mask, 'mono8')
+    overlay_message = make_debug_image_message(overlay, 'bgr8')
+
+    assert mask_message.step == 5
+    assert len(mask_message.data) == 20
+    assert overlay_message.step == 15
+    assert len(overlay_message.data) == 60
