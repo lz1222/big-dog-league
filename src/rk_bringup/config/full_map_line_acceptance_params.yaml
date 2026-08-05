@@ -1,0 +1,25 @@
+# 全图巡线专项验收覆盖层必须使用节点精确匹配。
+# Foxy 会让基础 YAML 的精确节点段覆盖 /** 通配参数；因此不能仅在 launch
+# 中传字典，否则安全专用话题和 debug 证据开关可能悄然失效。
+real_line_tracker_node:
+  ros__parameters:
+    image_topic: /camera/color/image_raw
+    enable_debug_image: true
+    debug_log: true
+
+line_follower_node:
+  ros__parameters:
+    # 完整比赛 /mission/start 不可触发专项巡线。
+    mission_start_topic: /line_acceptance/start
+    mission_stop_topic: /line_acceptance/stop
+    suggested_cmd_topic: /line_acceptance/line_cmd_suggested
+    debug_log: true
+
+    # 阶段 B/C 的固定低速上限；阶段 A 仍由未 ARM 的速度门强制为零。
+    min_driving_speed: 0.05
+    base_speed: 0.05
+    mid_speed: 0.05
+    slow_speed: 0.05
+    short_lost_linear_speed: 0.0
+    lost_turn_linear_speed: 0.0
+    search_linear_speed: 0.0

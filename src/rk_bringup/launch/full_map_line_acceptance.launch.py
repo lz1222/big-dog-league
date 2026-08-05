@@ -18,13 +18,11 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     """构造 line-only 链路；速度必须先经过 ARM 心跳门和 command_mux."""
-    debug = LaunchConfiguration('debug')
     allowed_segment_id = LaunchConfiguration('allowed_segment_id')
     start_realsense = LaunchConfiguration('start_realsense')
     enable_depth = LaunchConfiguration('enable_depth')
     rgb_camera_profile = LaunchConfiguration('rgb_camera.profile')
     depth_module_profile = LaunchConfiguration('depth_module.profile')
-    image_topic = LaunchConfiguration('image_topic')
     start_sdk_server = LaunchConfiguration('start_sdk_server')
     sdk_network_interface = LaunchConfiguration('sdk_network_interface')
     bridge_max_angular_z = LaunchConfiguration('bridge_max_angular_z')
@@ -35,6 +33,9 @@ def generate_launch_description():
     line_nav_config = PathJoinSubstitution([
         bringup_share, 'config', 'line_nav_params.yaml',
     ])
+    acceptance_config = PathJoinSubstitution([
+        bringup_share, 'config', 'full_map_line_acceptance_params.yaml',
+    ])
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -43,10 +44,6 @@ def generate_launch_description():
                 'Only this exact SEGMENT_READY <id> command can ARM; '
                 'keep UNSET during phase-A manual collection.'
             ),
-        ),
-        DeclareLaunchArgument(
-            'debug', default_value='true',
-            description='Publish line mask and overlay evidence.',
         ),
         DeclareLaunchArgument(
             'start_realsense', default_value='true',
@@ -63,10 +60,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'depth_module.profile', default_value='424x240x15',
             description='Kept only for the optional disabled depth stream.',
-        ),
-        DeclareLaunchArgument(
-            'image_topic', default_value='/camera/color/image_raw',
-            description='D435i image input for real_line_tracker_node.',
         ),
         DeclareLaunchArgument(
             'line_speed', default_value='0.05',
@@ -111,11 +104,8 @@ def generate_launch_description():
         Node(
             package='rk_perception', executable='real_line_tracker_node',
             name='real_line_tracker_node', output='screen',
-            parameters=[line_nav_config, {
-                'image_topic': image_topic,
-                'enable_debug_image': ParameterValue(debug, value_type=bool),
-                'debug_log': ParameterValue(debug, value_type=bool),
-            }],
+            # 专项覆盖层使用精确节点名，才能压过基础 YAML 的同名节点段。
+            parameters=[line_nav_config, acceptance_config],
         ),
         Node(
             package='rk_bringup', executable='line_acceptance_guard_node',
@@ -125,22 +115,7 @@ def generate_launch_description():
         Node(
             package='rk_navigation', executable='line_follower_node',
             name='line_follower_node', output='screen',
-            parameters=[line_nav_config, {
-                # 用验收专用话题切断完整比赛的 /mission/start 入口。
-                'mission_start_topic': '/line_acceptance/start',
-                'mission_stop_topic': '/line_acceptance/stop',
-                'suggested_cmd_topic': '/line_acceptance/line_cmd_suggested',
-                'debug_log': True,
-                'min_driving_speed': ParameterValue(
-                    line_speed, value_type=float
-                ),
-                'base_speed': ParameterValue(line_speed, value_type=float),
-                'mid_speed': ParameterValue(line_speed, value_type=float),
-                'slow_speed': ParameterValue(line_speed, value_type=float),
-                'short_lost_linear_speed': 0.0,
-                'lost_turn_linear_speed': 0.0,
-                'search_linear_speed': 0.0,
-            }],
+            parameters=[line_nav_config, acceptance_config],
         ),
         Node(
             package='rk_bringup', executable='line_acceptance_cmd_gate_node',
