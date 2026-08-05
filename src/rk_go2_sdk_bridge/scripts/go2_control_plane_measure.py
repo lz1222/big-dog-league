@@ -76,7 +76,8 @@ def write_post_exit_snapshots(run_root):
 
 def parse_rtt_ms(text):
     """从 iputils ping 输出提取 RTT；缺失时保留空值而非猜测零延迟。"""
-    match = re.search(r'(?:time|时间)\s*[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*ms', text)
+    match = re.search(
+        r'(?:time|时间)\s*[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*(?:ms|毫秒)', text)
     if match:
         return float(match.group(1))
     return ''

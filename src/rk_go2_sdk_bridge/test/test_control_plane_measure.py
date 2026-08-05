@@ -74,6 +74,8 @@ def test_ping_rtt_parser_records_iputils_time_value():
     output = ('64 bytes from 192.168.123.161: icmp_seq=1 ttl=64 '
               'time=0.482 ms\n')
     assert measure.parse_rtt_ms(output) == 0.482
+    chinese_output = '64 字节，来自 192.168.123.161: icmp_seq=1 时间=0.213 毫秒\n'
+    assert measure.parse_rtt_ms(chinese_output) == 0.213
     assert measure.parse_rtt_ms('timeout') == ''
 
 
