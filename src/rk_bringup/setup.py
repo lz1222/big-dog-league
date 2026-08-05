@@ -46,6 +46,10 @@ setup(
             'rk_bringup.competition_readiness_node:main',
             'non_arm_smoke_publisher = '
             'rk_bringup.non_arm_smoke_publisher:main',
+            'line_acceptance_guard_node = '
+            'rk_bringup.line_acceptance_guard_node:main',
+            'line_acceptance_cmd_gate_node = '
+            'rk_bringup.line_acceptance_cmd_gate_node:main',
         ],
     },
 )
