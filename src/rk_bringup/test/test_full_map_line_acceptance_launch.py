@@ -36,7 +36,7 @@ def test_acceptance_launch_has_only_line_safety_and_velocity_nodes():
     """实体专项入口不得包含 inspection、机械臂、跳跃或任务状态机。"""
     executables = _node_executables()
     assert set(executables) == {
-        'realsense2_camera_node',
+        'usb_line_camera_node',
         'real_line_tracker_node',
         'line_acceptance_guard_node',
         'line_follower_node',

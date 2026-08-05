@@ -8,7 +8,6 @@ from launch.actions import (
     IncludeLaunchDescription,
     LogInfo,
 )
-from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -19,10 +18,6 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     """构造 line-only 链路；速度必须先经过 ARM 心跳门和 command_mux."""
     allowed_segment_id = LaunchConfiguration('allowed_segment_id')
-    start_realsense = LaunchConfiguration('start_realsense')
-    enable_depth = LaunchConfiguration('enable_depth')
-    rgb_camera_profile = LaunchConfiguration('rgb_camera.profile')
-    depth_module_profile = LaunchConfiguration('depth_module.profile')
     start_sdk_server = LaunchConfiguration('start_sdk_server')
     sdk_network_interface = LaunchConfiguration('sdk_network_interface')
     bridge_max_angular_z = LaunchConfiguration('bridge_max_angular_z')
@@ -36,6 +31,9 @@ def generate_launch_description():
     acceptance_config = PathJoinSubstitution([
         bringup_share, 'config', 'full_map_line_acceptance_params.yaml',
     ])
+    line_camera_config = PathJoinSubstitution([
+        FindPackageShare('rk_perception'), 'config', 'line_camera.yaml',
+    ])
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -44,22 +42,6 @@ def generate_launch_description():
                 'Only this exact SEGMENT_READY <id> command can ARM; '
                 'keep UNSET during phase-A manual collection.'
             ),
-        ),
-        DeclareLaunchArgument(
-            'start_realsense', default_value='true',
-            description='Start D435i color stream for line evidence.',
-        ),
-        DeclareLaunchArgument(
-            'enable_depth', default_value='false',
-            description='Depth is unnecessary for this line-only acceptance.',
-        ),
-        DeclareLaunchArgument(
-            'rgb_camera.profile', default_value='424x240x15',
-            description='D435i color profile used by the existing tracker.',
-        ),
-        DeclareLaunchArgument(
-            'depth_module.profile', default_value='424x240x15',
-            description='Kept only for the optional disabled depth stream.',
         ),
         DeclareLaunchArgument(
             'line_speed', default_value='0.05',
@@ -83,23 +65,16 @@ def generate_launch_description():
         ),
         LogInfo(
             msg=(
-                'Full-map line acceptance mode: DISARMED by default. No '
+                'Full-map Sonix line acceptance mode: DISARMED by default. No '
                 'mission, inspection, arm, gait, blink, stretch, hello, '
                 'or jump node is started.'
             ),
         ),
         Node(
-            package='realsense2_camera', executable='realsense2_camera_node',
-            namespace='camera', name='camera', output='screen',
-            condition=IfCondition(start_realsense),
-            parameters=[{
-                'enable_color': True,
-                'enable_depth': ParameterValue(enable_depth, value_type=bool),
-                'enable_gyro': False,
-                'enable_accel': False,
-                'rgb_camera.profile': rgb_camera_profile,
-                'depth_module.profile': depth_module_profile,
-            }],
+            # Sonix UVC 节点只发布巡线图像，不打开 D435i 或任何任务相机。
+            package='rk_perception', executable='usb_line_camera_node',
+            name='usb_line_camera_node', output='screen',
+            parameters=[line_camera_config],
         ),
         Node(
             package='rk_perception', executable='real_line_tracker_node',
