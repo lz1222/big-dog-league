@@ -1,0 +1,148 @@
+{
+  "label": "straight_slow",
+  "timestamp": "20260806_201840",
+  "sample_count": 11,
+  "records": [
+    {
+      "index": 1,
+      "timestamp": "2026-08-06T20:16:39.509505",
+      "yaw_before_rad": 1.073403,
+      "yaw_before_deg": 61.5,
+      "yaw_after_rad": 1.072836,
+      "yaw_after_deg": 61.47,
+      "stop_yaw_shift_rad": -0.000567,
+      "stop_yaw_shift_deg": -0.03,
+      "settling_time_sec": 5.393,
+      "label": "straight_slow"
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-08-06T20:16:54.290172",
+      "yaw_before_rad": 0.97788,
+      "yaw_before_deg": 56.03,
+      "yaw_after_rad": 1.023542,
+      "yaw_after_deg": 58.64,
+      "stop_yaw_shift_rad": 0.045663,
+      "stop_yaw_shift_deg": 2.62,
+      "settling_time_sec": 5.463,
+      "label": "straight_slow"
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-08-06T20:17:11.725651",
+      "yaw_before_rad": 0.962032,
+      "yaw_before_deg": 55.12,
+      "yaw_after_rad": 0.964368,
+      "yaw_after_deg": 55.25,
+      "stop_yaw_shift_rad": 0.002336,
+      "stop_yaw_shift_deg": 0.13,
+      "settling_time_sec": 4.68,
+      "label": "straight_slow"
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-08-06T20:17:26.109607",
+      "yaw_before_rad": 1.034939,
+      "yaw_before_deg": 59.3,
+      "yaw_after_rad": 1.033955,
+      "yaw_after_deg": 59.24,
+      "stop_yaw_shift_rad": -0.000983,
+      "stop_yaw_shift_deg": -0.06,
+      "settling_time_sec": 5.626,
+      "label": "straight_slow"
+    },
+    {
+      "index": 5,
+      "timestamp": "2026-08-06T20:17:38.177186",
+      "yaw_before_rad": 1.084781,
+      "yaw_before_deg": 62.15,
+      "yaw_after_rad": 1.175927,
+      "yaw_after_deg": 67.38,
+      "stop_yaw_shift_rad": 0.091146,
+      "stop_yaw_shift_deg": 5.22,
+      "settling_time_sec": 4.443,
+      "label": "straight_slow"
+    },
+    {
+      "index": 6,
+      "timestamp": "2026-08-06T20:17:51.582071",
+      "yaw_before_rad": 1.089927,
+      "yaw_before_deg": 62.45,
+      "yaw_after_rad": 1.142803,
+      "yaw_after_deg": 65.48,
+      "stop_yaw_shift_rad": 0.052876,
+      "stop_yaw_shift_deg": 3.03,
+      "settling_time_sec": 3.71,
+      "label": "straight_slow"
+    },
+    {
+      "index": 7,
+      "timestamp": "2026-08-06T20:18:02.573089",
+      "yaw_before_rad": 1.149889,
+      "yaw_before_deg": 65.88,
+      "yaw_after_rad": 1.185976,
+      "yaw_after_deg": 67.95,
+      "stop_yaw_shift_rad": 0.036087,
+      "stop_yaw_shift_deg": 2.07,
+      "settling_time_sec": 4.97,
+      "label": "straight_slow"
+    },
+    {
+      "index": 8,
+      "timestamp": "2026-08-06T20:18:12.167771",
+      "yaw_before_rad": 1.036179,
+      "yaw_before_deg": 59.37,
+      "yaw_after_rad": 1.11979,
+      "yaw_after_deg": 64.16,
+      "stop_yaw_shift_rad": 0.083611,
+      "stop_yaw_shift_deg": 4.79,
+      "settling_time_sec": 4.073,
+      "label": "straight_slow"
+    },
+    {
+      "index": 9,
+      "timestamp": "2026-08-06T20:18:21.357330",
+      "yaw_before_rad": 1.140377,
+      "yaw_before_deg": 65.34,
+      "yaw_after_rad": 1.14563,
+      "yaw_after_deg": 65.64,
+      "stop_yaw_shift_rad": 0.005253,
+      "stop_yaw_shift_deg": 0.3,
+      "settling_time_sec": 4.113,
+      "label": "straight_slow"
+    },
+    {
+      "index": 10,
+      "timestamp": "2026-08-06T20:18:31.331891",
+      "yaw_before_rad": 0.980261,
+      "yaw_before_deg": 56.16,
+      "yaw_after_rad": 0.997231,
+      "yaw_after_deg": 57.14,
+      "stop_yaw_shift_rad": 0.01697,
+      "stop_yaw_shift_deg": 0.97,
+      "settling_time_sec": 2.643,
+      "label": "straight_slow"
+    },
+    {
+      "index": 11,
+      "timestamp": "2026-08-06T20:18:39.030232",
+      "yaw_before_rad": 0.987258,
+      "yaw_before_deg": 56.57,
+      "yaw_after_rad": 1.00891,
+      "yaw_after_deg": 57.81,
+      "stop_yaw_shift_rad": 0.021652,
+      "stop_yaw_shift_deg": 1.24,
+      "settling_time_sec": 2.026,
+      "label": "straight_slow"
+    }
+  ],
+  "summary": {
+    "median_shift_deg": 1.24,
+    "mean_shift_deg": 1.84,
+    "std_dev_deg": 1.8,
+    "direction_consistency": 0.82,
+    "min_shift_deg": -0.06,
+    "max_shift_deg": 5.22,
+    "enabled": true
+  }
+}
