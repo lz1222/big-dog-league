@@ -44,7 +44,9 @@ class T4BrakingDiagnostics(Node):
     def __init__(self):
         super().__init__('t4_braking_diagnostics')
 
-        self._config = LidarDistanceConfig()
+        self._config = LidarDistanceConfig(min_cluster_points=2, cluster_tolerance_m=0.08,
+                                            front_half_angle_deg=30,
+                                            body_x_min_m=-0.15, body_x_max_m=0.15)
         self._speed_est = LiDARSpeedEstimator(min_samples=4, max_speed_m_s=0.80)
         self._lock = threading.Lock()
         self._cloud = []
@@ -84,7 +86,7 @@ class T4BrakingDiagnostics(Node):
         filt = voxel_downsample(filt, self._config.voxel_size_m)
 
         front_pts = [p for p in filt
-                     if abs(math.degrees(math.atan2(p.y, p.x))) <= 15
+                     if abs(math.degrees(math.atan2(p.y, p.x))) <= 30
                      and p.z > 0.01]
         if not front_pts:
             return
