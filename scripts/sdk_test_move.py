@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Quick SDK movement test — single script."""
+import os, sys
+os.environ.setdefault('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp')
+os.environ.setdefault('LD_LIBRARY_PATH', '/usr/local/cyclonedds/lib:/opt/ros/foxy/lib/aarch64-linux-gnu:/opt/ros/foxy/lib')
 import rclpy, time
 from geometry_msgs.msg import Twist
 
