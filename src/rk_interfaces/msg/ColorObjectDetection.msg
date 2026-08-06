@@ -8,6 +8,13 @@ bool stale
 string color
 float32 confidence
 
+# SHAPE IS A 2D PROJECTED CONTOUR CLASSIFICATION.
+# NOT A VALIDATED 3D OBJECT CLASSIFICATION.
+string shape
+float32 shape_confidence
+int32 polygon_vertices
+float32 rotated_aspect_ratio
+
 int32 center_x
 int32 center_y
 

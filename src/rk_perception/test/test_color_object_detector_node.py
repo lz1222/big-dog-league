@@ -29,3 +29,12 @@ def test_node_publishes_required_debug_encodings():
     assert "encoding='bgr8'" in source
     assert "encoding='mono8'" in source
     assert 'expected_color changed' in source
+
+
+def test_node_assigns_shape_fields_without_gating_grasp_ready():
+    source = _node_source()
+    assert 'result.shape = candidate.shape' in source
+    assert 'result.shape_confidence = float(candidate.shape_confidence)' in source
+    assert "'shape={0} conf={1:.2f} vertices={2} rot_aspect={3:.2f}'" in source
+    ready_statement = source[source.index('grasp_ready = bool('):source.index('if stale:')]
+    assert 'candidate.shape' not in ready_statement

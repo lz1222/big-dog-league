@@ -257,6 +257,10 @@ class ColorObjectDetectorNode(Node):
         result.stale = bool(stale)
         result.color = candidate.color
         result.confidence = float(candidate.confidence)
+        result.shape = candidate.shape
+        result.shape_confidence = float(candidate.shape_confidence)
+        result.polygon_vertices = int(candidate.polygon_vertices)
+        result.rotated_aspect_ratio = float(candidate.rotated_aspect_ratio)
         result.center_x, result.center_y = candidate.center_x, candidate.center_y
         result.bbox_x, result.bbox_y = candidate.bbox_x, candidate.bbox_y
         result.bbox_width, result.bbox_height = candidate.bbox_width, candidate.bbox_height
@@ -297,6 +301,9 @@ class ColorObjectDetectorNode(Node):
                 result.detected, result.confirmed, result.grasp_ready, result.stale),
             'depth={0:.3f} valid={1} confidence={2:.2f}'.format(
                 result.depth_m, result.valid_depth_pixels, result.confidence),
+            'shape={0} conf={1:.2f} vertices={2} rot_aspect={3:.2f}'.format(
+                result.shape, result.shape_confidence,
+                result.polygon_vertices, result.rotated_aspect_ratio),
             camera_text, arm_text, 'reason={0}'.format(result.reason),
         ]
         for index, line in enumerate(lines):

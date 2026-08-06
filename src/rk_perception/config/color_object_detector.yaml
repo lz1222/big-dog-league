@@ -62,6 +62,21 @@ color_object_detector:
     static_tf_roll_rad: 0.0
     static_tf_pitch_rad: 0.0
     static_tf_yaw_rad: 0.0
+    shape_detection:
+      # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED. SHAPE IS A 2D PROJECTED
+      # CONTOUR CLASSIFICATION, NOT A VALIDATED 3D OBJECT CLASSIFICATION.
+      enabled: true
+      approx_epsilon_ratio: 0.03
+      min_shape_area_px: 200.0
+      min_shape_solidity: 0.75
+      elongated_min_aspect_ratio: 2.5
+      square_max_aspect_ratio: 1.20
+      rectangle_min_aspect_ratio: 1.20
+      rectangle_max_aspect_ratio: 2.50
+      circle_min_circularity: 0.78
+      circle_min_solidity: 0.88
+      circle_min_vertices: 7
+      circle_max_aspect_ratio: 1.25
     arm_workspace:
       # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED
       x_min_m: 0.10

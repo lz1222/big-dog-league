@@ -2,6 +2,39 @@
 
 审计日期：2026-08-06。此记录仅描述新颜色目标定位模块，不改变已验收的抓取平台、警示标志和动作链路。
 
+## 二维形状分类增量
+
+`rk_perception/color_object_detector_core.py` 在原有候选选择完成后，对最终
+OpenCV contour 调用 `classify_contour_shape`。它是纯 Python/OpenCV 规则函数，
+不复制 HSV、深度、反投影或 TF 链路，也不会改变 `detected`、`confirmed` 或
+`grasp_ready`。`unknown` 是正常、保守的输出。
+
+**SHAPE IS A 2D PROJECTED CONTOUR CLASSIFICATION, NOT A VALIDATED 3D OBJECT
+CLASSIFICATION.** 因此 `circle` 不等于 sphere/cylinder，`square` 不等于 cube。
+
+分类优先级为：有效面积和有限几何检查、`elongated`、三顶点 `triangle`、四顶点
+的旋转 `square`/`rectangle`、高圆度 `circle`、最后 `unknown`。所有长宽比均来自
+`cv2.minAreaRect`，因而旋转正方形不会使用轴对齐 bbox 误分。
+
+规则置信度被 clamp 到 `[0, 1]`，不是机器学习概率：triangle 使用顶点精确匹配、
+solidity 和面积；square 使用顶点、接近 1 的旋转长宽比和 solidity；rectangle 使用
+四顶点、处于 YAML 矩形范围和面积/solidity；circle 使用圆度、等轴程度、solidity 和
+近似顶点数；elongated 使用超过细长阈值的程度和 solidity。unknown 的置信度为 0。
+
+`shape_detection` YAML 块中的 `approx_epsilon_ratio`、最小面积/solidity、细长、
+square/rectangle 和 circle 阈值全部为 DEVELOPMENT DEFAULT / NOT FIELD VALIDATED。
+非法、NaN 或 Inf 参数在节点初始化时 fail-fast；`enabled: false` 保留原 RGB-D
+结果，但输出 `shape=unknown` 和 `shape_confidence=0`。
+
+接口 `ColorObjectDetection` 增加 `shape`、`shape_confidence`、`polygon_vertices` 和
+`rotated_aspect_ratio`。overlay 和 HSV 标定工具会显示这四项，标定工具仍然只读相机
+数据、不会发布控制命令。
+
+本阶段只运行了 OpenCV 合成轮廓测试，没有连接 D435i、没有真实光照或倾斜视角测试、
+没有验证圆柱/球体/立方体，也没有进行机械臂抓取。后续真机应在各种距离、光照、旋转
+和遮挡下核验 HSV、轮廓、深度与 TF，并在 overlay、检测 topic 和 RViz 对照后再讨论
+任务级形状门控。
+
 ## 现状
 
 1. D435i 启动入口为 `rk_bringup/launch/realsense_low_bandwidth.launch.py`，以 `camera` namespace 启动外部 `realsense2_camera/realsense2_camera_node`，默认开启 color/depth，profile 为 `640x480x15`。

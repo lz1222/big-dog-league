@@ -34,9 +34,149 @@ class DetectionCandidate(object):
     valid_depth_pixels: int = 0
     position_camera: tuple = (0.0, 0.0, 0.0)
     confidence: float = 0.0
+    # 形状仅是二维投影轮廓分类，绝不是经验证的三维物体类别。
+    shape: str = 'unknown'
+    shape_confidence: float = 0.0
+    polygon_vertices: int = 0
+    rotated_aspect_ratio: float = 0.0
     reason: str = 'no_candidate'
     contour: object = field(default=None, repr=False)
     mask: object = field(default=None, repr=False)
+
+
+@dataclass
+class ShapeClassification(object):
+    """二维投影轮廓的规则分类结果，不推断球体、圆柱或立方体。"""
+
+    shape: str = 'unknown'
+    confidence: float = 0.0
+    polygon_vertices: int = 0
+    rotated_aspect_ratio: float = 0.0
+    circularity: float = 0.0
+    solidity: float = 0.0
+
+
+def _clamp_unit(value):
+    """将规则得分限制在闭区间 [0, 1]，非有限值安全退化为零。"""
+    if not math.isfinite(value):
+        return 0.0
+    return max(0.0, min(1.0, float(value)))
+
+
+def _shape_solidity_score(solidity, minimum):
+    """把达到阈值后的凸实程度映射为可解释的规则得分。"""
+    denominator = max(1e-9, 1.0 - minimum)
+    return _clamp_unit((solidity - minimum) / denominator)
+
+
+def classify_contour_shape(contour, shape_config):
+    """分类 OpenCV 轮廓的二维投影形状，所有异常均安全返回 unknown。
+
+    顺序固定为 elongated、triangle、quadrilateral、circle、unknown，防止
+    高长宽比的细长对象被矩形规则抢占。confidence 是顶点、长宽比、solidity、
+    circularity 和面积规则分数的平均值，不是机器学习概率。
+    """
+    unknown = ShapeClassification()
+    try:
+        if not isinstance(shape_config, dict) or not shape_config.get('enabled', False):
+            return unknown
+        points = np.asarray(contour)
+        if points.size < 6 or not np.all(np.isfinite(points)):
+            return unknown
+        area = float(cv2.contourArea(points))
+        perimeter = float(cv2.arcLength(points, True))
+        if (not math.isfinite(area) or not math.isfinite(perimeter) or
+                area < float(shape_config['min_shape_area_px']) or
+                perimeter <= 1e-9):
+            return unknown
+        epsilon = float(shape_config['approx_epsilon_ratio']) * perimeter
+        approximation = cv2.approxPolyDP(points, epsilon, True)
+        vertices = int(len(approximation))
+        hull = cv2.convexHull(points)
+        hull_area = float(cv2.contourArea(hull))
+        if not math.isfinite(hull_area) or hull_area <= 1e-9:
+            return unknown
+        solidity = area / hull_area
+        circularity = 4.0 * math.pi * area / (perimeter * perimeter)
+        rectangle = cv2.minAreaRect(points)
+        width, height = rectangle[1]
+        width, height = float(width), float(height)
+        if (not all(math.isfinite(value) for value in
+                    (solidity, circularity, width, height)) or
+                min(width, height) <= 1e-9):
+            return unknown
+        rotated_aspect = max(width, height) / min(width, height)
+        if not math.isfinite(rotated_aspect) or rotated_aspect < 1.0:
+            return unknown
+        result = ShapeClassification(
+            polygon_vertices=vertices, rotated_aspect_ratio=rotated_aspect,
+            circularity=_clamp_unit(circularity), solidity=_clamp_unit(solidity))
+        min_solidity = float(shape_config['min_shape_solidity'])
+        solidity_score = _shape_solidity_score(solidity, min_solidity)
+        area_score = _clamp_unit(
+            area / max(1e-9, 2.0 * float(shape_config['min_shape_area_px'])))
+
+        # 细长类别优先：长宽比超过阈值越多，规则得分越高。
+        elongated_threshold = float(shape_config['elongated_min_aspect_ratio'])
+        if rotated_aspect >= elongated_threshold and solidity >= min_solidity:
+            aspect_score = _clamp_unit(
+                (rotated_aspect - elongated_threshold) / elongated_threshold)
+            result.shape = 'elongated'
+            result.confidence = _clamp_unit(
+                (1.0 + solidity_score + aspect_score) / 3.0)
+            return result
+
+        # 三角形：顶点严格匹配，面积和凸实程度共同决定规则分数。
+        if vertices == 3 and solidity >= min_solidity:
+            result.shape = 'triangle'
+            result.confidence = _clamp_unit(
+                (1.0 + solidity_score + area_score) / 3.0)
+            return result
+
+        # 四边形必须以旋转矩形长宽比判定，避免旋转正方形被误分。
+        if vertices == 4 and solidity >= min_solidity:
+            square_max = float(shape_config['square_max_aspect_ratio'])
+            if rotated_aspect <= square_max:
+                aspect_score = _clamp_unit(
+                    1.0 - (rotated_aspect - 1.0) /
+                    max(1e-9, square_max - 1.0))
+                result.shape = 'square'
+                result.confidence = _clamp_unit(
+                    (1.0 + solidity_score + aspect_score) / 3.0)
+                return result
+            rectangle_min = float(shape_config['rectangle_min_aspect_ratio'])
+            rectangle_max = float(shape_config['rectangle_max_aspect_ratio'])
+            if rectangle_min <= rotated_aspect <= rectangle_max:
+                # 在已验证的矩形区间内，顶点和 solidity 是主要证据。
+                result.shape = 'rectangle'
+                result.confidence = _clamp_unit(
+                    (1.0 + solidity_score + area_score) / 3.0)
+                return result
+
+        # 圆形同时要求高圆度、足够的近似顶点、近似等轴和高凸实程度。
+        circle_circularity = float(shape_config['circle_min_circularity'])
+        circle_solidity = float(shape_config['circle_min_solidity'])
+        circle_vertices = int(shape_config['circle_min_vertices'])
+        circle_aspect = float(shape_config['circle_max_aspect_ratio'])
+        if (circularity >= circle_circularity and vertices >= circle_vertices and
+                rotated_aspect <= circle_aspect and solidity >= circle_solidity):
+            circularity_score = _clamp_unit(
+                (circularity - circle_circularity) /
+                max(1e-9, 1.0 - circle_circularity))
+            aspect_score = _clamp_unit(
+                1.0 - (rotated_aspect - 1.0) /
+                max(1e-9, circle_aspect - 1.0))
+            circle_solidity_score = _shape_solidity_score(
+                solidity, circle_solidity)
+            vertex_score = _clamp_unit(float(vertices) / float(circle_vertices))
+            result.shape = 'circle'
+            result.confidence = _clamp_unit(
+                (circularity_score + aspect_score + circle_solidity_score +
+                 vertex_score) / 4.0)
+            return result
+        return result
+    except (ArithmeticError, TypeError, ValueError, cv2.error, KeyError):
+        return unknown
 
 
 class ConfirmationTracker(object):
@@ -105,7 +245,8 @@ class ColorObjectDetectorCore(object):
     def _validate_config(self):
         """在节点启动前拒绝危险或无法解释的参数组合。"""
         required = ('colors', 'min_depth_m', 'max_depth_m',
-                    'min_contour_area_px', 'max_contour_area_px')
+                    'min_contour_area_px', 'max_contour_area_px',
+                    'shape_detection')
         for key in required:
             if key not in self.config:
                 raise ValueError('missing required config: {0}'.format(key))
@@ -124,6 +265,48 @@ class ColorObjectDetectorCore(object):
                     raise ValueError('HSV range must contain three values')
                 if any(value < 0 or value > 255 for value in lower + upper):
                     raise ValueError('HSV values must be in [0, 255]')
+        self._validate_shape_config(self.config['shape_detection'])
+
+    @staticmethod
+    def _validate_shape_config(shape_config):
+        """验证形状规则的有限范围，防止 NaN 配置改变分类边界。"""
+        required = (
+            'enabled', 'approx_epsilon_ratio', 'min_shape_area_px',
+            'min_shape_solidity', 'elongated_min_aspect_ratio',
+            'square_max_aspect_ratio', 'rectangle_min_aspect_ratio',
+            'rectangle_max_aspect_ratio', 'circle_min_circularity',
+            'circle_min_solidity', 'circle_min_vertices',
+            'circle_max_aspect_ratio')
+        if not isinstance(shape_config, dict):
+            raise ValueError('shape_detection must be a mapping')
+        for key in required:
+            if key not in shape_config:
+                raise ValueError('missing shape_detection config: {0}'.format(key))
+        finite_keys = required[1:]
+        for key in finite_keys:
+            value = float(shape_config[key])
+            if not math.isfinite(value):
+                raise ValueError('shape_detection.{0} must be finite'.format(key))
+        if not 0.0 < float(shape_config['approx_epsilon_ratio']) < 1.0:
+            raise ValueError('approx_epsilon_ratio must be in (0, 1)')
+        if float(shape_config['min_shape_area_px']) < 0.0:
+            raise ValueError('min_shape_area_px must be non-negative')
+        for key in ('min_shape_solidity', 'circle_min_circularity',
+                    'circle_min_solidity'):
+            if not 0.0 <= float(shape_config[key]) <= 1.0:
+                raise ValueError('shape_detection.{0} must be in [0, 1]'.format(key))
+        if float(shape_config['elongated_min_aspect_ratio']) < 1.0:
+            raise ValueError('elongated_min_aspect_ratio must be at least 1')
+        if float(shape_config['square_max_aspect_ratio']) < 1.0:
+            raise ValueError('square_max_aspect_ratio must be at least 1')
+        rectangle_min = float(shape_config['rectangle_min_aspect_ratio'])
+        rectangle_max = float(shape_config['rectangle_max_aspect_ratio'])
+        if rectangle_min < 1.0 or rectangle_max < rectangle_min:
+            raise ValueError('invalid rectangle aspect ratio range')
+        if int(shape_config['circle_min_vertices']) < 3:
+            raise ValueError('circle_min_vertices must be at least 3')
+        if float(shape_config['circle_max_aspect_ratio']) < 1.0:
+            raise ValueError('circle_max_aspect_ratio must be at least 1')
 
     @staticmethod
     def depth_to_meters(depth_image, encoding):
@@ -223,6 +406,9 @@ class ColorObjectDetectorCore(object):
         if not np.all(np.isfinite(position)):
             return DetectionCandidate(reason='non_finite_camera_position')
         confidence = self._confidence(area_ratio, circularity, solidity, depth_mad)
+        # 分类附加在已选定轮廓上；unknown 绝不使颜色/RGB-D 候选失效。
+        shape_result = classify_contour_shape(
+            contour, self.config['shape_detection'])
         return DetectionCandidate(
             detected=True, color=color, center_x=representative_x,
             center_y=representative_y, bbox_x=x, bbox_y=y,
@@ -230,8 +416,11 @@ class ColorObjectDetectorCore(object):
             area_ratio=area_ratio, circularity=circularity, solidity=solidity,
             depth_m=depth_value, depth_mad_m=depth_mad,
             valid_depth_pixels=valid_count, position_camera=tuple(position),
-            confidence=confidence, reason='candidate_valid', contour=contour,
-            mask=region_mask)
+            confidence=confidence, shape=shape_result.shape,
+            shape_confidence=shape_result.confidence,
+            polygon_vertices=shape_result.polygon_vertices,
+            rotated_aspect_ratio=shape_result.rotated_aspect_ratio,
+            reason='candidate_valid', contour=contour, mask=region_mask)
 
     def _passes_shape_filters(self, x, y, width, height, area, area_ratio,
                               circularity, solidity, image_width, image_height):

@@ -13,6 +13,7 @@ from rk_perception.color_object_detector_core import (
     ColorObjectDetectorCore,
     ConfirmationTracker,
     DetectionCandidate,
+    classify_contour_shape,
 )
 
 
@@ -134,3 +135,117 @@ def test_invalid_configuration_fails_fast(config):
     config['min_depth_m'] = config['max_depth_m']
     with pytest.raises(ValueError):
         ColorObjectDetectorCore(config)
+
+
+def _contour(points):
+    """将合成二维点转换为 OpenCV 标准 contour 格式。"""
+    return np.asarray(points, dtype=np.int32).reshape((-1, 1, 2))
+
+
+def _rotated_rectangle(center, size, angle_deg):
+    """生成旋转矩形，验证分类不依赖轴对齐 bbox。"""
+    return _contour(cv2.boxPoints((center, size, angle_deg)))
+
+
+@pytest.mark.parametrize('points', [
+    [(100, 25), (35, 155), (165, 155)],
+    [(100, 45), (55, 145), (145, 145)],
+])
+def test_triangles_are_classified_across_sizes(config, points):
+    result = classify_contour_shape(
+        _contour(points), config['shape_detection'])
+    assert result.shape == 'triangle'
+    assert 0.0 <= result.confidence <= 1.0
+
+
+def test_axis_aligned_and_rotated_squares_are_classified(config):
+    axis_aligned = _contour([(50, 50), (150, 50), (150, 150), (50, 150)])
+    rotated = _rotated_rectangle((100, 100), (90, 90), 32.0)
+    for contour in (axis_aligned, rotated):
+        result = classify_contour_shape(contour, config['shape_detection'])
+        assert result.shape == 'square'
+        assert result.polygon_vertices == 4
+        assert result.rotated_aspect_ratio == pytest.approx(1.0, abs=0.03)
+
+
+def test_axis_aligned_and_rotated_rectangles_are_classified(config):
+    horizontal = _contour([(35, 70), (165, 70), (165, 130), (35, 130)])
+    rotated = _rotated_rectangle((100, 100), (120, 60), 28.0)
+    for contour in (horizontal, rotated):
+        result = classify_contour_shape(contour, config['shape_detection'])
+        assert result.shape == 'rectangle'
+        assert 1.2 <= result.rotated_aspect_ratio <= 2.5
+
+
+def _circle_contour(radius=55, jagged=False):
+    """以合成轮廓验证规则，不依赖外部图片或相机。"""
+    angles = np.linspace(0.0, 2.0 * np.pi, 72, endpoint=False)
+    radii = np.full_like(angles, radius, dtype=np.float64)
+    if jagged:
+        radii[::6] -= 3.0
+    points = np.column_stack((100.0 + radii * np.cos(angles),
+                              100.0 + radii * np.sin(angles)))
+    return _contour(np.round(points))
+
+
+@pytest.mark.parametrize('jagged', [False, True])
+def test_circles_and_slightly_jagged_circles_are_classified(config, jagged):
+    result = classify_contour_shape(_circle_contour(jagged=jagged), config['shape_detection'])
+    assert result.shape == 'circle'
+    assert result.polygon_vertices >= config['shape_detection']['circle_min_vertices']
+
+
+def test_elongated_and_irregular_contours(config):
+    elongated = _contour([(20, 80), (180, 80), (180, 120), (20, 120)])
+    result = classify_contour_shape(elongated, config['shape_detection'])
+    assert result.shape == 'elongated'
+    irregular = _contour([
+        (30, 30), (105, 65), (170, 30), (140, 100), (170, 170),
+        (100, 135), (30, 170), (60, 100),
+    ])
+    assert classify_contour_shape(irregular, config['shape_detection']).shape == 'unknown'
+
+
+@pytest.mark.parametrize(
+    'contour', [
+        None,
+        np.empty((0, 1, 2), dtype=np.int32),
+        _contour([(10, 10)]),
+        _contour([(10, 10), (20, 20)]),
+    ])
+def test_empty_and_degenerate_contours_are_safe(config, contour):
+    result = classify_contour_shape(contour, config['shape_detection'])
+    assert result.shape == 'unknown'
+    assert result.confidence == 0.0
+    assert result.rotated_aspect_ratio == 0.0
+
+
+def test_shape_config_validates_nan_and_disabled_mode(config, camera_info):
+    config['shape_detection']['circle_min_circularity'] = float('nan')
+    with pytest.raises(ValueError):
+        ColorObjectDetectorCore(config)
+    config['shape_detection']['circle_min_circularity'] = 0.78
+    config['shape_detection']['enabled'] = False
+    image, depth = _scene((0, 0, 255))
+    candidate = ColorObjectDetectorCore(config).detect(
+        image, depth, '16UC1', camera_info, ['red'])
+    assert candidate.detected
+    assert candidate.shape == 'unknown'
+    assert candidate.shape_confidence == 0.0
+
+
+def test_unknown_shape_does_not_change_confirmation_or_ready_inputs():
+    candidate = DetectionCandidate(
+        detected=True, color='red', shape='unknown', shape_confidence=0.0,
+        depth_m=0.5, position_camera=(0.0, 0.0, 0.5))
+    tracker = ConfirmationTracker(1, 2, 0.08, 0.05)
+    assert tracker.update(candidate, 'red')
+
+
+def test_shape_outputs_are_bounded_and_finite(config):
+    contours = [_circle_contour(), _rotated_rectangle((100, 100), (120, 60), 0.0)]
+    for contour in contours:
+        result = classify_contour_shape(contour, config['shape_detection'])
+        assert 0.0 <= result.confidence <= 1.0
+        assert np.isfinite(result.rotated_aspect_ratio)
+        assert result.rotated_aspect_ratio >= 1.0

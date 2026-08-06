@@ -18,7 +18,10 @@ import yaml
 
 # 允许直接执行 tools/ 下脚本，同时保持已安装包的导入方式不变。
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from rk_perception.color_object_detector_core import ColorObjectDetectorCore  # noqa: E402
+from rk_perception.color_object_detector_core import (  # noqa: E402
+    ColorObjectDetectorCore,
+    classify_contour_shape,
+)
 
 
 class HsvColorTuner(Node):
@@ -106,6 +109,8 @@ class HsvColorTuner(Node):
             solidity = area / hull_area if hull_area else 0.0
             center_x, center_y = x + width // 2, y + height // 2
             depth_text = self._contour_depth_text(contour, image.shape[:2], core)
+            shape_result = classify_contour_shape(
+                contour, self.config['shape_detection'])
             cv2.rectangle(display, (x, y), (x + width, y + height), (0, 255, 255), 2)
             label = 'area={0:.0f} circ={1:.2f} sol={2:.2f}'.format(
                 area, circularity, solidity)
@@ -113,7 +118,12 @@ class HsvColorTuner(Node):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
             cv2.putText(display, 'center=({0},{1}) {2}'.format(
                 center_x, center_y, depth_text), (x, max(18, y - 6)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+            cv2.putText(display, 'shape={0} conf={1:.2f} vertices={2} aspect={3:.2f}'.format(
+                shape_result.shape, shape_result.confidence,
+                shape_result.polygon_vertices, shape_result.rotated_aspect_ratio),
+                (x, y + height + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                (0, 255, 255), 1)
         combined = cv2.hconcat([display, cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)])
         cv2.imshow(self.window_name, combined)
         key = cv2.waitKey(1) & 0xff
