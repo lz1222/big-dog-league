@@ -41,10 +41,10 @@ target_include_directories(d1_dds_driver_node PRIVATE include "${UNITREE_D1_SDK_
 target_link_libraries(d1_dds_driver_node rk_arm_core "${UNITREE_SDK2_LIBRARY}" "${UNITREE_DDS_LIBRARY_DIR}/libddsc.so" "${UNITREE_DDS_LIBRARY_DIR}/libddscxx.so" Threads::Threads rt)
 target_link_options(d1_dds_driver_node PRIVATE "-Wl,--disable-new-dtags")
 set_target_properties(d1_dds_driver_node PROPERTIES BUILD_RPATH "${UNITREE_DDS_LIBRARY_DIR}" INSTALL_RPATH "${UNITREE_DDS_LIBRARY_DIR}")
-ament_target_dependencies(d1_dds_driver_node rclcpp rk_interfaces std_msgs)
 
 add_executable(arm_manual_control_node src/arm_manual_control_node.cpp)
-ament_target_dependencies(arm_manual_control_node rclcpp)
+target_link_libraries(arm_manual_control_node rk_arm_core)
+ament_target_dependencies(arm_manual_control_node rclcpp rk_interfaces std_msgs)
 
 install(TARGETS rk_arm_core d1_dds_driver_node arm_manual_control_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)

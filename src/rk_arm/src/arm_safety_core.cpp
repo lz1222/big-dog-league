@@ -51,9 +51,10 @@ SafetyDecision ArmSafetyCore::CheckMotion(const FeedbackSnapshot& feedback, cons
 }
 
 SafetyDecision ArmSafetyCore::CheckStop(bool writer_lock_held, bool dds_ready, bool stop_schema_confirmed) const {
+  // 未确认停止 JSON 时，不能因只读模式缺少 writer 而掩盖真正的协议安全边界。
+  if (!stop_schema_confirmed) return {false, ArmError::kStopSchemaUnconfirmed, "STOP_SCHEMA_UNCONFIRMED", ArmState::kFault};
   if (!writer_lock_held) return {false, ArmError::kWriterLockMissing, "writer lock is not held", ArmState::kFault};
   if (!dds_ready) return {false, ArmError::kDdsUnavailable, "DDS is unavailable", ArmState::kFault};
-  if (!stop_schema_confirmed) return {false, ArmError::kStopSchemaUnconfirmed, "STOP_SCHEMA_UNCONFIRMED", ArmState::kFault};
   return {true, ArmError::kOk, "stop accepted", ArmState::kStopping};
 }
 

@@ -2,6 +2,8 @@
 
 本包提供 D1 DDS 反馈订阅、原始状态和 ROS 服务接口。所有参数均为 **DEVELOPMENT DEFAULT / NOT HARDWARE VALIDATED**。
 
+为避免 Unitree SDK 的 CycloneDDS 与 ROS Foxy/FastDDS 同进程混载，`d1_dds_driver_node` 是纯 Unitree DDS reader，使用本机 Unix datagram 将原始状态交给 `arm_manual_control_node`。后者在 `ROS_DOMAIN_ID=42` 发布 ROS 状态和服务；两个进程均没有 command writer。
+
 ## 当前安全状态
 
 - `manual_motion_enabled: false`；驱动不会创建 `rt/arm_Command` writer。
@@ -9,6 +11,7 @@
 - `ArmRawState` 发布原始七通道、状态帧、反馈年龄与双源一致性。
 - 关节与夹爪服务均经同一安全核心，默认返回 `MANUAL_MOTION_DISABLED`。
 - 本地 `/tmp/rk_d1_arm_writer.lock` 的实现已就绪；它不能证明 DDS 网络不存在远程 writer。
+- 运行 ROS CLI 时必须设置 `ROS_DOMAIN_ID=42`，例如 `export ROS_DOMAIN_ID=42`。
 
 ## 已知协议证据与边界
 

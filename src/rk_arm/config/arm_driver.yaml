@@ -1,4 +1,4 @@
-d1_dds_driver_node:
+arm_manual_control_node:
   ros__parameters:
     # DEVELOPMENT DEFAULT / NOT HARDWARE VALIDATED: this configuration is safe-by-default.
     network_interface: eth0
@@ -12,4 +12,7 @@ d1_dds_driver_node:
     publish_joint_states: false
     value_unit: app_display_unit
     writer_lock_path: /tmp/rk_d1_arm_writer.lock
+    state_socket_path: /tmp/rk_d1_arm_feedback.sock
+    # ROS 状态层使用独立 domain，避免与 D1 原生 DDS domain=0 的发现流混杂。
+    ros_state_domain_id: 42
     manual_motion_enabled: false
