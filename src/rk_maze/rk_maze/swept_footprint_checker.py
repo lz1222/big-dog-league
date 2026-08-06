@@ -87,7 +87,9 @@ class SweptFootprintChecker:
         dt = max(0.01, dt); n = max(1, int(duration/dt)+1)
         samples = []
         for i in range(n):
-            t = i*dt; if t > duration: t = duration
+            t = i * dt
+            if t > duration:
+                t = duration
             if abs(wz) > 0.001:
                 y = start.yaw + wz*t
                 r = math.hypot(vx, vy)/abs(wz) if abs(wz) > 0.001 else float('inf')
