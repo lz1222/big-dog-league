@@ -1,0 +1,96 @@
+# D435i 彩色物体 RGB-D 定位配置。所有现场相关数值均为 DEVELOPMENT DEFAULT /
+# NOT FIELD VALIDATED，必须在安装完成、TF 建立后用真机和 HSV 标定工具验证。
+color_object_detector:
+  ros__parameters:
+    color_topic: /camera/camera/color/image_raw
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/camera/color/camera_info
+    detection_topic: /perception/color_object_detection
+    overlay_topic: /perception/debug/color_object_overlay
+    mask_topic: /perception/debug/color_object_mask
+    status_topic: /perception/debug/color_object_status
+    expected_color_topic: /mission/expected_object_color
+    camera_frame: ''
+    arm_base_frame: arm_base
+    sync_queue_size: 10
+    sync_slop_sec: 0.08
+    max_image_age_sec: 0.50
+    tf_timeout_sec: 0.10
+    tf_max_age_sec: 0.20
+    blur_kernel_size: 5
+    morph_open_kernel: 3
+    morph_close_kernel: 5
+    morph_iterations: 1
+    min_contour_area_px: 400.0
+    max_contour_area_px: 180000.0
+    min_area_ratio: 0.001
+    max_area_ratio: 0.75
+    min_width_px: 20
+    min_height_px: 20
+    min_aspect_ratio: 0.25
+    max_aspect_ratio: 4.0
+    min_circularity: 0.20
+    min_solidity: 0.75
+    roi_x_min_fraction: 0.05
+    roi_x_max_fraction: 0.95
+    roi_y_min_fraction: 0.05
+    roi_y_max_fraction: 0.95
+    mask_erode_pixels: 2
+    min_valid_depth_pixels: 80
+    min_valid_depth_fraction: 0.50
+    min_depth_m: 0.15
+    max_depth_m: 1.50
+    depth_mad_epsilon_m: 0.000001
+    depth_mad_scale: 3.5
+    max_depth_mad_m: 0.03
+    confirm_frames: 3
+    lost_frames: 3
+    max_detection_age_sec: 0.50
+    max_position_jump_m: 0.08
+    max_depth_jump_m: 0.05
+    grasp_center_x_fraction: 0.50
+    grasp_center_y_fraction: 0.55
+    publish_debug_image: true
+    debug_log: false
+    # static_tf 为 NOT CALIBRATED 接口；默认关闭，正式结果必须来自 TF2。
+    static_tf_enabled: false
+    static_tf_parent_frame: arm_base
+    static_tf_child_frame: d435i_color_optical_frame
+    static_tf_x_m: 0.0
+    static_tf_y_m: 0.0
+    static_tf_z_m: 0.0
+    static_tf_roll_rad: 0.0
+    static_tf_pitch_rad: 0.0
+    static_tf_yaw_rad: 0.0
+    arm_workspace:
+      # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED
+      x_min_m: 0.10
+      x_max_m: 0.70
+      y_min_m: -0.45
+      y_max_m: 0.45
+      z_min_m: -0.20
+      z_max_m: 0.60
+    colors:
+      # DEVELOPMENT DEFAULT / NOT FIELD VALIDATED HSV ranges.
+      red:
+        enabled: true
+        hsv_ranges:
+          - lower: [0, 100, 70]
+            upper: [10, 255, 255]
+          - lower: [170, 100, 70]
+            upper: [179, 255, 255]
+      blue:
+        enabled: true
+        hsv_ranges:
+          - lower: [95, 100, 60]
+            upper: [130, 255, 255]
+      green:
+        enabled: true
+        hsv_ranges:
+          - lower: [35, 70, 50]
+            upper: [85, 255, 255]
+      yellow:
+        enabled: true
+        hsv_ranges:
+          - lower: [20, 90, 80]
+            upper: [35, 255, 255]
