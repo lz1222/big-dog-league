@@ -1,0 +1,6 @@
+# DEVELOPMENT DEFAULT / NOT HARDWARE VALIDATED
+# 此配置只影响被动记录与 stale 诊断；不含任何运动、夹爪或目标参数。
+output_dir: artifacts/d1_feedback_probe
+duration_sec: 30
+stale_after_ms: 1000
+parser_max_bytes: 1048576
