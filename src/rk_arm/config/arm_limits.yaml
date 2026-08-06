@@ -1,0 +1,11 @@
+# DEVELOPMENT DEFAULT / NOT HARDWARE VALIDATED.
+# App 显示单位未确认；以下仅为未来离线/真机人工复核前的极保守门限，且默认运动关闭。
+limits:
+  joint_0: {minimum: -1.0, maximum: 1.0, max_step: 0.1, max_speed: 0.1}
+  joint_1: {minimum: -1.0, maximum: 1.0, max_step: 0.1, max_speed: 0.1}
+  joint_2: {minimum: -1.0, maximum: 1.0, max_step: 0.1, max_speed: 0.1}
+  joint_3: {minimum: -1.0, maximum: 1.0, max_step: 0.1, max_speed: 0.1}
+  joint_4: {minimum: -1.0, maximum: 1.0, max_step: 0.1, max_speed: 0.1}
+  joint_5: {minimum: -1.0, maximum: 1.0, max_step: 0.1, max_speed: 0.1}
+  gripper: {minimum: 0.0, maximum: 1.0, max_step: 0.1, max_speed: 0.1}
+  max_timeout_sec: 0.5

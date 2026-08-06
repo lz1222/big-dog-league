@@ -1,0 +1,5 @@
+# 空请求：停止必须始终可调用，但未知停止协议时不能伪造已停止结果。
+---
+bool stopped
+int32 error_code
+string message

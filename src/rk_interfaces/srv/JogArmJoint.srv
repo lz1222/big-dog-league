@@ -1,0 +1,10 @@
+# direction 仅允许 -1 或 1；step、max_speed 和 timeout_sec 均由驱动二次限幅。
+int32 joint_index
+float64 direction
+float64 step
+float64 max_speed
+float64 timeout_sec
+---
+bool accepted
+int32 error_code
+string message

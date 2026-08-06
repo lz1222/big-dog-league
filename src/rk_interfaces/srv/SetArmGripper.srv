@@ -1,0 +1,8 @@
+# target 使用 App DISPLAY UNIT，驱动不将其假定为弧度或角度。
+float64 target
+float64 max_speed
+float64 timeout_sec
+---
+bool accepted
+int32 error_code
+string message

@@ -1,0 +1,15 @@
+d1_dds_driver_node:
+  ros__parameters:
+    # DEVELOPMENT DEFAULT / NOT HARDWARE VALIDATED: this configuration is safe-by-default.
+    network_interface: eth0
+    command_topic: rt/arm_Command
+    feedback_topic: rt/arm_Feedback
+    servo_feedback_topic: current_servo_angle
+    feedback_timeout_sec: 0.3
+    source_consistency_tolerance: 0.5
+    command_ttl_sec: 0.5
+    publish_raw_state: true
+    publish_joint_states: false
+    value_unit: app_display_unit
+    writer_lock_path: /tmp/rk_d1_arm_writer.lock
+    manual_motion_enabled: false
