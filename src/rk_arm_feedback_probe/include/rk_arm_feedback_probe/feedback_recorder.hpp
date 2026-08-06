@@ -60,8 +60,12 @@ class FeedbackRecorder {
   /** 注册预期 reader，即使整个采集窗口没有到帧也保留 absent/stale 证据。 */
   void RegisterTopic(const std::string& topic);
   void RecordArmFeedback(const std::string& topic, const std::string& payload);
+  /** 原样保存官方 App 的命令 topic；本方法只供 DDS reader 回调调用。 */
+  void RecordArmCommand(const std::string& topic, const std::string& payload);
   void RecordServoAngles(const std::string& topic,
                          const std::array<float, 7>& values);
+  /** 人工事件仅记录主机单调时间与标签，绝不影响 DDS 通信。 */
+  bool RecordOperatorEvent(const std::string& event, std::string* error);
   void RefreshStaleStates();
   void Close();
 
@@ -80,7 +84,9 @@ class FeedbackRecorder {
   std::map<std::string, TopicState> topics_;
   std::map<std::string, FieldSummary> schema_;
   std::ofstream* arm_output_{nullptr};
+  std::ofstream* command_output_{nullptr};
   std::ofstream* servo_output_{nullptr};
+  std::ofstream* event_output_{nullptr};
 };
 
 /** 对单帧 JSON 做容错 schema 采样；非法数据只返回 false，不抛异常。 */

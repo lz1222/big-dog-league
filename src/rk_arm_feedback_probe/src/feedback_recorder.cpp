@@ -194,10 +194,13 @@ bool FeedbackRecorder::Open(std::string* error) {
   std::error_code ec; std::filesystem::create_directories(config_.output_dir, ec);
   if (ec) { *error = "cannot create output directory: " + ec.message(); return false; }
   arm_output_ = new std::ofstream(config_.output_dir / "arm_feedback_raw.jsonl", std::ios::app);
+  command_output_ = new std::ofstream(config_.output_dir / "arm_command_raw.jsonl", std::ios::app);
   servo_output_ = new std::ofstream(config_.output_dir / "servo_angle_raw.csv", std::ios::app);
-  if (!*arm_output_ || !*servo_output_) {
+  event_output_ = new std::ofstream(config_.output_dir / "operator_events.jsonl", std::ios::app);
+  if (!*arm_output_ || !*command_output_ || !*servo_output_ || !*event_output_) {
     *error = "cannot open output files";
-    delete arm_output_; delete servo_output_; arm_output_ = nullptr; servo_output_ = nullptr;
+    delete arm_output_; delete command_output_; delete servo_output_; delete event_output_;
+    arm_output_ = nullptr; command_output_ = nullptr; servo_output_ = nullptr; event_output_ = nullptr;
     return false;
   }
   if (std::filesystem::file_size(config_.output_dir / "servo_angle_raw.csv", ec) == 0) {
@@ -226,6 +229,23 @@ void FeedbackRecorder::RecordArmFeedback(const std::string& topic, const std::st
   *arm_output_ << "{\"host_monotonic_ns\":" << monotonic << ",\"host_wall_time\":\"" << WallTime() << "\",\"topic\":\"" << EscapeJson(topic) << "\",\"payload_length\":" << payload.size() << ",\"payload_raw\":\"" << EscapeJson(payload) << "\"}\n";
   arm_output_->flush(); RecordTopicFrame(topic, payload);
   std::string error; if (!SummarizeJsonPayload(payload, config_.parser_max_payload_bytes, &schema_, &error)) ++topics_[topic].stats.bad_frames;
+}
+
+void FeedbackRecorder::RecordArmCommand(const std::string& topic, const std::string& payload) {
+  std::lock_guard<std::mutex> lock(mutex_); if (command_output_ == nullptr) return;
+  const auto monotonic = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  *command_output_ << "{\"host_monotonic_ns\":" << monotonic << ",\"host_wall_time\":\"" << WallTime() << "\",\"topic\":\"" << EscapeJson(topic) << "\",\"payload_length\":" << payload.size() << ",\"payload_raw\":\"" << EscapeJson(payload) << "\"}\n";
+  command_output_->flush(); RecordTopicFrame(topic, payload);
+  std::string error; if (!SummarizeJsonPayload(payload, config_.parser_max_payload_bytes, &schema_, &error)) ++topics_[topic].stats.bad_frames;
+}
+
+bool FeedbackRecorder::RecordOperatorEvent(const std::string& event, std::string* error) {
+  static const std::set<std::string> allowed = {"APP_CONNECTED", "IDLE_START", "IDLE_END", "JOINT_1_POS_START", "JOINT_1_POS_END", "JOINT_1_NEG_START", "JOINT_1_NEG_END", "JOINT_2_POS_START", "JOINT_2_POS_END", "GRIPPER_OPEN_START", "GRIPPER_OPEN_END", "GRIPPER_CLOSE_START", "GRIPPER_CLOSE_END", "APP_STOP_START", "APP_STOP_END", "APP_CONTROL_PAGE_EXIT", "APP_DISCONNECTED"};
+  if (allowed.count(event) == 0U) { if (error) *error = "unsupported operator event"; return false; }
+  std::lock_guard<std::mutex> lock(mutex_); if (event_output_ == nullptr) { if (error) *error = "recorder is closed"; return false; }
+  const auto monotonic = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  *event_output_ << "{\"host_monotonic_ns\":" << monotonic << ",\"host_wall_time\":\"" << WallTime() << "\",\"event\":\"" << event << "\"}\n";
+  event_output_->flush(); return true;
 }
 
 void FeedbackRecorder::RecordServoAngles(const std::string& topic, const std::array<float, 7>& values) {
@@ -258,7 +278,7 @@ void FeedbackRecorder::WriteSummaryLocked() {
   summary << "\n  }\n}\n";
 }
 
-void FeedbackRecorder::Close() { std::lock_guard<std::mutex> lock(mutex_); if (arm_output_ == nullptr) return; WriteSummaryLocked(); arm_output_->flush(); servo_output_->flush(); delete arm_output_; delete servo_output_; arm_output_ = nullptr; servo_output_ = nullptr; }
+void FeedbackRecorder::Close() { std::lock_guard<std::mutex> lock(mutex_); if (arm_output_ == nullptr) return; WriteSummaryLocked(); arm_output_->flush(); command_output_->flush(); servo_output_->flush(); event_output_->flush(); delete arm_output_; delete command_output_; delete servo_output_; delete event_output_; arm_output_ = nullptr; command_output_ = nullptr; servo_output_ = nullptr; event_output_ = nullptr; }
 
 bool SummarizeJsonPayload(const std::string& payload, std::size_t max_payload_bytes, std::map<std::string, FieldSummary>* summary, std::string* error) {
   if (payload.size() > max_payload_bytes) { *error = "payload exceeds parser limit"; return false; }

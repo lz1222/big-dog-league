@@ -68,6 +68,31 @@ set_target_properties(d1_feedback_probe PROPERTIES
 # ddscxx 始终从 SDK 同一目录成对加载；不修改系统级 DDS。
 target_link_options(d1_feedback_probe PRIVATE "-Wl,--disable-new-dtags")
 
+# 命令探针使用同一份纯接收/落盘核心；其源码不包含任何 DDS writer。
+add_executable(d1_command_probe
+  src/d1_command_probe.cpp
+  "${UNITREE_D1_SDK_ROOT}/src/msg/ArmString_.cpp"
+  "${UNITREE_D1_SDK_ROOT}/src/msg/PubServoInfo_.cpp")
+target_include_directories(d1_command_probe PRIVATE
+  include
+  "${UNITREE_D1_SDK_ROOT}/src"
+  "${UNITREE_SDK2_ROOT}/include"
+  "${UNITREE_SDK2_ROOT}/thirdparty/include"
+  "${UNITREE_SDK2_ROOT}/thirdparty/include/ddscxx")
+target_link_libraries(d1_command_probe PRIVATE
+  feedback_recorder
+  "${UNITREE_SDK2_LIBRARY}"
+  "${UNITREE_DDS_LIBRARY_DIR}/libddsc.so"
+  "${UNITREE_DDS_LIBRARY_DIR}/libddscxx.so"
+  Threads::Threads
+  rt)
+set_target_properties(d1_command_probe PROPERTIES
+  BUILD_RPATH "${UNITREE_DDS_LIBRARY_DIR}"
+  INSTALL_RPATH "${UNITREE_DDS_LIBRARY_DIR}")
+target_link_options(d1_command_probe PRIVATE "-Wl,--disable-new-dtags")
+
+add_executable(d1_command_event src/d1_command_event.cpp)
+
 if(BUILD_TESTING)
   add_executable(test_feedback_parser test/test_feedback_parser.cpp)
   target_link_libraries(test_feedback_parser PRIVATE feedback_recorder)

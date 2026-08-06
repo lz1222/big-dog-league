@@ -41,6 +41,10 @@ int main() {
   config.stale_after = std::chrono::milliseconds(1);
   FeedbackRecorder recorder(config);
   assert(recorder.Open(&error));
+  recorder.RegisterTopic("rt/arm_Command");
+  recorder.RecordArmCommand("rt/arm_Command", "{\"funcode\":1,\"data\":{\"id\":0,\"angle\":1}}");
+  assert(recorder.RecordOperatorEvent("IDLE_START", &error));
+  assert(!recorder.RecordOperatorEvent("NOT_AN_ALLOWED_EVENT", &error));
   recorder.RecordArmFeedback("rt/arm_Feedback", "{\"unknown\":42}");
   recorder.RecordArmFeedback("rt/arm_Feedback", "{");
   recorder.RecordArmFeedback("rt/arm_Feedback", "not-json");
@@ -57,7 +61,9 @@ int main() {
   recorder.Close();
   assert(!recorder.IsOpen());
   assert(std::filesystem::exists(temp / "arm_feedback_raw.jsonl"));
+  assert(std::filesystem::exists(temp / "arm_command_raw.jsonl"));
   assert(std::filesystem::exists(temp / "servo_angle_raw.csv"));
+  assert(std::filesystem::exists(temp / "operator_events.jsonl"));
   assert(std::filesystem::exists(temp / "protocol_summary.json"));
   std::filesystem::remove_all(temp);
   return 0;

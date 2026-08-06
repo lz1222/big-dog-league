@@ -2,6 +2,24 @@
 
 状态：`COMMAND_ID_SEMANTICS_UNCONFIRMED`、`STOP_SCHEMA_UNCONFIRMED`。本报告只引用静态源码和已完成的只读反馈验收；未抓取、重放或发送 App command。
 
+## 2026-08-07 官方 App 被动抓取
+
+原始数据位于 Git 忽略的 `artifacts/d1_command_protocol/`。探针只创建 `ChannelSubscriber`，并同时保存 `rt/arm_Command`、`rt/arm_Feedback` 与 `current_servo_angle`。
+
+- `idle_1`：约 79 秒，App 空闲时 `rt/arm_Command` 为 0 帧；反馈维持约 18.95 Hz / 8.99 Hz。该观察窗口内没有空闲周期命令。
+- `joint1_1`：App 关节1正向人工操作时收到 24 帧，`funcode=2`、`address=1`、`data.mode=0`。`seq=60406..60429` 连续递增；`angle0=1.4..24.4` 单调增加，其他目标字段近似不变。
+- `joint1_return_1`：反向回位时收到 24 帧，字段外形相同，`seq=60430..60453` 紧接递增；`angle0=23.3..0.9` 下降。反馈持续，`exec_status=1`、`recv_status=1` 被观测到。
+- 操作事件标记与真实 App command 开始相差约十秒，故不能为本批数据声明精确 command-to-feedback 延迟或命令停止后的稳定时间。
+- 因人工最小脉冲实际形成约 24 帧命令、目标变化约 23 个 App 显示单位，本轮停止后续物理操作；未采集关节2、夹爪、App 明确停止、退出页面或断开。
+
+由此可更新的结论：
+
+- `funcode=2` 为本机官方 App 关节1在观测会话中实际使用的全七通道目标 JSON，`mode=0`；其控制语义、完整安全边界仍未验证。
+- `seq` 在同一 App 会话、同一关节的连续帧中递增；尚未比较其他关节、夹爪或重连，故仍是 `COMMAND_ID_SEMANTICS_UNCONFIRMED`。
+- 此处无 `id` 字段，不能用 App 观测确认 SDK `funcode=1.data.id` 的语义；`funcode=1` 在本批 App 数据中未出现。
+- 命令 `angle0` 与第 0 路反馈的变化方向和值域相符，仅可写为 `COMMAND VALUE MATCHES APP DISPLAY UNIT`，不能转换为 degree 或 radian。
+- 未观测 `delay_ms`、速度字段、独立夹爪命令或明确 App 停止命令；`STOP_SCHEMA_UNCONFIRMED` 不变。
+
 | 项目 | 证据 | 原始 JSON | 强度 / 结论 |
 |---|---|---|---|
 | ArmString 外层 | `third_party/unitree_d1_sdk/src/joint_angle_control.cpp:13-18` | `{"seq":4,"address":1,"funcode":1,"data":...}` | 中：SDK 示例实际将该字符串写至 `rt/arm_Command`。`seq`、`address` 的语义未证实。 |
