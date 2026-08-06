@@ -47,9 +47,9 @@ class EventSocket {
   explicit EventSocket(const std::string& path) : path_(path) {}
   ~EventSocket() { if (fd_ >= 0) ::close(fd_); if (!path_.empty()) ::unlink(path_.c_str()); }
   bool Open() { if (path_.size() >= sizeof(sockaddr_un::sun_path)) return false; ::unlink(path_.c_str()); fd_ = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0); if (fd_ < 0) return false; sockaddr_un address{}; address.sun_family = AF_UNIX; std::strncpy(address.sun_path, path_.c_str(), sizeof(address.sun_path) - 1); return ::bind(fd_, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0; }
-  void Drain(rk_arm_feedback_probe::FeedbackRecorder* recorder) const { char buffer[128]{}; while (true) { const ssize_t count = ::recv(fd_, buffer, sizeof(buffer) - 1, MSG_DONTWAIT); if (count <= 0) return; std::string event(buffer, static_cast<std::size_t>(count)); std::string error;
-  if (recorder->RecordOperatorEvent(event, &error)) std::cout << "Recorded operator event: " << event << '\n';
-  else std::cerr << "Ignored event '" << event << "': " << error << '\n';
+  void Drain(rk_arm_feedback_probe::FeedbackRecorder* recorder) const { char buffer[128]{}; while (true) { const ssize_t count = ::recv(fd_, buffer, sizeof(buffer) - 1, MSG_DONTWAIT); if (count <= 0) return; const std::string payload(buffer, static_cast<std::size_t>(count)); const auto separator = payload.rfind('\t'); if (separator == std::string::npos) { std::cerr << "Ignored malformed local event payload\n"; continue; } const std::string event = payload.substr(0, separator); std::uint64_t source = 0; try { source = std::stoull(payload.substr(separator + 1)); } catch (...) { std::cerr << "Ignored malformed local event timestamp\n"; continue; } std::string result;
+  if (recorder->RecordOperatorEvent(event, source, &result)) std::cout << "Recorded operator event: " << event << ' ' << result << '\n';
+  else std::cerr << "Ignored event '" << event << "': " << result << '\n';
   } }
  private: std::string path_; int fd_{-1};
 };

@@ -1,24 +1,34 @@
 # D1 ArmString 命令协议审计
 
-状态：`COMMAND_ID_SEMANTICS_UNCONFIRMED`、`STOP_SCHEMA_UNCONFIRMED`。本报告只引用静态源码和已完成的只读反馈验收；未抓取、重放或发送 App command。
+状态：`manual_motion_enabled=false`、`COMMAND_ID_SEMANTICS_UNCONFIRMED`、`STOP_SCHEMA_UNCONFIRMED`、`value_unit=app_display_unit`。本报告只引用静态源码和被动 DDS 订阅；未创建、启动、测试或重放任何自研 `rt/arm_Command` writer。
 
 ## 2026-08-07 官方 App 被动抓取
 
-原始数据位于 Git 忽略的 `artifacts/d1_command_protocol/`。探针只创建 `ChannelSubscriber`，并同时保存 `rt/arm_Command`、`rt/arm_Feedback` 与 `current_servo_angle`。
+原始数据位于 Git 忽略的 `artifacts/d1_command_protocol/`。探针只创建 `ChannelSubscriber`，并同时保存 `rt/arm_Command`、`rt/arm_Feedback` 与 `current_servo_angle`。人工事件通过同机 Unix socket 写入；事件工具使用 `CLOCK_MONOTONIC`，probe 收到后立即记录自身单调时间并 flush。
+
+### 时间同步校准
+
+- `calibration_3`：`CALIBRATION_START→END` 的发送端间隔为 3.008 秒，probe 接收端间隔为 2.991 秒；两次本机 socket 接收延迟约为 19.9 ms 和 3.8 ms。此前约十秒的聊天事件偏差已消除。
+- 事件仍表示人工标记时间，而非 App 内部动作时刻。因此，若标记和实际松开间隔明显，不能以该记录确认命令—反馈延迟或独立停止协议。
 
 - `idle_1`：约 79 秒，App 空闲时 `rt/arm_Command` 为 0 帧；反馈维持约 18.95 Hz / 8.99 Hz。该观察窗口内没有空闲周期命令。
 - `joint1_1`：App 关节1正向人工操作时收到 24 帧，`funcode=2`、`address=1`、`data.mode=0`。`seq=60406..60429` 连续递增；`angle0=1.4..24.4` 单调增加，其他目标字段近似不变。
 - `joint1_return_1`：反向回位时收到 24 帧，字段外形相同，`seq=60430..60453` 紧接递增；`angle0=23.3..0.9` 下降。反馈持续，`exec_status=1`、`recv_status=1` 被观测到。
-- 操作事件标记与真实 App command 开始相差约十秒，故不能为本批数据声明精确 command-to-feedback 延迟或命令停止后的稳定时间。
-- 因人工最小脉冲实际形成约 24 帧命令、目标变化约 23 个 App 显示单位，本轮停止后续物理操作；未采集关节2、夹爪、App 明确停止、退出页面或断开。
+- `joint2_1` / `joint2_return_1`：App 关节2正、反向各收到两帧，均为 `funcode=2`、`address=1`、`mode=0`；`seq=60461..60464` 紧接此前会话。正向仅 `angle1` 目标由 `-88.3` 至 `-84.3`，反馈 `angle1/servo_1` 约由 `-90.3` 至 `-84.5`；反向目标至 `-87.5`，反馈至约 `-87.7`。人工摇杆无法精准回位，残差约 `+2.6 app_display_unit`，未执行重复组。
+- `gripper_open_1`：12 帧 `funcode=2`、`address=1`、`mode=0`，`seq=60465..60476`；只有 `angle6` 由约 `-15.8` 递增至 `28.2`，反馈 `angle6/servo_6` 由 `-19.8` 到 `20.0`。
+- `gripper_close_1`：22 帧同外形，`seq=60477..60498`；只有 `angle6` 由 `20` 递减至 `-30.8`，反馈 `angle6/servo_6` 由 `20.0` 到 `-19.8`。
+- 在关节2及夹爪窗口的事件结束标记后均未再观察到命令帧，且无额外 JSON；但最后命令比人工标记早约 0.4–5 秒。因此，只能记录操作后的命令流为空，不能标记 `APP_RELEASE_STOPS_COMMAND_STREAM`，更不能确认停止协议。
+- `app_page_exit_1`：退出控制页面后，观察窗口内没有 `rt/arm_Command`。重新进入页面后的记录混入人工使能切换及夹爪操作，出现 `funcode=5`（`mode=0`、`mode=1`）和 `funcode=2`；该混合窗口不能解释 `funcode=5`、页面进入行为或使能语义。App 断开未执行。
 
 由此可更新的结论：
 
-- `funcode=2` 为本机官方 App 关节1在观测会话中实际使用的全七通道目标 JSON，`mode=0`；其控制语义、完整安全边界仍未验证。
-- `seq` 在同一 App 会话、同一关节的连续帧中递增；尚未比较其他关节、夹爪或重连，故仍是 `COMMAND_ID_SEMANTICS_UNCONFIRMED`。
+- `COMMAND_FUNCODE_2_OBSERVED_FOR_APP_JOG`：本机官方 App 对关节1、关节2和夹爪均实际使用全七通道目标 JSON，`mode=0`；其控制语义、完整安全边界仍未验证。
+- `COMMAND_SEQ_CANDIDATE_MONOTONIC_COUNTER`：`seq=60406..60498` 跨关节1、关节2和夹爪连续递增；重连/回绕/复位语义未观测，故仍是 `COMMAND_ID_SEMANTICS_UNCONFIRMED`。
+- `address` 在关节1、关节2和夹爪记录中均为 1；本轮不支持 `COMMAND_ADDRESS_CANDIDATE_ACTUATOR_INDEX`。
 - 此处无 `id` 字段，不能用 App 观测确认 SDK `funcode=1.data.id` 的语义；`funcode=1` 在本批 App 数据中未出现。
-- 命令 `angle0` 与第 0 路反馈的变化方向和值域相符，仅可写为 `COMMAND VALUE MATCHES APP DISPLAY UNIT`，不能转换为 degree 或 radian。
-- 未观测 `delay_ms`、速度字段、独立夹爪命令或明确 App 停止命令；`STOP_SCHEMA_UNCONFIRMED` 不变。
+- 命令 `angle0`、`angle1` 和 `angle6` 分别与相应反馈通道的变化方向和值域相符，仅可写为 `COMMAND_VALUE_MATCHES_APP_DISPLAY_UNIT`，不能转换为 degree 或 radian。
+- 打开、关闭夹爪的可重复命令外形已观察到，可记录 `GRIPPER_COMMAND_SCHEMA_OBSERVED`；这不授权自研夹爪控制。
+- 未观测 `delay_ms`、速度字段、明确 App 停止命令或 App 断开行为；`STOP_SCHEMA_UNCONFIRMED` 不变。
 
 | 项目 | 证据 | 原始 JSON | 强度 / 结论 |
 |---|---|---|---|

@@ -64,8 +64,13 @@ class FeedbackRecorder {
   void RecordArmCommand(const std::string& topic, const std::string& payload);
   void RecordServoAngles(const std::string& topic,
                          const std::array<float, 7>& values);
-  /** 人工事件仅记录主机单调时间与标签，绝不影响 DDS 通信。 */
-  bool RecordOperatorEvent(const std::string& event, std::string* error);
+  /**
+   * 人工事件同时保留发送端与 probe 接收端单调时间，收到后立即 flush。
+   * 该记录只用于离线校准，绝不影响 DDS 通信或任何机器人命令。
+   */
+  bool RecordOperatorEvent(const std::string& event,
+                           std::uint64_t source_monotonic_ns,
+                           std::string* result);
   void RefreshStaleStates();
   void Close();
 

@@ -4,6 +4,7 @@
 #include <cassert>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <string>
@@ -43,8 +44,8 @@ int main() {
   assert(recorder.Open(&error));
   recorder.RegisterTopic("rt/arm_Command");
   recorder.RecordArmCommand("rt/arm_Command", "{\"funcode\":1,\"data\":{\"id\":0,\"angle\":1}}");
-  assert(recorder.RecordOperatorEvent("IDLE_START", &error));
-  assert(!recorder.RecordOperatorEvent("NOT_AN_ALLOWED_EVENT", &error));
+  assert(recorder.RecordOperatorEvent("CALIBRATION_START", 123U, &error));
+  assert(!recorder.RecordOperatorEvent("NOT_AN_ALLOWED_EVENT", 123U, &error));
   recorder.RecordArmFeedback("rt/arm_Feedback", "{\"unknown\":42}");
   recorder.RecordArmFeedback("rt/arm_Feedback", "{");
   recorder.RecordArmFeedback("rt/arm_Feedback", "not-json");
@@ -65,6 +66,12 @@ int main() {
   assert(std::filesystem::exists(temp / "servo_angle_raw.csv"));
   assert(std::filesystem::exists(temp / "operator_events.jsonl"));
   assert(std::filesystem::exists(temp / "protocol_summary.json"));
+  std::ifstream events(temp / "operator_events.jsonl");
+  std::string event_line;
+  std::getline(events, event_line);
+  assert(event_line.find("\"event_source_monotonic_ns\":123") != std::string::npos);
+  assert(event_line.find("\"host_monotonic_ns\":") != std::string::npos);
+  assert(event_line.find("\"event\":\"CALIBRATION_START\"") != std::string::npos);
   std::filesystem::remove_all(temp);
   return 0;
 }

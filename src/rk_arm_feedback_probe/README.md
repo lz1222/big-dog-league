@@ -38,3 +38,31 @@ ldd /tmp/d1_feedback_probe_build/d1_feedback_probe | grep -E 'ddsc|dds|unitree|r
 ```
 
 本阶段结束条件是静止反馈采集和协议报告，不进行任何动作采集或控制开发。
+
+## 官方 App 命令的被动记录
+
+`d1_command_probe` 是同一独立工程中的只读变体：它只订阅
+`rt/arm_Command`、`rt/arm_Feedback` 和 `current_servo_angle`，从不创建 DDS
+writer。所有 App 操作必须由现场操作者完成；禁止重放所记录的 JSON 或将其
+用于自研控制。
+
+人工事件使用同机 Unix datagram socket，并在发送和接收端分别记录单调纳秒
+时间。probe 收到事件后立即写入并 `flush` `operator_events.jsonl`；wall clock
+仅用于人工阅读。开始物理观察前，应先以无动作校准确认两事件间隔，例如：
+
+```bash
+/tmp/d1_feedback_probe_build/d1_command_probe \
+  --interface eth0 --duration-sec 300 \
+  --output-dir artifacts/d1_command_protocol/example \
+  --event-socket /tmp/rk_d1_command_probe_events.sock
+
+/tmp/d1_feedback_probe_build/d1_command_event \
+  --socket /tmp/rk_d1_command_probe_events.sock CALIBRATION_START
+# 约 3 秒后（不操作机械臂）
+/tmp/d1_feedback_probe_build/d1_command_event \
+  --socket /tmp/rk_d1_command_probe_events.sock CALIBRATION_END
+```
+
+每个事件行包含 `event_source_monotonic_ns`（事件工具在 `CLOCK_MONOTONIC`
+读取）和 `host_monotonic_ns`（probe 接收并立即落盘时读取）。二者用于识别
+人工标记偏差；它们不是机器人时间戳，也不能据此推断命令安全停止语义。

@@ -239,13 +239,13 @@ void FeedbackRecorder::RecordArmCommand(const std::string& topic, const std::str
   std::string error; if (!SummarizeJsonPayload(payload, config_.parser_max_payload_bytes, &schema_, &error)) ++topics_[topic].stats.bad_frames;
 }
 
-bool FeedbackRecorder::RecordOperatorEvent(const std::string& event, std::string* error) {
-  static const std::set<std::string> allowed = {"APP_CONNECTED", "IDLE_START", "IDLE_END", "JOINT_1_POS_START", "JOINT_1_POS_END", "JOINT_1_NEG_START", "JOINT_1_NEG_END", "JOINT_2_POS_START", "JOINT_2_POS_END", "GRIPPER_OPEN_START", "GRIPPER_OPEN_END", "GRIPPER_CLOSE_START", "GRIPPER_CLOSE_END", "APP_STOP_START", "APP_STOP_END", "APP_CONTROL_PAGE_EXIT", "APP_DISCONNECTED"};
-  if (allowed.count(event) == 0U) { if (error) *error = "unsupported operator event"; return false; }
-  std::lock_guard<std::mutex> lock(mutex_); if (event_output_ == nullptr) { if (error) *error = "recorder is closed"; return false; }
+bool FeedbackRecorder::RecordOperatorEvent(const std::string& event, std::uint64_t source_monotonic_ns, std::string* result) {
+  static const std::set<std::string> allowed = {"CALIBRATION_START", "CALIBRATION_END", "APP_CONNECTED", "IDLE_START", "IDLE_END", "JOINT_1_POS_START", "JOINT_1_POS_END", "JOINT_1_NEG_START", "JOINT_1_NEG_END", "JOINT_2_POS_START", "JOINT_2_POS_END", "JOINT_2_NEG_START", "JOINT_2_NEG_END", "GRIPPER_OPEN_START", "GRIPPER_OPEN_END", "GRIPPER_CLOSE_START", "GRIPPER_CLOSE_END", "APP_STOP_START", "APP_STOP_END", "APP_CONTROL_PAGE_EXIT", "APP_DISCONNECTED"};
+  if (allowed.count(event) == 0U) { if (result) *result = "unsupported operator event"; return false; }
+  std::lock_guard<std::mutex> lock(mutex_); if (event_output_ == nullptr) { if (result) *result = "recorder is closed"; return false; }
   const auto monotonic = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-  *event_output_ << "{\"host_monotonic_ns\":" << monotonic << ",\"host_wall_time\":\"" << WallTime() << "\",\"event\":\"" << event << "\"}\n";
-  event_output_->flush(); return true;
+  *event_output_ << "{\"host_monotonic_ns\":" << monotonic << ",\"event_source_monotonic_ns\":" << source_monotonic_ns << ",\"host_wall_time\":\"" << WallTime() << "\",\"event\":\"" << event << "\"}\n";
+  event_output_->flush(); if (result) *result = "received_monotonic_ns=" + std::to_string(monotonic) + " source_monotonic_ns=" + std::to_string(source_monotonic_ns); return true;
 }
 
 void FeedbackRecorder::RecordServoAngles(const std::string& topic, const std::array<float, 7>& values) {
