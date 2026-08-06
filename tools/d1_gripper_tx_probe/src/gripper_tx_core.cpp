@@ -94,6 +94,7 @@ std::optional<FrozenSnapshotPtr> GripperTxCore::FreezePreview(
   mutable_snapshot->address = preview.command->address;
   mutable_snapshot->mode = preview.command->mode;
   mutable_snapshot->feedback_angles = request.feedback.app_values;
+  mutable_snapshot->feedback_servo_values = request.feedback.servo_values;
   mutable_snapshot->angles = preview.command->angles;
   mutable_snapshot->current_angle6 = request.feedback.app_values[6];
   mutable_snapshot->target_angle6 = preview.command->angles[6];

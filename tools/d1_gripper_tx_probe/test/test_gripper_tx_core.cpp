@@ -60,7 +60,8 @@ int main() {
   // 冻结后即使调用方持有的反馈对象变化，也不能覆盖 payload 或各角度。
   const std::string frozen_payload = snapshot->candidate_json;
   request.feedback.app_values[0] = 99.0; request.feedback.app_values[6] = 88.0;
-  assert(snapshot->candidate_json == frozen_payload && snapshot->feedback_angles[0] == 1.0 && snapshot->angles[6] == -18.8);
+  assert(snapshot->candidate_json == frozen_payload && snapshot->feedback_angles[0] == 1.0 &&
+         snapshot->feedback_servo_values[0] == 1.0 && snapshot->angles[6] == -18.8);
   const auto confirmation = "SEND_ONE_GRIPPER_TARGET " + snapshot->candidate_json_sha256;
   assert(!d1_gripper_tx_probe::GripperTxCore::HardwareSendConfirmed(false, snapshot, confirmation));
   assert(!d1_gripper_tx_probe::GripperTxCore::HardwareSendConfirmed(true, snapshot, "SEND_ONE_GRIPPER_TARGET wrong"));

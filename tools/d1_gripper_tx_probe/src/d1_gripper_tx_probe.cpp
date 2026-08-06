@@ -3,6 +3,7 @@
 #include "rk_arm/d1_feedback_parser.hpp"
 #include "rk_arm/single_writer_guard.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -31,7 +32,8 @@ constexpr const char* kCommandTopic = "rt/arm_Command";
 constexpr const char* kLockPath = "/tmp/rk_d1_arm_writer.lock";
 constexpr auto kInitialFeedbackWait = std::chrono::milliseconds(1500);
 constexpr auto kCommandQuietWindow = std::chrono::seconds(5);
-constexpr auto kPostWriteObserveWindow = std::chrono::seconds(5);
+// 真机单帧后仍保持只读十秒，便于操作者判断停止和任何意外联动。
+constexpr auto kPostWriteObserveWindow = std::chrono::seconds(10);
 std::atomic<bool> g_exit_requested{false};
 void HandleSignal(int) { g_exit_requested.store(true); }
 
@@ -202,12 +204,37 @@ int main(int argc, char** argv) {
     std::cout << "preview_payload_sha256=" << (*frozen)->candidate_json_sha256 << " write_payload_sha256="
               << d1_gripper_tx_probe::GripperTxCore::Sha256(write_payload) << " preview_payload_length="
               << (*frozen)->candidate_json.size() << " write_payload_length=" << write_payload.size() << '\n';
+    const std::uint64_t command_frames_before_write = command_frames.load();
+    bool write_return = false;
     { unitree::robot::ChannelPublisher<unitree_arm::msg::dds_::ArmString_> writer(kCommandTopic);
-      writer.InitChannel(); writer.Write(message); writer.CloseChannel(); }
-    std::cout << "WRITE_ONCE_COMPLETED; observing feedback for 5 seconds\n";
+      writer.InitChannel(); write_return = writer.Write(message); writer.CloseChannel(); }
+    // 发送结果无论成功或失败都不重试；后续窗口始终只读，保留故障现场证据。
+    std::cout << "write_return=" << (write_return ? "true" : "false") << " actual_write_payload=" << write_payload
+              << "\nWRITE_ONCE_COMPLETED; observing feedback for 10 seconds\n";
+    std::array<double, 7> max_angle_change{};
+    std::array<double, 7> max_servo_change{};
+    rk_arm::FeedbackSnapshot final_feedback = CopyFeedback(feedback, &feedback_mutex);
     const auto observe_deadline = std::chrono::steady_clock::now() + kPostWriteObserveWindow;
-    while (!g_exit_requested.load() && std::chrono::steady_clock::now() < observe_deadline) std::this_thread::sleep_for(std::chrono::milliseconds(25));
-    cleanup(); return 0;
+    while (!g_exit_requested.load() && std::chrono::steady_clock::now() < observe_deadline) {
+      final_feedback = CopyFeedback(feedback, &feedback_mutex);
+      for (std::size_t index = 0; index < max_angle_change.size(); ++index) {
+        max_angle_change[index] = std::max(max_angle_change[index], std::abs(final_feedback.app_values[index] - (*frozen)->feedback_angles[index]));
+        max_servo_change[index] = std::max(max_servo_change[index], std::abs(final_feedback.servo_values[index] - (*frozen)->feedback_servo_values[index]));
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    // 这份数值报告不推断实体运动；实体观察和异常声音仍必须由现场操作者确认。
+    std::cout << "command_frames_observed_before_write=" << command_frames_before_write
+              << " command_frames_observed_after_write=" << (command_frames.load() - command_frames_before_write) << '\n';
+    for (std::size_t index = 0; index < max_angle_change.size(); ++index) {
+      std::cout << "post_angle" << index << '=' << final_feedback.app_values[index]
+                << " post_servo" << index << '=' << final_feedback.servo_values[index]
+                << " angle_max_abs_change=" << max_angle_change[index]
+                << " servo_max_abs_change=" << max_servo_change[index] << '\n';
+    }
+    std::cout << "post_status=" << final_feedback.enable_status << ',' << final_feedback.power_status << ','
+              << final_feedback.error_status << '\n';
+    cleanup(); return write_return ? 0 : 7;
   } catch (const std::exception& exception) {
     std::cerr << "probe failure: " << exception.what() << '\n'; return 6;
   }

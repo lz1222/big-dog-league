@@ -51,7 +51,9 @@ SEND_ONE_GRIPPER_TARGET <SHA256>
 
 仅当所有复核成立时，程序才在最小作用域内获取一次本地锁，断言 preview 与 Write 的字节、
 长度和 SHA-256 一致，并使用该冻结字符串调用一次 `Write` 后立即关闭 writer。没有重试、
-保持、自动回位、Stop、Enable、Disable 或第二帧。
+保持、自动回位、Stop、Enable、Disable 或第二帧。无论 `Write()` 返回 true 或 false，
+程序均不重试，并继续只读观察 10 秒，输出实际 payload、Write 返回值、本地观测到的
+command 帧数、七路反馈/servo 最终值与最大变化量。
 
 `address=1`、`mode=0` 与 `funcode=2` 都是 **OBSERVED FROM OFFICIAL APP TRAFFIC**，
 不是厂商认证语义；单位保持 `app_display_unit`，停止协议仍未确认。

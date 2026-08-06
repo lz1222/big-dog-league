@@ -48,6 +48,7 @@ struct FrozenGripperSnapshot {
   int mode{0};
   // feedback_angles 是冻结时真实位置；angles 是不可变的 funcode=2 目标字段。
   std::array<double, 7> feedback_angles{};
+  std::array<double, 7> feedback_servo_values{};
   std::array<double, 7> angles{};
   double current_angle6{0.0};
   double target_angle6{0.0};
