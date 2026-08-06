@@ -19,22 +19,58 @@ std::int64_t MonotonicNs(std::chrono::steady_clock::time_point time) {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
 }
 
+std::string DifferenceDetail(const char* prefix, std::size_t channel, double angle, double servo,
+                             double difference, double angle_age, double servo_age,
+                             std::size_t max_channel, double max_difference) {
+  std::ostringstream output;
+  output << prefix << " channel=" << channel << " angle=" << std::setprecision(17) << angle
+         << " servo=" << servo << " difference=" << difference
+         << " tolerance=" << GripperTxCore::kSourceTolerance
+         << " epsilon=" << GripperTxCore::kToleranceEpsilon
+         << " feedback_age_sec=" << angle_age << ',' << servo_age
+         << " max_difference_channel=" << max_channel << " max_difference=" << max_difference;
+  return output.str();
+}
+
 std::string ValidateFeedback(const rk_arm::FeedbackSnapshot& feedback,
                              std::chrono::steady_clock::time_point now) {
-  if (!feedback.dds_ready || !feedback.angle_valid || !feedback.servo_valid) return "DUAL_FEEDBACK_MISSING";
+  if (!feedback.dds_ready || !feedback.angle_valid || !feedback.servo_valid) {
+    std::ostringstream output;
+    output << "FEEDBACK_SOURCE_MISSING dds_ready=" << feedback.dds_ready
+           << " angle_valid=" << feedback.angle_valid << " servo_valid=" << feedback.servo_valid;
+    return output.str();
+  }
   const double angle_age = std::chrono::duration<double>(now - feedback.latest_angle).count();
   const double servo_age = std::chrono::duration<double>(now - feedback.latest_servo).count();
   if (angle_age < 0.0 || servo_age < 0.0 || angle_age > GripperTxCore::kFeedbackTimeoutSec ||
-      servo_age > GripperTxCore::kFeedbackTimeoutSec) return "FEEDBACK_STALE";
+      servo_age > GripperTxCore::kFeedbackTimeoutSec) {
+    std::ostringstream output;
+    output << "FEEDBACK_STALE feedback_age_sec=" << angle_age << ',' << servo_age
+           << " timeout_sec=" << GripperTxCore::kFeedbackTimeoutSec;
+    return output.str();
+  }
+  std::size_t max_channel = 0;
+  double max_difference = 0.0;
   for (std::size_t index = 0; index < feedback.app_values.size(); ++index) {
     if (!std::isfinite(feedback.app_values[index]) || !std::isfinite(feedback.servo_values[index])) {
-      return "FEEDBACK_NONFINITE";
+      std::ostringstream output;
+      output << "INVALID_NONFINITE_VALUE channel=" << index << " angle=" << feedback.app_values[index]
+             << " servo=" << feedback.servo_values[index];
+      return output.str();
     }
-    if (std::abs(feedback.app_values[index] - feedback.servo_values[index]) >
-        GripperTxCore::kSourceTolerance) return "DUAL_FEEDBACK_INCONSISTENT";
+    const double difference = std::abs(feedback.app_values[index] - feedback.servo_values[index]);
+    if (difference > max_difference) { max_difference = difference; max_channel = index; }
+    if (GripperTxCore::ExceedsTolerance(feedback.app_values[index], feedback.servo_values[index],
+                                        GripperTxCore::kSourceTolerance)) {
+      return DifferenceDetail("SOURCE_INCONSISTENT", index, feedback.app_values[index], feedback.servo_values[index],
+                              difference, angle_age, servo_age, max_channel, max_difference);
+    }
   }
   if (feedback.enable_status != 1 || feedback.power_status != 0 || feedback.error_status != 0) {
-    return "STATUS_NOT_NORMAL";
+    std::ostringstream output;
+    output << "STATUS_NOT_READY enable_status=" << feedback.enable_status
+           << " power_status=" << feedback.power_status << " error_status=" << feedback.error_status;
+    return output.str();
   }
   return {};
 }
@@ -67,19 +103,26 @@ GripperPreview GripperTxCore::PrepareDryRun(const GripperPreviewRequest& request
     result.reason = "SEQ_OVERFLOW_RISK"; return result;
   }
   if (request.writer_lock.state != WriterLockState::kAvailable) {
-    result.reason = request.writer_lock.detail; return result;
+    result.reason = request.writer_lock.state == WriterLockState::kActive
+        ? "WRITER_LOCK_ACTIVE " + request.writer_lock.detail
+        : "INTERNAL_PRECONDITION_ERROR " + request.writer_lock.detail;
+    return result;
   }
   const auto& feedback = request.feedback;
   if (const std::string reason = ValidateFeedback(feedback, now); !reason.empty()) { result.reason = reason; return result; }
   const auto shadow = rk_arm::D1ShadowCommandGenerator::PreviewGripper(
       feedback, feedback.app_values[6] + request.delta, *request.seq, now,
-      kFeedbackTimeoutSec, kSourceTolerance, false);
+      kFeedbackTimeoutSec, kSourceTolerance, false, kToleranceEpsilon);
   if (!shadow.accepted || !shadow.command || !shadow.json) { result.reason = shadow.reason; return result; }
   result.accepted = true;
   result.reason = "DRY_RUN_ONLY / NOT SENT";
   result.command = shadow.command;
   result.json = shadow.json;
   return result;
+}
+
+bool GripperTxCore::ExceedsTolerance(double lhs, double rhs, double tolerance, double epsilon) {
+  return std::abs(lhs - rhs) > tolerance + epsilon;
 }
 
 std::optional<FrozenSnapshotPtr> GripperTxCore::FreezePreview(
@@ -117,11 +160,23 @@ GuardedSessionDecision GripperTxCore::ValidateGuardedSession(
     return {false, "SNAPSHOT_EXPIRED"};
   }
   if (observation.command_frames_since_snapshot != 0U) return {false, "COMMAND_TOPIC_NOT_SILENT"};
-  if (observation.writer_lock.state != WriterLockState::kAvailable) return {false, observation.writer_lock.detail};
+  if (observation.writer_lock.state != WriterLockState::kAvailable) {
+    return {false, observation.writer_lock.state == WriterLockState::kActive
+        ? "WRITER_LOCK_ACTIVE " + observation.writer_lock.detail
+        : "INTERNAL_PRECONDITION_ERROR " + observation.writer_lock.detail};
+  }
   if (const std::string reason = ValidateFeedback(observation.feedback, now); !reason.empty()) return {false, reason};
   for (std::size_t index = 0; index < snapshot->feedback_angles.size(); ++index) {
-    if (std::abs(observation.feedback.app_values[index] - snapshot->feedback_angles[index]) >
-        kStationaryDriftTolerance) return {false, "FEEDBACK_DRIFTED_SINCE_PREVIEW angle" + std::to_string(index)};
+    if (ExceedsTolerance(observation.feedback.app_values[index], snapshot->feedback_angles[index],
+                         kStationaryDriftTolerance)) {
+      const double difference = std::abs(observation.feedback.app_values[index] - snapshot->feedback_angles[index]);
+      std::ostringstream output;
+      output << "FEEDBACK_DRIFTED_SINCE_PREVIEW channel=" << index << " current_angle="
+             << std::setprecision(17) << observation.feedback.app_values[index] << " frozen_angle="
+             << snapshot->feedback_angles[index] << " difference=" << difference
+             << " tolerance=" << kStationaryDriftTolerance << " epsilon=" << kToleranceEpsilon;
+      return {false, output.str()};
+    }
   }
   return {true, "READY_TO_SEND_FROZEN_PAYLOAD"};
 }

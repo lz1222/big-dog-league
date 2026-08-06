@@ -96,9 +96,13 @@ class GripperTxCore {
   static constexpr double kFeedbackTimeoutSec = 0.3;
   // 2026-08-07 五秒静止采样的最大通道抖动为 0.2 app_display_unit。
   static constexpr double kSourceTolerance = 0.2;
+  // epsilon 只消除二进制浮点边界误判，不扩大 0.2 的物理容差。
+  static constexpr double kToleranceEpsilon = 1e-6;
   static constexpr double kStationaryDriftTolerance = 0.2;
   static constexpr std::chrono::seconds kSnapshotTtl{15};
 
+  static bool ExceedsTolerance(double lhs, double rhs, double tolerance,
+                               double epsilon = kToleranceEpsilon);
   static GripperPreview PrepareDryRun(const GripperPreviewRequest& request,
                                       std::chrono::steady_clock::time_point now);
   static std::optional<FrozenSnapshotPtr> FreezePreview(const GripperPreviewRequest& request,

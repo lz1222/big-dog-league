@@ -59,12 +59,13 @@ ShadowCommandPreview PreviewFromFeedback(const FeedbackSnapshot& feedback, int c
                                          std::chrono::steady_clock::time_point now,
                                          double feedback_timeout_sec,
                                          double source_tolerance,
-                                         bool manual_motion_enabled) {
+                                         bool manual_motion_enabled,
+                                         double source_epsilon) {
   ShadowCommandPreview result;
   // 安全原因：影子模式只能在正式手动模式关闭时使用，避免成为旁路控制入口。
   if (manual_motion_enabled) { result.reason = "manual_motion_enabled must remain false"; return result; }
   if (channel < 0 || channel >= 7 || !std::isfinite(target_app_value) ||
-      feedback_timeout_sec <= 0.0 || source_tolerance < 0.0) {
+      feedback_timeout_sec <= 0.0 || source_tolerance < 0.0 || source_epsilon < 0.0) {
     result.reason = "invalid shadow request"; return result;
   }
   if (seq == std::numeric_limits<std::uint64_t>::max()) {
@@ -80,8 +81,9 @@ ShadowCommandPreview PreviewFromFeedback(const FeedbackSnapshot& feedback, int c
     result.reason = "feedback is stale"; return result;
   }
   for (std::size_t index = 0; index < feedback.app_values.size(); ++index) {
+    // epsilon 只用于固定绝对容差的二进制边界，不改变调用方声明的物理容差。
     if (!std::isfinite(feedback.app_values[index]) || !std::isfinite(feedback.servo_values[index]) ||
-        std::abs(feedback.app_values[index] - feedback.servo_values[index]) > source_tolerance) {
+        std::abs(feedback.app_values[index] - feedback.servo_values[index]) > source_tolerance + source_epsilon) {
       result.reason = "feedback sources differ"; return result;
     }
   }
@@ -137,21 +139,21 @@ std::optional<std::string> EncodeD1ObservedCommand(const D1ObservedCommand& comm
 ShadowCommandPreview D1ShadowCommandGenerator::PreviewJoint(
     const FeedbackSnapshot& feedback, int joint_index, double target_app_value, std::uint64_t seq,
     std::chrono::steady_clock::time_point now, double feedback_timeout_sec,
-    double source_tolerance, bool manual_motion_enabled) {
+    double source_tolerance, bool manual_motion_enabled, double source_epsilon) {
   // 关节接口永远不能借用第七路；夹爪必须走独立接口以避免索引混淆。
   if (joint_index < 0 || joint_index > 5) {
     ShadowCommandPreview result; result.reason = "joint index must be in [0,5]"; return result;
   }
   return PreviewFromFeedback(feedback, joint_index, target_app_value, seq, now,
-                             feedback_timeout_sec, source_tolerance, manual_motion_enabled);
+                             feedback_timeout_sec, source_tolerance, manual_motion_enabled, source_epsilon);
 }
 
 ShadowCommandPreview D1ShadowCommandGenerator::PreviewGripper(
     const FeedbackSnapshot& feedback, double target_app_value, std::uint64_t seq,
     std::chrono::steady_clock::time_point now, double feedback_timeout_sec,
-    double source_tolerance, bool manual_motion_enabled) {
+    double source_tolerance, bool manual_motion_enabled, double source_epsilon) {
   return PreviewFromFeedback(feedback, 6, target_app_value, seq, now,
-                             feedback_timeout_sec, source_tolerance, manual_motion_enabled);
+                             feedback_timeout_sec, source_tolerance, manual_motion_enabled, source_epsilon);
 }
 
 }  // namespace rk_arm

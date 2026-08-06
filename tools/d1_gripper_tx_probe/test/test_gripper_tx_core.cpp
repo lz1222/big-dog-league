@@ -56,6 +56,20 @@ int main() {
   assert(d1_gripper_tx_probe::GripperTxCore::Sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   assert(d1_gripper_tx_probe::GripperTxCore::PayloadBytesMatch(snapshot, *preview.json));
   assert(!d1_gripper_tx_probe::GripperTxCore::PayloadBytesMatch(snapshot, *preview.json + " "));
+  // 固定绝对容差加 epsilon：边界通过，明显越界仍拒绝，正负方向等价。
+  assert(!d1_gripper_tx_probe::GripperTxCore::ExceedsTolerance(0.0, 0.0, 0.2));
+  assert(!d1_gripper_tx_probe::GripperTxCore::ExceedsTolerance(0.199999, 0.0, 0.2));
+  assert(!d1_gripper_tx_probe::GripperTxCore::ExceedsTolerance(0.2, 0.0, 0.2));
+  assert(!d1_gripper_tx_probe::GripperTxCore::ExceedsTolerance(0.2000005, 0.0, 0.2));
+  assert(!d1_gripper_tx_probe::GripperTxCore::ExceedsTolerance(0.2 + 1e-6, 0.0, 0.2));
+  assert(d1_gripper_tx_probe::GripperTxCore::ExceedsTolerance(0.2000011, 0.0, 0.2));
+  assert(d1_gripper_tx_probe::GripperTxCore::ExceedsTolerance(-0.2000011, 0.0, 0.2));
+  assert(!d1_gripper_tx_probe::GripperTxCore::ExceedsTolerance(0.1 + 0.1, 0.0, 0.2));
+  request = ValidRequest(now); request.feedback.servo_values[2] += 0.2000005;
+  assert(d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now).accepted);
+  request = ValidRequest(now); request.feedback.servo_values[2] += 0.2000011;
+  const auto source_boundary_reject = d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now);
+  assert(!source_boundary_reject.accepted && source_boundary_reject.reason.find("SOURCE_INCONSISTENT channel=2") != std::string::npos);
 
   // 冻结后即使调用方持有的反馈对象变化，也不能覆盖 payload 或各角度。
   const std::string frozen_payload = snapshot->candidate_json;
@@ -76,12 +90,14 @@ int main() {
   observation.feedback.latest_servo = now - std::chrono::seconds(1);
   assert(!d1_gripper_tx_probe::GripperTxCore::ValidateGuardedSession(snapshot, observation, now).accepted);
   observation = ValidObservation(now); observation.feedback.servo_values[0] += 1.0;
-  assert(!d1_gripper_tx_probe::GripperTxCore::ValidateGuardedSession(snapshot, observation, now).accepted);
+  const auto inconsistent = d1_gripper_tx_probe::GripperTxCore::ValidateGuardedSession(snapshot, observation, now);
+  assert(!inconsistent.accepted && inconsistent.reason.find("SOURCE_INCONSISTENT channel=0") != std::string::npos);
   observation = ValidObservation(now); observation.feedback.enable_status = 0;
   assert(!d1_gripper_tx_probe::GripperTxCore::ValidateGuardedSession(snapshot, observation, now).accepted);
-  observation = ValidObservation(now); observation.feedback.app_values[0] += 0.21;
-  assert(!d1_gripper_tx_probe::GripperTxCore::ValidateGuardedSession(snapshot, observation, now).accepted);
-  observation = ValidObservation(now); observation.feedback.app_values[6] += 0.21;
+  observation = ValidObservation(now); observation.feedback.app_values[0] += 0.21; observation.feedback.servo_values[0] += 0.21;
+  const auto joint_drift = d1_gripper_tx_probe::GripperTxCore::ValidateGuardedSession(snapshot, observation, now);
+  assert(!joint_drift.accepted && joint_drift.reason.find("FEEDBACK_DRIFTED_SINCE_PREVIEW channel=0") != std::string::npos);
+  observation = ValidObservation(now); observation.feedback.app_values[6] += 0.21; observation.feedback.servo_values[6] += 0.21;
   assert(!d1_gripper_tx_probe::GripperTxCore::ValidateGuardedSession(snapshot, observation, now).accepted);
   observation = ValidObservation(now); observation.command_frames_since_snapshot = 1U;
   assert(!d1_gripper_tx_probe::GripperTxCore::ValidateGuardedSession(snapshot, observation, now).accepted);
@@ -103,6 +119,17 @@ int main() {
   request.delta = 1.01; assert(!d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now).accepted);
   request.delta = -1.01; assert(!d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now).accepted);
   request = ValidRequest(now); request.feedback.angle_valid = false; assert(!d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now).accepted);
+  for (int index = 0; index < 7; ++index) {
+    request = ValidRequest(now); request.feedback.servo_values[index] += 0.20001;
+    const auto rejected = d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now);
+    assert(!rejected.accepted && rejected.reason.find("SOURCE_INCONSISTENT channel=" + std::to_string(index)) != std::string::npos);
+  }
+  request = ValidRequest(now); request.feedback.latest_angle = now - std::chrono::seconds(1);
+  const auto stale = d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now);
+  assert(!stale.accepted && stale.reason.find("FEEDBACK_STALE") != std::string::npos);
+  request = ValidRequest(now); request.feedback.error_status = 1;
+  const auto bad_status = d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now);
+  assert(!bad_status.accepted && bad_status.reason.find("STATUS_NOT_READY") != std::string::npos);
   request = ValidRequest(now); request.feedback.app_values[6] = std::numeric_limits<double>::infinity(); assert(!d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now).accepted);
   request = ValidRequest(now); request.seq.reset(); assert(!d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now).accepted);
   request = ValidRequest(now); request.seq = std::numeric_limits<std::uint64_t>::max(); assert(!d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now).accepted);

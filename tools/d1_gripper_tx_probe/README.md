@@ -55,5 +55,12 @@ SEND_ONE_GRIPPER_TARGET <SHA256>
 程序均不重试，并继续只读观察 10 秒，输出实际 payload、Write 返回值、本地观测到的
 command 帧数、七路反馈/servo 最终值与最大变化量。
 
+双源一致性和冻结后位置漂移均使用固定绝对规则
+`abs(lhs - rhs) > 0.2 + 1e-6`。其中 `0.2 app_display_unit` 是静止采样得到的
+物理容差，`1e-6` 只用于避免二进制浮点边界误判，绝不作为可配置或放宽后的容差。
+quiet-window 被拒绝时会输出具体原因；双源不一致会额外报告通道、两值、绝对差、
+容差、epsilon、两路年龄及最大差值通道。快照漂移日志则明确标为
+`FEEDBACK_DRIFTED_SINCE_PREVIEW`，不会与双源不一致混淆。
+
 `address=1`、`mode=0` 与 `funcode=2` 都是 **OBSERVED FROM OFFICIAL APP TRAFFIC**，
 不是厂商认证语义；单位保持 `app_display_unit`，停止协议仍未确认。

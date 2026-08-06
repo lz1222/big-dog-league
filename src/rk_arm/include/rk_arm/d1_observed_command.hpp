@@ -53,13 +53,15 @@ class D1ShadowCommandGenerator {
                                            std::chrono::steady_clock::time_point now,
                                            double feedback_timeout_sec,
                                            double source_tolerance,
-                                           bool manual_motion_enabled);
+                                           bool manual_motion_enabled,
+                                           double source_epsilon = 0.0);
   static ShadowCommandPreview PreviewGripper(const FeedbackSnapshot& feedback,
                                              double target_app_value, std::uint64_t seq,
                                              std::chrono::steady_clock::time_point now,
                                              double feedback_timeout_sec,
                                              double source_tolerance,
-                                             bool manual_motion_enabled);
+                                             bool manual_motion_enabled,
+                                             double source_epsilon = 0.0);
 };
 
 }  // namespace rk_arm

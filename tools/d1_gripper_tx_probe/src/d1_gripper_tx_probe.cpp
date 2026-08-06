@@ -78,12 +78,14 @@ rk_arm::FeedbackSnapshot CopyFeedback(const rk_arm::FeedbackSnapshot& feedback, 
 void PrintFrozenPreview(const d1_gripper_tx_probe::GripperPreviewRequest& request,
                         const d1_gripper_tx_probe::FrozenSnapshotPtr& snapshot,
                         std::chrono::steady_clock::time_point now,
-                        std::uint64_t command_frames) {
+                        std::uint64_t command_frames,
+                        const std::array<double, 7>& quiet_max_source_difference) {
   std::cout << "EXPERIMENTAL HARDWARE WRITER\nwriter_lock=" << request.writer_lock.detail << "\n";
   for (int index = 0; index < 7; ++index) {
     std::cout << "feedback_angle" << index << '=' << request.feedback.app_values[index]
               << " servo" << index << '=' << request.feedback.servo_values[index]
               << " difference=" << std::abs(request.feedback.app_values[index] - request.feedback.servo_values[index]) << '\n';
+    std::cout << "quiet_max_source_difference" << index << '=' << quiet_max_source_difference[index] << '\n';
   }
   const double angle_age = std::chrono::duration<double>(now - request.feedback.latest_angle).count();
   const double servo_age = std::chrono::duration<double>(now - request.feedback.latest_servo).count();
@@ -148,15 +150,40 @@ int main(int argc, char** argv) {
       if (current.angle_valid && current.servo_valid && current.enable_status >= 0 && current.power_status >= 0 && current.error_status >= 0) break;
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    std::optional<rk_arm::FeedbackSnapshot> quiet_baseline;
+    std::array<double, 7> quiet_max_source_difference{};
     const auto quiet_deadline = std::chrono::steady_clock::now() + kCommandQuietWindow;
     while (!g_exit_requested.load() && std::chrono::steady_clock::now() < quiet_deadline) {
       const auto current = CopyFeedback(feedback, &feedback_mutex);
+      if (command_frames.load() != 0U) { std::cerr << "COMMAND_TOPIC_NOT_QUIET frames=" << command_frames.load() << '\n'; cleanup(); return 3; }
       d1_gripper_tx_probe::GripperPreviewRequest guard_request{current, arguments.seq, arguments.delta,
           d1_gripper_tx_probe::InspectWriterLock(kLockPath)};
-      if (!d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(guard_request, std::chrono::steady_clock::now()).accepted) {
-        std::cerr << "PREVIEW_PRECONDITION_FAILED_DURING_QUIET_WINDOW\n"; cleanup(); return 3;
+      const auto quiet_preview = d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(guard_request, std::chrono::steady_clock::now());
+      if (!quiet_preview.accepted) {
+        std::cerr << "PREVIEW_PRECONDITION_FAILED_DURING_QUIET_WINDOW reason=" << quiet_preview.reason << '\n'; cleanup(); return 3;
       }
-      if (command_frames.load() != 0U) { std::cerr << "COMMAND_TOPIC_NOT_SILENT\n"; cleanup(); return 3; }
+      for (std::size_t index = 0; index < quiet_max_source_difference.size(); ++index) {
+        const double source_difference = std::abs(current.app_values[index] - current.servo_values[index]);
+        quiet_max_source_difference[index] = std::max(quiet_max_source_difference[index], source_difference);
+      }
+      if (!quiet_baseline) {
+        quiet_baseline = current;
+      } else {
+        for (std::size_t index = 0; index < current.app_values.size(); ++index) {
+          if (d1_gripper_tx_probe::GripperTxCore::ExceedsTolerance(
+                  current.app_values[index], quiet_baseline->app_values[index],
+                  d1_gripper_tx_probe::GripperTxCore::kStationaryDriftTolerance)) {
+            const double difference = std::abs(current.app_values[index] - quiet_baseline->app_values[index]);
+            std::cerr << "FEEDBACK_DRIFTED_DURING_QUIET_WINDOW channel=" << index
+                      << " current_angle=" << current.app_values[index]
+                      << " baseline_angle=" << quiet_baseline->app_values[index]
+                      << " difference=" << difference
+                      << " tolerance=" << d1_gripper_tx_probe::GripperTxCore::kStationaryDriftTolerance
+                      << " epsilon=" << d1_gripper_tx_probe::GripperTxCore::kToleranceEpsilon << '\n';
+            cleanup(); return 3;
+          }
+        }
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (g_exit_requested.load()) { std::cerr << "SESSION_CANCELLED\n"; cleanup(); return 3; }
@@ -167,7 +194,7 @@ int main(int argc, char** argv) {
     const auto preview = d1_gripper_tx_probe::GripperTxCore::PrepareDryRun(request, now);
     const auto frozen = d1_gripper_tx_probe::GripperTxCore::FreezePreview(request, preview, now);
     if (!frozen) { std::cerr << "SNAPSHOT_FREEZE_FAILED " << preview.reason << '\n'; cleanup(); return 3; }
-    PrintFrozenPreview(request, *frozen, now, command_frames.load());
+    PrintFrozenPreview(request, *frozen, now, command_frames.load(), quiet_max_source_difference);
     if (!arguments.guarded_session) {
       std::cout << "DRY_RUN_ONLY / NOT SENT; no DDS writer was created.\n"; cleanup(); return 0;
     }
