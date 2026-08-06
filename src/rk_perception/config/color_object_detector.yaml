@@ -2,9 +2,10 @@
 # NOT FIELD VALIDATED，必须在安装完成、TF 建立后用真机和 HSV 标定工具验证。
 color_object_detector:
   ros__parameters:
-    color_topic: /camera/camera/color/image_raw
-    depth_topic: /camera/camera/aligned_depth_to_color/image_raw
-    camera_info_topic: /camera/camera/color/camera_info
+    # 真机 D435i 驱动以 /camera 为命名空间，三路输入必须来自同一对齐 RGB-D 流。
+    color_topic: /camera/color/image_raw
+    depth_topic: /camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/color/camera_info
     detection_topic: /perception/color_object_detection
     overlay_topic: /perception/debug/color_object_overlay
     mask_topic: /perception/debug/color_object_mask

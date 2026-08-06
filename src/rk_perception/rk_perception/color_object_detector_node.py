@@ -6,6 +6,7 @@ import math
 import os
 
 import cv2
+import numpy as np
 from cv_bridge import CvBridge
 import message_filters
 import rclpy
@@ -43,6 +44,29 @@ def _load_config(config_file):
     if not isinstance(config, dict):
         raise ValueError('color_object_detector.ros__parameters is required')
     return config
+
+
+def _debug_image_message(image, encoding):
+    """封装 uint8 调试图，绕过 OpenCV 5 与 Foxy cv_bridge 的类型表失配。"""
+    if image.dtype != np.uint8:
+        raise ValueError('debug image must use uint8 pixels')
+    expected_channels = {'bgr8': 3, 'mono8': 1}
+    if encoding not in expected_channels:
+        raise ValueError('unsupported debug image encoding: {0}'.format(encoding))
+    channels = expected_channels[encoding]
+    if image.ndim != (2 if channels == 1 else 3):
+        raise ValueError('debug image dimensions do not match {0}'.format(encoding))
+    if channels == 3 and image.shape[2] != channels:
+        raise ValueError('debug image channel count does not match bgr8')
+
+    # tobytes() 会压紧非连续 NumPy 视图，step 必须按压紧后的每行字节数计算。
+    message = Image()
+    message.height, message.width = int(image.shape[0]), int(image.shape[1])
+    message.encoding = encoding
+    message.is_bigendian = False
+    message.step = message.width * channels
+    message.data.frombytes(image.tobytes())
+    return message
 
 
 class ColorObjectDetectorNode(Node):
@@ -314,9 +338,9 @@ class ColorObjectDetectorNode(Node):
         if mask is None:
             mask = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
             mask[:] = 0
-        overlay_message = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
+        overlay_message = _debug_image_message(overlay, 'bgr8')
         overlay_message.header = image_message.header
-        mask_message = self.bridge.cv2_to_imgmsg(mask, encoding='mono8')
+        mask_message = _debug_image_message(mask, 'mono8')
         mask_message.header = image_message.header
         self.overlay_publisher.publish(overlay_message)
         self.mask_publisher.publish(mask_message)
