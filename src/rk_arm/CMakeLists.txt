@@ -14,6 +14,7 @@ find_package(Threads REQUIRED)
 
 add_library(rk_arm_core
   src/arm_safety_core.cpp
+  src/d1_observed_command.cpp
   src/d1_feedback_parser.cpp
   src/d1_command_encoder.cpp
   src/single_writer_guard.cpp)
@@ -51,9 +52,12 @@ install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config launch tools DESTINATION share/${PROJECT_NAME} USE_SOURCE_PERMISSIONS)
 
 if(BUILD_TESTING)
-  foreach(test_name test_arm_safety_core test_feedback_parser test_command_encoder test_single_writer_guard)
+  foreach(test_name test_arm_safety_core test_feedback_parser test_command_encoder test_observed_command test_single_writer_guard)
     add_executable(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} PRIVATE rk_arm_core)
+    if(test_name STREQUAL "test_observed_command")
+      target_compile_definitions(${test_name} PRIVATE RK_ARM_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures")
+    endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
   endforeach()
 endif()

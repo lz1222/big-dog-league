@@ -2,6 +2,8 @@
 
 状态：`manual_motion_enabled=false`、`COMMAND_ID_SEMANTICS_UNCONFIRMED`、`STOP_SCHEMA_UNCONFIRMED`、`value_unit=app_display_unit`。本报告只引用静态源码和被动 DDS 订阅；未创建、启动、测试或重放任何自研 `rt/arm_Command` writer。
 
+**OBSERVED FROM OFFICIAL APP TRAFFIC，不是厂商正式协议认证。**
+
 ## 2026-08-07 官方 App 被动抓取
 
 原始数据位于 Git 忽略的 `artifacts/d1_command_protocol/`。探针只创建 `ChannelSubscriber`，并同时保存 `rt/arm_Command`、`rt/arm_Feedback` 与 `current_servo_angle`。人工事件通过同机 Unix socket 写入；事件工具使用 `CLOCK_MONOTONIC`，probe 收到后立即记录自身单调时间并 flush。
@@ -23,12 +25,14 @@
 由此可更新的结论：
 
 - `COMMAND_FUNCODE_2_OBSERVED_FOR_APP_JOG`：本机官方 App 对关节1、关节2和夹爪均实际使用全七通道目标 JSON，`mode=0`；其控制语义、完整安全边界仍未验证。
-- `COMMAND_SEQ_CANDIDATE_MONOTONIC_COUNTER`：`seq=60406..60498` 跨关节1、关节2和夹爪连续递增；重连/回绕/复位语义未观测，故仍是 `COMMAND_ID_SEMANTICS_UNCONFIRMED`。
+- `SEQ_CANDIDATE_MONOTONIC_COUNTER_WITHIN_OBSERVED_SESSION`：`seq=60406..60498` 跨关节1、关节2和夹爪严格连续，无跳号；退出并重新进入 App 后、混入人工使能/夹爪操作的记录继续为 `60499..60503`。App 正常断开与重新连接均未执行，不能宣称全局递增、重连不重置或自研程序必须生成该序号，故仍是 `COMMAND_ID_SEMANTICS_UNCONFIRMED`。
 - `address` 在关节1、关节2和夹爪记录中均为 1；本轮不支持 `COMMAND_ADDRESS_CANDIDATE_ACTUATOR_INDEX`。
 - 此处无 `id` 字段，不能用 App 观测确认 SDK `funcode=1.data.id` 的语义；`funcode=1` 在本批 App 数据中未出现。
 - 命令 `angle0`、`angle1` 和 `angle6` 分别与相应反馈通道的变化方向和值域相符，仅可写为 `COMMAND_VALUE_MATCHES_APP_DISPLAY_UNIT`，不能转换为 degree 或 radian。
 - 打开、关闭夹爪的可重复命令外形已观察到，可记录 `GRIPPER_COMMAND_SCHEMA_OBSERVED`；这不授权自研夹爪控制。
 - 未观测 `delay_ms`、速度字段、明确 App 停止命令或 App 断开行为；`STOP_SCHEMA_UNCONFIRMED` 不变。
+
+离线命令模型、最小化 fixture 和影子生成器见 `d1_observed_command.hpp`。它只接受完整七通道的 App 已观测外形，所有结果均为 `DRY_RUN_ONLY / NOT SENT`；它不包含 DDS writer、停止、使能或失能生成入口。专项停止审计见 [D1_STOP_PROTOCOL_AUDIT.md](D1_STOP_PROTOCOL_AUDIT.md)。
 
 | 项目 | 证据 | 原始 JSON | 强度 / 结论 |
 |---|---|---|---|

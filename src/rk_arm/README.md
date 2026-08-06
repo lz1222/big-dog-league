@@ -21,6 +21,20 @@
 - SDK 中 `funcode=7` 被命名为 `arm_zero_control`，并无它是安全停止的证据。因此停止协议为 `STOP_SCHEMA_UNCONFIRMED`，服务绝不假成功。
 - App 反馈映射由现场操作者确认：App 关节1～6对应 `angle0～5`/`servo_0～5`；夹爪对应第七路。状态：`USER-CONFIRMED APP-CONSISTENT MAPPING`，单位仍为 `APP DISPLAY UNIT`。
 
+## 离线 App 命令模型
+
+`d1_observed_command.hpp` 只实现 **OBSERVED FROM OFFICIAL APP TRAFFIC** 的
+`funcode=2/address=1/mode=0` 完整七通道字符串解析、再编码和比较。它不是厂商
+协议认证，不能推断 `address`、`mode` 或 `seq` 的正式语义。
+
+影子生成器要求双源一致、未过期的七路反馈，复制所有当前 App 显示值后只修改
+一个关节槽位（0～5）或夹爪槽位（6）。输出总带有
+`DRY_RUN_ONLY / NOT SENT`，并拒绝非有限值、缺失/过期反馈、来源不一致、越界
+索引和 `uint64_t` 序号溢出风险。它没有 DDS、停止、使能或失能 API；即使离线
+JSON 可复现，`manual_motion_enabled` 也必须保持 `false`。
+
+停止、保持、取消与失能候选的来源和边界见 [D1_STOP_PROTOCOL_AUDIT.md](D1_STOP_PROTOCOL_AUDIT.md)。
+
 ## 禁止范围
 
 不包含视觉坐标、逆运动学、MoveIt、自动抓取、固定轨迹、`cmd_vel` 或 Action server。
