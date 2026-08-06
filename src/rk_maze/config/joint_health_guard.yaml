@@ -1,0 +1,18 @@
+# JointHealthGuard configuration — ALL TEMPERATURE THRESHOLDS UNVERIFIED
+joint_health_guard:
+  ros__parameters:
+    temp_warn_deg_c: 70.0
+    temp_critical_deg_c: 85.0
+    temp_hardware_fault_deg_c: 105.0
+    temp_rise_rate_warn: 2.0
+    torque_warn_nm: 5.0
+    torque_critical_nm: 8.0
+    torque_consistency_samples: 5
+    max_lost_count: 3
+    max_state_age_sec: 0.50
+    limited_max_wz: 0.20
+    limited_max_vx: 0.15
+    limited_max_consecutive_left_turns: 2
+    limited_max_left_turn_duration_sec: 3.0
+    temperature_history_size: 20
+    torque_history_size: 20

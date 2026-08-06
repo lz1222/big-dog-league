@@ -1,0 +1,6 @@
+<?xml version="1.0"?><package format="3"><name>rk_maze</name><version>0.1.0</version>
+<description>LiDAR+Odom+IMU fusion realtime maze corridor navigation for Unitree Go2</description>
+<maintainer email="unitree@go2.local">Unitree Go2</maintainer><license>Proprietary</license>
+<depend>rclpy</depend><depend>std_msgs</depend><depend>sensor_msgs</depend>
+<depend>nav_msgs</depend><depend>geometry_msgs</depend>
+<export><build_type>ament_python</build_type></export></package>

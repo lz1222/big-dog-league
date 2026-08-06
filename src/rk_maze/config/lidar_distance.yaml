@@ -1,0 +1,61 @@
+# LiDAR distance processing configuration (F1-F3)
+# All thresholds are UNVERIFIED — calibrate with actual hardware measurements.
+
+lidar_distance:
+  ros__parameters:
+    # ---- Point cloud filtering ----
+    min_range_m: 0.08
+    max_range_m: 3.00
+    ground_z_min_m: -0.30
+    ground_z_max_m: 0.03
+    obstacle_z_min_m: 0.03
+    obstacle_z_max_m: 0.80
+
+    # ---- Self-reflection / body filter ----
+    body_x_min_m: -0.40
+    body_x_max_m: 0.40
+    body_y_min_m: -0.18
+    body_y_max_m: 0.18
+    leg_self_filter_enabled: false
+    leg_radius_m: 0.08
+
+    # ---- Voxel downsampling ----
+    voxel_size_m: 0.02
+
+    # ---- Effective obstacle clustering ----
+    cluster_tolerance_m: 0.05
+    min_cluster_points: 5
+    cluster_percentile: 0.10
+
+    # ---- Sector / ROI definition ----
+    front_half_angle_deg: 10.0
+    diagonal_min_angle_deg: 10.0
+    diagonal_max_angle_deg: 45.0
+    side_min_angle_deg: 45.0
+    side_max_angle_deg: 90.0
+
+    # ---- Footprint dimensions (T0 calibrated) ----
+    # LiDAR位于base_link前方0.28m (T0卷尺标定)
+    # 机身全长0.70m → 前0.28m, 后0.42m
+    footprint_front_m: 0.28
+    footprint_rear_m: 0.42
+    footprint_left_m: 0.18
+    footprint_right_m: 0.18
+    perception_margin_m: 0.03
+
+    # ---- T0 calibration record ----
+    lidar_offset_x_m: 0.281
+
+    # ---- hard_distance ----
+    hard_max_age_sec: 0.15
+
+    # ---- navigation_distance ----
+    nav_temporal_window: 5
+    nav_ema_alpha: 0.3
+    nav_max_age_sec: 0.50
+    nav_max_jump_m: 0.30
+
+    # ---- Dynamic stop distance ----
+    total_latency_sec: 0.20
+    min_deceleration: 0.80
+    measured_stop_tail_95_m: 0.15
