@@ -26,9 +26,9 @@ from rk_maze.safety_arbiter import SafetyArbiter
 
 
 # --- Safety limits ---
-MAX_SPEED = 0.25      # m/s — hard cap
+MAX_SPEED = 0.30      # m/s — hard cap
 MAX_WZ = 0.50         # rad/s
-STOP_DISTANCE = 0.50  # m — stop if front clearance < this
+STOP_DISTANCE = 0.40  # m — stop if front clearance < this
 
 
 class MazeAutonomousWalker(Node):
@@ -164,10 +164,10 @@ class MazeAutonomousWalker(Node):
 
         candidates = []
         for name, vx, wz in [
-            ('FWD', min(MAX_SPEED, 0.20), wz_ref),
+            ('FWD', MAX_SPEED, wz_ref),
             ('STOP', 0.0, 0.0),
         ]:
-            c = VelocityCandidate(name=name, vx=vx, vy=0.0, wz=wz, duration_sec=1.0)
+            c = VelocityCandidate(name=name, vx=vx, vy=0.0, wz=wz, duration_sec=0.5)
             checked = self._checker.check(c, obs)
             candidates.append(checked)
 

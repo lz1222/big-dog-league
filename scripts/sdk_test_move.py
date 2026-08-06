@@ -11,7 +11,7 @@ pub = rclpy.create_node('sdk_test').create_publisher(Twist, '/navigation/cmd_vel
 tw = Twist()
 
 print('前进 vx=0.25 x 3秒...')
-tw.linear.x = 0.25
+tw.linear.x = 0.30
 for i in range(30): pub.publish(tw); time.sleep(0.1)
 
 tw.linear.x = 0.0
