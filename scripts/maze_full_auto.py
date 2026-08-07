@@ -13,10 +13,11 @@ from rk_maze.heading_controller import HeadingController, HeadingControllerConfi
 
 ROUTE = ['LEFT', 'LEFT', 'RIGHT', 'RIGHT', 'LEFT']
 TURN_YAWS = {'LEFT': +90.0, 'RIGHT': -90.0}
-STOP_DIST = 0.60
+STOP_DIST = 0.20       # 前墙<20cm才触发
+SIDE_OPEN = 0.50       # 侧向>50cm认为有开口
 VX_CRUISE = 0.30
-VX_TURN = 0.15
-WZ_TURN = 0.40
+VX_TURN = 0.10
+WZ_TURN = 0.50
 
 rclpy.init()
 pub = rclpy.create_node('maze').create_publisher(Twist, '/navigation/cmd_vel', 10)
@@ -46,11 +47,13 @@ chk.create_subscription(Imu, '/utlidar/imu', on_i, 10)
 
 state = 'CRUISE'
 turn_idx = 0
-turn_start_yaw = 0.0
+turn_start_yaw = 0.0     # rel_yaw at turn start
+turn_imu_yaw = 0.0       # IMU-integrated yaw during turn
 turn_yaw_target = 0.0
 turn_dir = ''
 reacquire_count = 0
 state_enter_frame = 0
+last_imu_time = 0.0
 
 print(f'迷宫全自主 L-L-R-R-L 启动')
 print(f'状态: {state}  弯: {turn_idx+1}/{len(ROUTE)}')
@@ -90,34 +93,52 @@ while time.time() - t0 < 120:
         if turn_idx >= len(ROUTE):
             state = 'DONE'; print('全部弯完成!'); break
 
-        if 0.01 < front < STOP_DIST:
+        # Side clearance from dedicated LiDAR sectors (30-60deg each side)
+        left_pts = [p.y for p in filt if 30 < math.degrees(math.atan2(p.y, p.x)) < 60]
+        right_pts = [-p.y for p in filt if -60 < math.degrees(math.atan2(p.y, p.x)) < -30]
+        left_cl = sorted(left_pts)[len(left_pts)//2] if left_pts else 0.0
+        right_cl = sorted(right_pts)[len(right_pts)//2] if right_pts else 0.0
+        # Front corner wall: close front AND left opens up (for LEFT turn)
+        turn_left_ready = (0.01 < front < 0.40) and (left_cl > 0.50)
+        turn_right_ready = (0.01 < front < 0.40) and (right_cl > 0.50)
+        corner = (0.01 < front < 0.15) or turn_left_ready or turn_right_ready
+
+        if corner:
             state = 'TURN'; state_enter_frame = frame[0]
             turn_dir = ROUTE[turn_idx]; turn_yaw_target = TURN_YAWS[turn_dir]
-            turn_start_yaw = rel_yaw; reacquire_count = 0
+            turn_start_yaw = rel_yaw; turn_imu_yaw = 0.0; last_imu_time = now
+            reacquire_count = 0
             grid = LocalOccupancyGrid(LocalGridConfig())
-            print(f'拐角! 前={front:.2f}m  弯{turn_idx+1}: {turn_dir} 目标{turn_yaw_target:.0f}deg')
+            trigger = 'wall' if front < STOP_DIST else 'side_open'
+            print(f'拐角[{trigger}]! 前={front:.2f}m L={left_cl:.2f}m R={right_cl:.2f}m  弯{turn_idx+1}: {turn_dir}')
             continue
 
         tw.linear.x = VX_CRUISE
         tw.angular.z = min(0.30, max(-0.30, heading_deg * 0.02))
 
-        if log_flag: print(f'CRUISE front={front:.2f}m hdg={heading_deg:+.1f}deg')
+        if log_flag: print(f'CRUISE front={front:.2f}m L={left_cl:.2f}m R={right_cl:.2f}m hdg={heading_deg:+.1f}deg')
 
     # ====== TURN ======
     elif state == 'TURN':
-        yaw_progress = math.degrees(hc._normalize_angle(rel_yaw - turn_start_yaw))
-        remaining = abs(turn_yaw_target) - abs(yaw_progress)
+        # Integrate IMU angular velocity for yaw tracking
+        dt_imu = now - last_imu_time if last_imu_time > 0 else 0.05
+        turn_imu_yaw += math.degrees(i_wz * dt_imu)
+        last_imu_time = now
 
-        if remaining < 10.0 and frame[0] - state_enter_frame > 30:
+        # Use IMU yaw first, fall back to odom rel_yaw
+        yaw_progress = abs(turn_imu_yaw) if abs(turn_imu_yaw) > 2.0 else abs(math.degrees(hc._normalize_angle(rel_yaw - turn_start_yaw)))
+        remaining = abs(turn_yaw_target) - yaw_progress
+
+        if remaining < 15.0 and frame[0] - state_enter_frame > 20:
             turn_idx += 1; state = 'CRUISE'; grid = LocalOccupancyGrid(LocalGridConfig())
-            print(f'弯{turn_idx}完成! yaw={yaw_progress:.1f}deg')
+            print(f'弯{turn_idx}完成! imu_yaw={turn_imu_yaw:.1f}deg odom_yaw={math.degrees(hc._normalize_angle(rel_yaw - turn_start_yaw)):.1f}deg')
             continue
 
         wz_sign = 1.0 if turn_dir == 'LEFT' else -1.0
         tw.linear.x = VX_TURN
         tw.angular.z = wz_sign * WZ_TURN
 
-        if log_flag: print(f'{turn_dir}_TURN yaw={yaw_progress:+.1f}deg rem={remaining:.0f}deg')
+        if log_flag: print(f'{turn_dir}_TURN imu={turn_imu_yaw:+.1f}deg odo={math.degrees(hc._normalize_angle(rel_yaw - turn_start_yaw)):+.1f}deg rem={remaining:.0f}deg')
 
     # ====== DONE ======
     elif state == 'DONE':
