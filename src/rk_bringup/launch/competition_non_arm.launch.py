@@ -234,8 +234,12 @@ def generate_launch_description():
             description='Fixed USB line-camera topic for real_line_tracker_node.',
         ),
         DeclareLaunchArgument(
-            'line_camera_device', default_value='0',
-            description='Explicit /dev/videoN index for the USB line camera.',
+            'line_camera_device',
+            default_value=(
+                '/dev/v4l/by-id/'
+                'usb-Sonix_Technology_Co.__Ltd._USB_2.0_Camera_SN0001-video-index0'
+            ),
+            description='Stable explicit /dev/v4l/by-id path for USB line camera.',
         ),
         DeclareLaunchArgument(
             'line_camera_width', default_value='640',
@@ -346,7 +350,7 @@ def generate_launch_description():
             output='log',
             condition=use_hardware_line_camera,
             parameters=[{
-                'device': ParameterValue(line_camera_device, value_type=int),
+                'device': ParameterValue(line_camera_device, value_type=str),
                 'width': ParameterValue(line_camera_width, value_type=int),
                 'height': ParameterValue(line_camera_height, value_type=int),
                 'fps': ParameterValue(line_camera_fps, value_type=float),

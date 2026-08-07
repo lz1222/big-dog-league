@@ -20,10 +20,15 @@ def generate_launch_description():
     width = LaunchConfiguration('width')
     height = LaunchConfiguration('height')
     fps = LaunchConfiguration('fps')
+    performance_stats_enabled = LaunchConfiguration('performance_stats_enabled')
     return LaunchDescription([
         DeclareLaunchArgument(
-            'device', default_value='0',
-            description='Explicit USB line camera /dev/videoN index.',
+            'device',
+            default_value=(
+                '/dev/v4l/by-id/'
+                'usb-Sonix_Technology_Co.__Ltd._USB_2.0_Camera_SN0001-video-index0'
+            ),
+            description='Stable explicit USB line-camera /dev/v4l/by-id path.',
         ),
         DeclareLaunchArgument(
             'width', default_value='640',
@@ -37,6 +42,10 @@ def generate_launch_description():
             'fps', default_value='15.0',
             description='Requested USB line camera frame rate.',
         ),
+        DeclareLaunchArgument(
+            'performance_stats_enabled', default_value='false',
+            description='Emit five-second capture/wrap/publish timing aggregates.',
+        ),
         LogInfo(msg=(
             'Starting USB line camera only: /line_camera/image_raw '
             '(frame_id=line_camera_optical_frame).'
@@ -47,10 +56,13 @@ def generate_launch_description():
             name='line_camera_node',
             output='screen',
             parameters=[{
-                'device': ParameterValue(device, value_type=int),
+                'device': ParameterValue(device, value_type=str),
                 'width': ParameterValue(width, value_type=int),
                 'height': ParameterValue(height, value_type=int),
                 'fps': ParameterValue(fps, value_type=float),
+                'performance_stats_enabled': ParameterValue(
+                    performance_stats_enabled, value_type=bool
+                ),
             }],
         ),
     ])
