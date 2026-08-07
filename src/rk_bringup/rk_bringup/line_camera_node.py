@@ -8,9 +8,10 @@
 import time
 
 import cv2
-from cv_bridge import CvBridge
+import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
@@ -38,8 +39,11 @@ class LineCameraNode(Node):
         self.failure_log_period_sec = self._positive_float(
             'failure_log_period_sec'
         )
-        self.bridge = CvBridge()
-        self.image_publisher = self.create_publisher(Image, LINE_IMAGE_TOPIC, 10)
+        # 图像是最新帧优先的传感器数据；best-effort 避免可靠队列拥塞把采集
+        # 定时器拖慢，巡线订阅端同样使用 sensor-data QoS。
+        self.image_publisher = self.create_publisher(
+            Image, LINE_IMAGE_TOPIC, qos_profile_sensor_data
+        )
         self.status_publisher = self.create_publisher(
             String, LINE_STATUS_TOPIC, 10
         )
@@ -97,11 +101,38 @@ class LineCameraNode(Node):
             return
 
         self._consecutive_failures = 0
-        message = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+        if frame.ndim != 3 or frame.shape[2] != 3:
+            self._report_unsupported_frame(frame)
+            return
+
+        # 本机 OpenCV 与 Foxy cv_bridge 的 CV 类型常量版本不一致；直接按
+        # sensor_msgs/Image 的 BGR8 布局封包，避免相机源因桥接库崩溃退出。
+        frame = np.ascontiguousarray(frame)
+        message = Image()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = LINE_FRAME_ID
+        message.height = int(frame.shape[0])
+        message.width = int(frame.shape[1])
+        message.encoding = 'bgr8'
+        message.is_bigendian = False
+        message.step = int(frame.strides[0])
+        message.data = frame.tobytes()
         self.image_publisher.publish(message)
-        self._publish_status('STREAMING', 'device=/dev/video{}'.format(self.device))
+        self._publish_status(
+            'STREAMING',
+            'device=/dev/video{} {}x{} bgr8'.format(
+                self.device, message.width, message.height
+            ),
+        )
+
+    def _report_unsupported_frame(self, frame):
+        """暴露非 BGR 三通道输入，禁止猜测格式后继续发布错误图像。"""
+        self._consecutive_failures += 1
+        detail = 'unsupported_frame shape={} dtype={}'.format(
+            getattr(frame, 'shape', None), getattr(frame, 'dtype', None)
+        )
+        self._publish_status('ERROR', detail)
+        self.get_logger().error('USB 巡线相机帧格式不受支持：{}'.format(detail))
 
     def _publish_status(self, state, detail):
         message = String()
