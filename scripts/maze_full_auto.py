@@ -13,8 +13,8 @@ from rk_maze.heading_controller import HeadingController, HeadingControllerConfi
 
 ROUTE = ['LEFT', 'LEFT', 'RIGHT', 'RIGHT', 'LEFT']
 TURN_YAWS = {'LEFT': +90.0, 'RIGHT': -90.0}
-STOP_DIST = 0.30
-EMERG_DIST = 0.10
+STOP_DIST = 0.35
+EMERG_DIST = 0.20
 VX_CRUISE = 0.30
 VX_TURN = 0.10
 WZ_TURN = 0.50
@@ -141,8 +141,13 @@ while time.time() - t0 < 120:
             print(f'拐角! 前={front:.2f}m L={left_cl:.2f}m R={right_cl:.2f}m  弯{turn_idx+1}: {turn_dir}')
             continue
 
-        tw.linear.x = VX_CRUISE
-        tw.angular.z = min(0.15, max(-0.15, heading_deg * 0.01))
+        # Speed: reduce as front wall approaches
+        if front > 0.80: vx = VX_CRUISE
+        elif front > 0.50: vx = 0.15
+        elif front > STOP_DIST: vx = 0.08
+        else: vx = 0.0
+        tw.linear.x = vx
+        tw.angular.z = min(0.10, max(-0.10, heading_deg * 0.005))
 
         if log_flag: print(f'CRUISE front={front:.2f}m L={left_cl:.2f}m R={right_cl:.2f}m hdg={heading_deg:+.1f}deg')
 
