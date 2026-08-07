@@ -605,8 +605,8 @@ class LineFollowerNode(Node):
             alpha * target_angular
             + (1.0 - alpha) * float(self.last_angular_z)
         )
-        if abs(cmd.angular.z) < self.angular_deadband:
-            cmd.angular.z = 0.0
+        # deadband 仅作用于原始控制目标；平滑起步的首帧可以小于 deadband，
+        # 否则该小值被再次清零并写回 last_angular_z，会永久锁死角速度滤波器。
 
         error_abs = abs(float(msg.lateral_error))
         if error_abs < self.error_slow_threshold:
