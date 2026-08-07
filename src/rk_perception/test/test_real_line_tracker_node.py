@@ -1,13 +1,122 @@
+from dataclasses import replace
+
 import cv2
 import numpy as np
+from sensor_msgs.msg import Image
 
 from rk_perception.real_line_tracker_node import (
     LineTrackerConfig,
+    RealLineTrackerNode,
     detect_blue_stop_zone,
     detect_line_in_image,
     detect_red_circle,
     detect_white_bar,
 )
+
+
+class _RecordedPublisher:
+    """最小 publisher 替身：只验证回调是否持续产生主输出。"""
+
+    def __init__(self, failure=None):
+        self.messages = []
+        self.failure = failure
+
+    def publish(self, message):
+        if self.failure is not None:
+            raise self.failure
+        self.messages.append(message)
+
+
+class _RecordedLogger:
+    def __init__(self):
+        self.warnings = []
+
+    def warn(self, message):
+        self.warnings.append(message)
+
+
+class _ImageBridge:
+    def __init__(self, image):
+        self.image = image
+
+    def imgmsg_to_cv2(self, _message, desired_encoding):
+        assert desired_encoding == 'bgr8'
+        return self.image.copy()
+
+
+class _CallbackHarness:
+    """不初始化 ROS 节点，隔离验证 image_callback 的主输出契约。"""
+
+    image_callback = RealLineTrackerNode.image_callback
+    publish_debug_images_safely = RealLineTrackerNode.publish_debug_images_safely
+
+    def __init__(self, image, debug_enabled=True, debug_failure=None,
+                 forced_result=None):
+        self.bridge = _ImageBridge(image)
+        self.tracker_config = default_config()
+        self.max_track_jump_fraction = 0.30
+        self.publisher = _RecordedPublisher()
+        self.enable_debug_image = debug_enabled
+        self.debug_failure = debug_failure
+        self.forced_result = forced_result
+        self.logger = _RecordedLogger()
+        self.debug_calls = 0
+
+    def refresh_parameters(self):
+        pass
+
+    def robot_center_x(self, image_width):
+        return float(image_width) / 2.0
+
+    def preferred_center_x(self, _image_width, robot_center_x):
+        return robot_center_x
+
+    def apply_route_lock(self, result, _image_width, _preferred_center_x):
+        return self.forced_result if self.forced_result is not None else result
+
+    def make_line_track_msg(self, _image_msg, lateral, heading, confidence,
+                            visible):
+        return {
+            'lateral_error': lateral,
+            'heading_error': heading,
+            'confidence': confidence,
+            'line_visible': visible,
+        }
+
+    def publish_special_detections(self, *_args):
+        pass
+
+    def publish_debug_images(self, *_args, **_kwargs):
+        self.debug_calls += 1
+        if self.debug_failure is not None:
+            raise self.debug_failure
+        return {
+            'enabled': self.enable_debug_image,
+            'mask_published': self.enable_debug_image,
+            'overlay_published': self.enable_debug_image,
+            'mask_shape': '1x1',
+            'overlay_shape': '1x1x3',
+            'stage': 'debug_publish',
+        }
+
+    def log_debug(self, *_args, **_kwargs):
+        pass
+
+    def get_logger(self):
+        return self.logger
+
+
+def make_image_message():
+    message = Image()
+    message.header.frame_id = 'line_camera_optical_frame'
+    return message
+
+
+def run_callback(image, **kwargs):
+    harness = _CallbackHarness(image, **kwargs)
+    harness.image_callback(make_image_message())
+    assert len(harness.publisher.messages) == 1
+    return harness.publisher.messages[-1], harness
 
 
 def make_image(width=640, height=480, color=220):
@@ -116,6 +225,91 @@ def test_small_noise_is_not_visible():
     result = detect_line_in_image(image, default_config())
 
     assert result.line_visible is False
+
+
+def test_debug_image_messages_use_explicit_mono8_and_bgr8_layouts():
+    source = make_image_message()
+    mask = np.zeros((12, 20), dtype=np.uint8)
+    overlay = np.zeros((12, 20, 3), dtype=np.uint8)
+
+    mask_msg = RealLineTrackerNode.make_debug_image_msg(
+        mask, 'mono8', source
+    )
+    overlay_msg = RealLineTrackerNode.make_debug_image_msg(
+        overlay, 'bgr8', source
+    )
+
+    assert mask_msg.encoding == 'mono8'
+    assert (mask_msg.height, mask_msg.width, mask_msg.step) == (12, 20, 20)
+    assert len(mask_msg.data) == 12 * 20
+    assert overlay_msg.encoding == 'bgr8'
+    assert (overlay_msg.height, overlay_msg.width, overlay_msg.step) == (
+        12, 20, 60
+    )
+    assert len(overlay_msg.data) == 12 * 20 * 3
+    assert mask_msg.header.frame_id == source.header.frame_id
+    assert overlay_msg.header.frame_id == source.header.frame_id
+
+
+def test_debug_exception_does_not_block_primary_line_track_publish():
+    message, harness = run_callback(
+        make_image(), debug_failure=RuntimeError('debug publisher unavailable')
+    )
+
+    assert message['line_visible'] is False
+    assert harness.debug_calls == 1
+    assert harness.logger.warnings
+
+
+def test_no_line_callback_still_publishes_line_track_fallback():
+    message, _ = run_callback(make_image())
+
+    assert message['line_visible'] is False
+    assert message['confidence'] == 0.0
+
+
+def test_too_wide_callback_still_publishes_line_track_fallback():
+    image = make_image()
+    cv2.rectangle(image, (140, 245), (500, 479), (0, 0, 0), -1)
+    assert detect_line_in_image(image, default_config()).reason == 'too_wide'
+
+    message, _ = run_callback(image)
+
+    assert message['line_visible'] is False
+
+
+def test_too_dark_callback_still_publishes_line_track_fallback():
+    image = make_image(color=0)
+    assert detect_line_in_image(image, default_config()).reason == 'too_dark'
+
+    message, _ = run_callback(image)
+
+    assert message['line_visible'] is False
+
+
+def test_reacquire_rejected_callback_still_publishes_line_track_fallback():
+    image = make_image()
+    rejected = replace(
+        detect_line_in_image(image, default_config()),
+        line_visible=False,
+        confidence=0.0,
+        reason='reacquire_jump_rejected',
+        candidate_rejected=True,
+        candidate_rejection_reason='reacquire_jump>64.0px',
+        track_jump_rejected=True,
+    )
+
+    message, _ = run_callback(image, forced_result=rejected)
+
+    assert message['line_visible'] is False
+    assert message['confidence'] == 0.0
+
+
+def test_debug_disabled_does_not_change_primary_line_track_publish():
+    message, harness = run_callback(make_image(), debug_enabled=False)
+
+    assert message['line_visible'] is False
+    assert harness.debug_calls == 1
 
 
 def test_red_circle_detection_reports_normalized_geometry():

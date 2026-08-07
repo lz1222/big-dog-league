@@ -1700,7 +1700,9 @@ class RealLineTrackerNode(Node):
                 'special_detection_failed'
             )
 
-        debug_status = self.publish_debug_images(
+        # 调试图像是观测证据，不能反向影响主感知输出；主 LineTrack 已在
+        # 此处之前发布，任何调试封包或 DDS 发布异常都只记录状态。
+        debug_status = self.publish_debug_images_safely(
             image_msg,
             image,
             result.binary,
@@ -2436,6 +2438,68 @@ class RealLineTrackerNode(Node):
                 stage
             )
 
+    @staticmethod
+    def make_debug_image_msg(image, encoding, source_image_msg):
+        """按 ROS Image 布局直接封装调试图，避开 cv_bridge 的类型映射。
+
+        Foxy 的 cv_bridge 与本机 OpenCV 5 的 CV 类型常量不兼容。调试图只
+        允许 mono8 mask 或 bgr8 overlay；在这里明确校验布局，确保它们不会
+        因错误的 step/data 影响下游查看工具。
+        """
+        array = np.ascontiguousarray(image)
+        if encoding == 'mono8':
+            if array.ndim != 2:
+                raise ValueError(
+                    f'mono8 debug image must be HxW, got {array.shape}'
+                )
+            height, width = array.shape
+            step = int(width)
+        elif encoding == 'bgr8':
+            if array.ndim != 3 or array.shape[2] != 3:
+                raise ValueError(
+                    f'bgr8 debug image must be HxWx3, got {array.shape}'
+                )
+            height, width = array.shape[:2]
+            step = int(width) * 3
+        else:
+            raise ValueError(f'unsupported debug encoding: {encoding}')
+
+        if array.dtype != np.uint8:
+            raise ValueError(
+                f'{encoding} debug image must be uint8, got {array.dtype}'
+            )
+
+        message = Image()
+        message.height = int(height)
+        message.width = int(width)
+        message.encoding = encoding
+        message.is_bigendian = 0
+        message.step = step
+        message.data = array.tobytes()
+        source_header = getattr(source_image_msg, 'header', None)
+        if source_header is not None:
+            message.header.stamp = source_header.stamp
+            message.header.frame_id = source_header.frame_id
+        return message
+
+    def publish_debug_images_safely(self, *args, **kwargs):
+        """隔离调试链异常，确保有效图像每帧仍能产出 LineTrack。"""
+        try:
+            return self.publish_debug_images(*args, **kwargs)
+        except Exception as exc:
+            self.get_logger().warn(
+                'Debug image path escaped its local guard: '
+                f'{type(exc).__name__}: {exc}'
+            )
+            return {
+                'enabled': self.enable_debug_image,
+                'mask_published': False,
+                'overlay_published': False,
+                'mask_shape': 'None',
+                'overlay_shape': 'None',
+                'stage': kwargs.get('stage', 'debug_publish'),
+            }
+
     def publish_debug_images(
         self,
         image_msg,
@@ -2471,10 +2535,13 @@ class RealLineTrackerNode(Node):
             status['mask_shape'] = self.shape_text(mask)
             status['overlay_shape'] = self.shape_text(overlay)
 
-            mask_msg = self.bridge.cv2_to_imgmsg(mask, encoding='mono8')
-            overlay_msg = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
-            mask_msg.header = image_msg.header
-            overlay_msg.header = image_msg.header
+            # 调试发布不能走 cv_bridge：其 OpenCV 5 类型映射会抛出 KeyError 16。
+            mask_msg = self.make_debug_image_msg(
+                mask, 'mono8', image_msg
+            )
+            overlay_msg = self.make_debug_image_msg(
+                overlay, 'bgr8', image_msg
+            )
 
             self.mask_pub.publish(mask_msg)
             status['mask_published'] = True
@@ -2502,7 +2569,7 @@ class RealLineTrackerNode(Node):
     ):
         binary = result.binary if result is not None else None
         roi_start_y = result.roi_start_y if result is not None else 0
-        self.publish_debug_images(
+        self.publish_debug_images_safely(
             image_msg,
             image,
             binary,
