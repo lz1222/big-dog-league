@@ -77,6 +77,15 @@ t0 = time.time()
 while time.time() - t0 < 120:
     rclpy.spin_once(chk, timeout_sec=0.01)
     frame[0] += 1
+    # Raw front check EVERY frame for safety
+    raw_front_x = sorted([p.x for p in filt if abs(math.degrees(math.atan2(p.y, p.x))) <= 30 and p.z > 0.005])
+    raw_front = (sorted(raw_front_x)[len(raw_front_x)//2] if raw_front_x else 1.0) - 0.28 - 0.03
+
+    if 0.01 < raw_front < 0.25:
+        tw.linear.x = 0.0; tw.angular.z = 0.0
+        with lock_twist: current_twist = tw
+        print(f'RAW_EMERG! front={raw_front:.2f}m'); time.sleep(0.3); continue
+
     if frame[0] % 2 != 0: continue
 
     with lock:
