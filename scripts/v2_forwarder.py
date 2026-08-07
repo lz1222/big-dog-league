@@ -24,6 +24,7 @@ class ForwarderConfig:
     deadband: float = 0.01
     timeout_sec: float = 0.30
     publish_rate_hz: float = 50.0  # high frequency to prevent SDK watchdog
+    protocol_version: int = 1      # 1=v1 "vx vy wz", 2=v2 with session/seq
 
 
 class V2Forwarder(Node):
@@ -41,6 +42,7 @@ class V2Forwarder(Node):
             deadband=self.declare_parameter('deadband', 0.01).value,
             timeout_sec=self.declare_parameter('timeout_sec', 0.30).value,
             publish_rate_hz=self.declare_parameter('publish_rate_hz', 50.0).value,
+            protocol_version=self.declare_parameter('protocol_version', 1).value,
         )
 
         # State
@@ -119,8 +121,11 @@ class V2Forwarder(Node):
         self._seq += 1
         mono_ns = int(time.monotonic() * 1e9) & 0x7FFFFFFFFFFFFFFF
 
-        # Format: "version session_id seq monotonic_ns vx vy wz flags"
-        packet = f"2 {session} {seq} {mono_ns} {vx:.4f} {vy:.4f} {wz:.4f} {flags}"
+        # Format: v1 = "vx vy wz", v2 = "2 session seq mono_ns vx vy wz flags"
+        if self.cfg.protocol_version >= 2:
+            packet = f"2 {session} {seq} {mono_ns} {vx:.4f} {vy:.4f} {wz:.4f} {flags}"
+        else:
+            packet = f"{vx:.4f} {vy:.4f} {wz:.4f}"
 
         try:
             self._sock.sendto(packet.encode(), (self.cfg.udp_host, self.cfg.udp_port))
