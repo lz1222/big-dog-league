@@ -13,7 +13,9 @@ START_LINE_CAMERA="${RK_COMPETITION_START_LINE_CAMERA:-true}"
 START_SDK_SERVER="${RK_COMPETITION_START_SDK_SERVER:-true}"
 START_UDP_FORWARDER="${RK_COMPETITION_START_UDP_FORWARDER:-true}"
 ENABLE_DEBUG_IMAGE="${RK_COMPETITION_ENABLE_DEBUG_IMAGE:-false}"
-SDK_NETWORK_INTERFACE="${RK_COMPETITION_SDK_NETWORK_INTERFACE:-eth0}"
+SDK_NETWORK_INTERFACE="${RK_COMPETITION_SDK_NETWORK_INTERFACE:-eth1}"
+# 正式 Go2 控制网段的本机固定地址；本脚本只验证，不修改任何网络配置。
+SDK_NETWORK_ADDRESS_CIDR="192.168.123.18/24"
 LINE_IMAGE_TOPIC="${RK_COMPETITION_LINE_IMAGE_TOPIC:-/line_camera/image_raw}"
 LINE_CAMERA_DEVICE="${RK_COMPETITION_LINE_CAMERA_DEVICE:-/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB_2.0_Camera_SN0001-video-index0}"
 LINE_CAMERA_WIDTH="${RK_COMPETITION_LINE_CAMERA_WIDTH:-640}"
@@ -145,6 +147,49 @@ readonly_graph_check() {
     readiness_passes
 }
 
+validate_sdk_network_interface() {
+    # 在启动任何 Go2 SDK/DDS 进程前 fail-closed，避免错误网卡上的偶发路由
+    # 让正式控制链带着错误拓扑继续启动。所有命令均为只读查询。
+    local link_state
+    local address_state
+    local carrier
+
+    if ! command -v ip >/dev/null 2>&1; then
+        echo "ERROR: ip command is required for Go2 network readiness check." >&2
+        return 1
+    fi
+    if [[ ! "$SDK_NETWORK_INTERFACE" =~ ^[[:alnum:]_.:-]+$ ]]; then
+        echo "ERROR: invalid Go2 SDK interface name: ${SDK_NETWORK_INTERFACE}" >&2
+        return 1
+    fi
+    if ! link_state="$(ip -o link show dev "$SDK_NETWORK_INTERFACE" 2>&1)"; then
+        echo "ERROR: Go2 SDK interface does not exist: ${SDK_NETWORK_INTERFACE}" >&2
+        return 1
+    fi
+    if [[ "$link_state" != *,UP,* || "$link_state" != *LOWER_UP* ]]; then
+        echo "ERROR: Go2 SDK interface must be UP + LOWER_UP: ${SDK_NETWORK_INTERFACE}" >&2
+        return 1
+    fi
+    if ! address_state="$(ip -4 -o addr show dev "$SDK_NETWORK_INTERFACE" 2>&1)"; then
+        echo "ERROR: cannot read IPv4 addresses for ${SDK_NETWORK_INTERFACE}" >&2
+        return 1
+    fi
+    if ! printf '%s\n' "$address_state" | grep -Fq "$SDK_NETWORK_ADDRESS_CIDR"; then
+        echo "ERROR: ${SDK_NETWORK_INTERFACE} must have ${SDK_NETWORK_ADDRESS_CIDR} for Go2 control." >&2
+        return 1
+    fi
+    if [ ! -r "/sys/class/net/${SDK_NETWORK_INTERFACE}/carrier" ]; then
+        echo "ERROR: cannot read carrier state for ${SDK_NETWORK_INTERFACE}" >&2
+        return 1
+    fi
+    carrier="$(cat "/sys/class/net/${SDK_NETWORK_INTERFACE}/carrier")"
+    if [ "$carrier" != "1" ]; then
+        echo "ERROR: Go2 SDK interface carrier is not present: ${SDK_NETWORK_INTERFACE}" >&2
+        return 1
+    fi
+    echo "Go2 network readiness passed: ${SDK_NETWORK_INTERFACE} ${SDK_NETWORK_ADDRESS_CIDR} (LOWER_UP, carrier=yes)"
+}
+
 if ! command -v tmux >/dev/null 2>&1; then
     echo "ERROR: tmux is required for the formal competition session." >&2
     exit 1
@@ -157,6 +202,9 @@ fi
 
 ENV_SCRIPT="$(resolve_env_script)"
 source "$ENV_SCRIPT"
+if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
+    validate_sdk_network_interface || exit 1
+fi
 if ! ros2 pkg prefix rk_bringup >/dev/null 2>&1; then
     echo "ERROR: rk_bringup is not built/sourced. Build the workspace first." >&2
     exit 1

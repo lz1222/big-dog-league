@@ -224,7 +224,7 @@ class InspectionActionExecutorNode(Node):
         self.declare_parameter('estop_state_stale_timeout_sec', 0.50)
         self.declare_parameter('sdk_action_timeout_sec', 15.0)
         self.declare_parameter('post_action_settle_sec', 1.5)
-        self.declare_parameter('sdk_network_interface', 'eth0')
+        self.declare_parameter('sdk_network_interface', 'eth1')
         # 正式 launch 必须传入 install 下的可解析绝对路径，不能依赖 cwd 猜测。
         self.declare_parameter('sdk_action_executable', '')
         self.declare_parameter('sdk_runtime_wrapper', '')

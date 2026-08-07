@@ -60,7 +60,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'sdk_network_interface',
-            default_value='eth0',
+            default_value='eth1',
             description='Network interface used by Unitree SDK2.'
         ),
         DeclareLaunchArgument(

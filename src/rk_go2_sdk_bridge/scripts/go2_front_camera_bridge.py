@@ -277,7 +277,7 @@ class Go2FrontCameraBridgeNode(Node):
     # ---- parameters ----
 
     def _declare_parameters(self):
-        self.declare_parameter('network_interface', 'eth0')
+        self.declare_parameter('network_interface', 'eth1')
         self.declare_parameter('output_topic', '/go2/front_camera/image_raw')
         self.declare_parameter('frame_id', 'go2_front_camera_optical_frame')
         self.declare_parameter('publish_status_topic',

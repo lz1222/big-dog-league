@@ -904,7 +904,7 @@ class GaitControlNode(Node):
             'front_jump.finish.post_settle_duration': 2.5,
             'front_jump.sdk_action_executable': 'go2_sdk_motion_action',
             'front_jump.sdk_runtime_wrapper': '',
-            'front_jump.sdk_network_interface': 'eth0',
+            'front_jump.sdk_network_interface': 'eth1',
             'front_jump.zero_publish_rate_hz': 10.0,
             'front_jump.final_cmd_topic': '/navigation/cmd_vel',
             'front_jump.final_cmd_stale_timeout': 0.20,

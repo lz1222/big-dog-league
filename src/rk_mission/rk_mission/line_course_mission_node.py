@@ -330,7 +330,7 @@ class LineCourseMissionNode(Node):
             # 兼容保留；正式检查不读取静态 SDK 动作。
             'red_circle_sdk_action': 'stretch',
             'red_circle_sdk_wait_sec': 3.0,
-            'sdk_network_interface': 'eth0',
+            'sdk_network_interface': 'eth1',
             'sdk_action_executable': '',
             'white_bar_motion_name': '',
             'allow_finish_only_test': False,

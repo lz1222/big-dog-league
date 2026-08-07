@@ -443,6 +443,57 @@ def test_launch_uses_parameter_value_with_str_type_for_helper_paths():
                 )
 
 
+def test_formal_sdk_interface_is_eth1_and_reaches_every_sdk_consumer():
+    """正式 competition 链只从一个入口传递 eth1，不能有隐式 eth0 回退。"""
+    launch_source = FORMAL_LAUNCH.read_text(encoding='utf-8')
+    start_script = (
+        PACKAGE_ROOT / 'scripts' / 'start_non_arm_competition.sh'
+    ).read_text(encoding='utf-8')
+    formal_config = read_formal_config()
+    gait_config = yaml.safe_load((
+        WORKSPACE_ROOT / 'src/rk_locomotion/config/gait_params.yaml'
+    ).read_text(encoding='utf-8'))
+    line_config = yaml.safe_load((
+        PACKAGE_ROOT / 'config/line_nav_params.yaml'
+    ).read_text(encoding='utf-8'))
+
+    assert 'RK_COMPETITION_SDK_NETWORK_INTERFACE:-eth1' in start_script
+    assert "'sdk_network_interface', default_value='eth1'" in launch_source
+    assert '"sdk_network_interface:=${SDK_NETWORK_INTERFACE}"' in start_script
+    assert "'--interface', sdk_network_interface" in launch_source
+    assert "'front_jump.sdk_network_interface': ParameterValue(" in launch_source
+    assert "'network_interface': ParameterValue(" in launch_source
+    assert formal_config['inspection_action_executor']['ros__parameters'][
+        'sdk_network_interface'
+    ] == 'eth1'
+    assert formal_config['gait_control_node']['ros__parameters'][
+        'front_jump'
+    ]['sdk_network_interface'] == 'eth1'
+    assert gait_config['gait_control_node']['ros__parameters'][
+        'front_jump'
+    ]['sdk_network_interface'] == 'eth1'
+    assert line_config['line_course_mission_node']['ros__parameters'][
+        'sdk_network_interface'
+    ] == 'eth1'
+
+
+def test_formal_start_network_gate_fails_closed_before_sdk_processes():
+    """正式硬件启动先只读校验 eth1 地址和载波，失败时不创建 SDK 进程。"""
+    source = (
+        PACKAGE_ROOT / 'scripts' / 'start_non_arm_competition.sh'
+    ).read_text(encoding='utf-8')
+
+    assert 'SDK_NETWORK_ADDRESS_CIDR="192.168.123.18/24"' in source
+    assert 'validate_sdk_network_interface() {' in source
+    assert 'ip -o link show dev "$SDK_NETWORK_INTERFACE"' in source
+    assert 'ip -4 -o addr show dev "$SDK_NETWORK_INTERFACE"' in source
+    assert 'LOWER_UP' in source
+    assert '/sys/class/net/${SDK_NETWORK_INTERFACE}/carrier' in source
+    assert source.index('validate_sdk_network_interface || exit 1') < source.index(
+        'GATE_COMMAND='
+    )
+
+
 def test_launch_helper_selection_uses_checked_production_install_path():
     """production helper 不得退化为 basename，smoke 仍经 fake 参数选择。"""
     launch_path = (

@@ -237,7 +237,7 @@ line_course_mission_node:
     red_circle_sdk_action: stretch
     red_circle_sdk_wait_sec: 3.0
     red_circle_action_timeout_sec: 8.0
-    sdk_network_interface: eth0
+    sdk_network_interface: eth1
     sdk_action_executable: /home/unitree/rk_inspection_ws/install/rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/go2_sdk_motion_action
     turn_after_red_direction: left
     turn_after_red_angle_deg: 90.0

@@ -46,8 +46,8 @@ gait_control_node:
         post_settle_duration: 2.5
       # sdk_action_executable 和 cleanup_guard_path 由 launch 文件注入；
       # YAML 中不放重复默认值避免覆盖 launch 的 smoke/production 选择。
-      # eth0 仅为开发默认值，尚未声明为机器人实测接口。
-      sdk_network_interface: eth0
+      # 默认匹配正式 Go2 拓扑；competition launch 仍以统一入口参数显式覆盖。
+      sdk_network_interface: eth1
       zero_publish_rate_hz: 10.0
       final_cmd_topic: /navigation/cmd_vel
       final_cmd_stale_timeout: 0.20

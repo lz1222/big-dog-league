@@ -267,7 +267,8 @@ inspection_action_executor:
     estop_state_stale_timeout_sec: 0.5
     sdk_action_timeout_sec: 15.0
     post_action_settle_sec: 1.5
-    sdk_network_interface: eth0
+    # 正式 launch 仍会以同名入口参数显式注入，避免节点各自选择接口。
+    sdk_network_interface: eth1
     # helper 路径由正式 launch 显式注入（ParameterValue(value_type=str)）。
     # 此处不再放空字符串默认值，避免在 Foxy 中覆盖 launch 注入的正确路径。
     # software_smoke_mode 由 launch 显式注入 (ParameterValue(value_type=bool))。
@@ -302,7 +303,8 @@ gait_control_node:
         final_zero_timeout: 2.0
         sdk_timeout: 12.0
         post_settle_duration: 2.5
-      sdk_network_interface: eth0
+      # 正式 launch 仍会以同名入口参数显式注入，避免节点各自选择接口。
+      sdk_network_interface: eth1
       zero_publish_rate_hz: 10.0
       final_cmd_topic: /navigation/cmd_vel
       final_cmd_stale_timeout: 0.20

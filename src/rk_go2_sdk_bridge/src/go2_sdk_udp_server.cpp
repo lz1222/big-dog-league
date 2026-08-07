@@ -34,7 +34,7 @@ volatile std::sig_atomic_t g_running = 1;
 
 struct ServerConfig
 {
-  std::string network_interface{"eth0"};
+  std::string network_interface{"eth1"};
   std::string listen_ip{"127.0.0.1"};
   int port{15001};
   double rate_hz{20.0};
@@ -81,7 +81,7 @@ void PrintUsage(const char* program)
 {
   std::cout
       << "Usage: " << program << " [options]\n"
-      << "  --interface NAME       SDK network interface (default: eth0)\n"
+      << "  --interface NAME       SDK network interface (default: eth1)\n"
       << "  --listen-ip ADDRESS    UDP listen address (default: 127.0.0.1)\n"
       << "  --port PORT            UDP port (default: 15001)\n"
       << "  --rate-hz HZ           SDK Move output rate (default: 20)\n"

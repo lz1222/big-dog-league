@@ -226,7 +226,7 @@ def generate_launch_description():
             description='Enable debug images only when explicitly requested.',
         ),
         DeclareLaunchArgument(
-            'sdk_network_interface', default_value='eth0',
+            'sdk_network_interface', default_value='eth1',
             description='Unitree SDK interface in hardware mode.',
         ),
         DeclareLaunchArgument(
@@ -404,7 +404,9 @@ def generate_launch_description():
             output='log',
             parameters=[formal_config, {
                 'cmd_vel_topic': '/control/mission_cmd',
-                'sdk_network_interface': sdk_network_interface,
+                'sdk_network_interface': ParameterValue(
+                    sdk_network_interface, value_type=str
+                ),
             }],
         ),
         Node(
@@ -566,7 +568,13 @@ def generate_launch_description():
         # ROS Foxy 节点继续继承其自身环境；SDK server 经安装树 wrapper 启动，
         # 仅加载构建时确认的一对 Unitree CycloneDDS 库。
         ExecuteProcess(
-            cmd=[sdk_server_runtime, sdk_server], output='log',
+            # 直接 launch 时也必须显式传入同一接口，不能回退到 server 自身默认值。
+            cmd=[
+                sdk_server_runtime, sdk_server,
+                '--interface', sdk_network_interface,
+                '--listen-ip', sdk_udp_host,
+                '--port', sdk_udp_port,
+            ], output='log',
             condition=use_hardware_sdk_server,
         ),
         Node(
