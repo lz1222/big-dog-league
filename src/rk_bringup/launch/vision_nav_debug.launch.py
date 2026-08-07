@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+"""LEGACY / DEBUG / NOT FOR COMPETITION.
+
+本入口保留可替换的历史图像话题，默认值不是正式三相机 ownership 的一部分。
+比赛巡线请使用 USB ``/line_camera/image_raw`` 的正式启动入口。
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution

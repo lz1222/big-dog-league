@@ -247,7 +247,7 @@ def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
     source = FORMAL_LAUNCH.read_text(encoding='utf-8')
     config = read_formal_config()
 
-    assert DEFAULT_IMAGE_TOPIC == '/camera/color/image_raw'
+    assert DEFAULT_IMAGE_TOPIC == '/line_camera/image_raw'
     assert DEFAULT_LINE_IMAGE_TOPIC == DEFAULT_IMAGE_TOPIC
     assert DEFAULT_SIGN_IMAGE_TOPIC == '/go2/front_camera/image_raw'
     assert "LaunchConfiguration('line_image_topic')" in source
@@ -266,7 +266,9 @@ def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
         == DEFAULT_SIGN_IMAGE_TOPIC
     )
     assert "LaunchConfiguration('software_smoke_mode')" in source
-    assert "use_hardware_realsense" in source
+    assert "use_hardware_line_camera" in source
+    assert "executable='line_camera_node'" in source
+    assert "realsense2_camera_node" not in source
     assert "use_hardware_sdk_server" in source
     assert "use_hardware_udp_forwarder" in source
     assert "use_smoke_publisher" in source

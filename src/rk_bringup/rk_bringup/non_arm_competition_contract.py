@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 
-DEFAULT_LINE_IMAGE_TOPIC = '/camera/color/image_raw'
+DEFAULT_LINE_IMAGE_TOPIC = '/line_camera/image_raw'
 DEFAULT_SIGN_IMAGE_TOPIC = '/go2/front_camera/image_raw'
 DEFAULT_SIGN_CAMERA_FRAME_ID = 'go2_front_camera_optical_frame'
-DEFAULT_IMAGE_TOPIC = '/camera/color/image_raw'
+DEFAULT_IMAGE_TOPIC = DEFAULT_LINE_IMAGE_TOPIC
 FINAL_CMD_TOPIC = '/navigation/cmd_vel'
 MOTION_ACTION_NAME = '/locomotion/execute_motion'
 SIGN_CAMERA_BRIDGE_NODE = 'go2_front_camera_bridge_node'
@@ -28,7 +28,7 @@ _TEST_ONLY_SMOKE_HELPER_READ_LIMIT = 1024 * 1024
 # 正式 launch 只能包含下面这些非硬件业务节点；SDK server/forwarder 是
 # hardware_mode 的执行后端，software_smoke_mode 下必须不启动。
 REQUIRED_FORMAL_NODES = (
-    'realsense2_camera_node',
+    'line_camera_node',
     'real_line_tracker_node',
     'real_sign_detector_node',
     'line_follower_node',

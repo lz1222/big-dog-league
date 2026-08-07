@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 
+"""LEGACY / DEBUG / NOT FOR COMPETITION.
+
+历史巡线入口仍以通用 ``/camera`` D435i 图像驱动巡线。正式比赛请使用
+``competition_non_arm.launch.py`` 的 USB ``/line_camera`` 运行链；保留本文件
+仅为复现实验，避免删除既有调试能力。
+"""
+
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,

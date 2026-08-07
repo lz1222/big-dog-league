@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+"""LEGACY / DEBUG / NOT FOR COMPETITION.
+
+这是通用 ``/camera`` RealSense 调试入口，不属于正式机械臂 D435i 的
+``/arm_camera`` 命名空间，也不得作为巡线或标识识别图源。
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.substitutions import LaunchConfiguration

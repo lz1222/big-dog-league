@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+"""LEGACY / DEBUG / NOT FOR COMPETITION.
+
+该历史避障入口保留独立 RealSense 接线；不属于本轮固定的 USB 巡线、Go2
+标识或机械臂 D435i RGB-D 正式运行链。
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, LogInfo
 from launch.conditions import IfCondition

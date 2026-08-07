@@ -69,7 +69,7 @@ class CompetitionReadinessNode(Node):
             Bool, self.estop_state_topic, self._on_estop_state, 10
         )
         self.create_subscription(
-            Image, self.image_topic, self._on_image, 10
+            Image, self.line_image_topic, self._on_image, 10
         )
         self.create_subscription(
             LineTrack, self.line_track_topic, self._on_line_track, 10
@@ -144,7 +144,10 @@ class CompetitionReadinessNode(Node):
             'line_image_topic': DEFAULT_LINE_IMAGE_TOPIC,
             'sign_image_topic': DEFAULT_SIGN_IMAGE_TOPIC,
             'sign_camera_frame_id': DEFAULT_SIGN_CAMERA_FRAME_ID,
-            'image_topic': '/camera/color/image_raw',
+            'require_arm_camera': False,
+            'arm_color_topic': '/arm_camera/color/image_raw',
+            'arm_depth_topic': '/arm_camera/aligned_depth_to_color/image_raw',
+            'arm_camera_info_topic': '/arm_camera/color/camera_info',
             'final_cmd_topic': FINAL_CMD_TOPIC,
             'line_track_topic': '/perception/line_track',
             'line_follower_status_topic': '/navigation/line_follow_status',
@@ -185,7 +188,9 @@ class CompetitionReadinessNode(Node):
             'line_image_topic',
             'sign_image_topic',
             'sign_camera_frame_id',
-            'image_topic',
+            'arm_color_topic',
+            'arm_depth_topic',
+            'arm_camera_info_topic',
             'final_cmd_topic',
             'line_track_topic',
             'line_follower_status_topic',
@@ -204,6 +209,7 @@ class CompetitionReadinessNode(Node):
             'cleanup_guard_path',
         ):
             setattr(self, name, str(self.get_parameter(name).value).strip())
+        self.require_arm_camera = self._bool_parameter('require_arm_camera')
         self.freshness_timeout_sec = self._positive_float_parameter(
             'freshness_timeout_sec'
         )
@@ -539,31 +545,25 @@ class CompetitionReadinessNode(Node):
                 ),
             ),
         ))
-        # A. 巡线摄像头 (D435i)
-        checks.append(ReadinessCheck(
-            'line_camera_publisher',
-            self._has_publisher(self.line_image_topic),
-            self.line_image_topic,
-        ))
+        # A. USB 巡线相机：正式非机械臂比赛必须可用。
         line_image_value, line_image_age = self._fresh_value('image')
+        line_camera_ready = (
+            self._has_publisher(self.line_image_topic)
+            and line_image_value is not None
+        )
         checks.append(ReadinessCheck(
-            'line_camera_fresh',
-            line_image_value is not None,
-            'missing' if line_image_age is None else '{:.3f}s'.format(line_image_age),
+            'LINE_CAMERA_READY',
+            line_camera_ready,
+            'topic={}, age={}'.format(
+                self.line_image_topic,
+                'missing' if line_image_age is None else '{:.3f}s'.format(
+                    line_image_age
+                ),
+            ),
         ))
 
-        # B. 警示牌摄像头 (Go2 前向本体相机)
-        checks.append(ReadinessCheck(
-            'sign_camera_publisher',
-            self._has_publisher(self.sign_image_topic),
-            self.sign_image_topic,
-        ))
+        # B. Go2 本体前置相机：标识和警示牌识别的唯一来源。
         sign_image_value, sign_image_age = self._fresh_value('sign_camera_image')
-        checks.append(ReadinessCheck(
-            'sign_camera_fresh',
-            sign_image_value is not None,
-            'missing' if sign_image_age is None else '{:.3f}s'.format(sign_image_age),
-        ))
 
         # B2. 生产必须观察真实 Go2 桥接节点；software smoke 使用合成 Image
         # 输入且禁止启动该硬件节点，因此只在 smoke 放行“桥接存在”这一项。
@@ -574,39 +574,61 @@ class CompetitionReadinessNode(Node):
         sign_bridge_ready = (
             self.software_smoke_mode or bool(sign_bridge_nodes)
         )
-        checks.append(ReadinessCheck(
-            'sign_camera_bridge_ready',
-            sign_bridge_ready,
-            (
-                'software_smoke_synthetic'
-                if self.software_smoke_mode
-                else ('found' if sign_bridge_nodes else 'missing')
-            ),
-        ))
         sign_frame_ok = (
             sign_image_value is not None
             and str(sign_image_value) == str(self.sign_camera_frame_id)
         )
         checks.append(ReadinessCheck(
-            'sign_camera_frame_id',
-            sign_frame_ok,
-            'expected={} actual={}'.format(
+            'GO2_CAMERA_READY',
+            self._has_publisher(self.sign_image_topic)
+            and sign_image_value is not None
+            and sign_bridge_ready
+            and sign_frame_ok,
+            'topic={} bridge={} expected_frame={} actual_frame={} age={}'.format(
+                self.sign_image_topic,
+                'software_smoke_synthetic' if self.software_smoke_mode else (
+                    'found' if sign_bridge_nodes else 'missing'
+                ),
                 self.sign_camera_frame_id,
                 sign_image_value if sign_image_value is not None else 'missing',
+                'missing' if sign_image_age is None else '{:.3f}s'.format(
+                    sign_image_age
+                ),
             ),
         ))
 
-        # 硬件模式下两个 Topic 必须不同
+        # C. 机械臂 D435i：完整国赛才把该项提升为硬性 readiness 条件。
+        arm_topics = (
+            self.arm_color_topic,
+            self.arm_depth_topic,
+            self.arm_camera_info_topic,
+        )
+        arm_camera_ready = all(self._has_publisher(topic) for topic in arm_topics)
+        checks.append(ReadinessCheck(
+            'ARM_CAMERA_READY',
+            arm_camera_ready,
+            'required={}, topics={}'.format(
+                self.require_arm_camera, ','.join(arm_topics)
+            ),
+            critical=self.require_arm_camera,
+        ))
+
+        # 三路相机命名必须互斥，防止未来启用机械臂 RGB-D 时覆盖现有图像源。
         if self.hardware_mode:
-            topics_different = (
-                str(self.line_image_topic) != str(self.sign_image_topic)
+            camera_topics = (
+                self.line_image_topic,
+                self.sign_image_topic,
+                self.arm_color_topic,
+                self.arm_depth_topic,
+                self.arm_camera_info_topic,
+            )
+            topics_different = len({str(topic) for topic in camera_topics}) == len(
+                camera_topics
             )
             checks.append(ReadinessCheck(
-                'line_sign_topics_different',
+                'camera_topics_distinct',
                 topics_different,
-                'line={} sign={}'.format(
-                    self.line_image_topic, self.sign_image_topic,
-                ),
+                ','.join(str(topic) for topic in camera_topics),
             ))
         line_value, line_age = self._fresh_value('line_track')
         checks.append(ReadinessCheck(
@@ -685,6 +707,7 @@ class CompetitionReadinessNode(Node):
                 if 'cmd_vel_udp_forwarder' in name
                 or 'realsense' in name
                 or name.endswith('/camera')
+                or name.endswith('/line_camera_node')
             )
             sdk_process = self._process_running('go2_sdk_udp_server')
             checks.append(ReadinessCheck(

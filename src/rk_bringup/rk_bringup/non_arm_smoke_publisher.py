@@ -122,7 +122,7 @@ class NonArmSmokePublisher(Node):
 
     def _declare_parameters(self):
         """仅暴露合成输入的控制参数，避免引入任何硬件参数。"""
-        self.declare_parameter('line_image_topic', '/camera/color/image_raw')
+        self.declare_parameter('line_image_topic', '/line_camera/image_raw')
         self.declare_parameter('sign_image_topic', '/go2/front_camera/image_raw')
         self.declare_parameter('scenario', 'idle')
         self.declare_parameter('auto_start', False)

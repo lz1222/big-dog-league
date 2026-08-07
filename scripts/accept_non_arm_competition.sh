@@ -754,7 +754,7 @@ fi
 setsid ros2 launch rk_bringup competition_non_arm.launch.py \
     hardware_mode:=false \
     software_smoke_mode:=true \
-    start_realsense:=false \
+    start_line_camera:=false \
     start_sdk_server:=false \
     start_udp_forwarder:=false \
     fake_sdk_action_executable:="$FAKE_HELPER" \

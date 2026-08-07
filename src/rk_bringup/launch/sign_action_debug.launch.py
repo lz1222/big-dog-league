@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+"""LEGACY / DEBUG / NOT FOR COMPETITION.
+
+该入口曾将通用 D435i ``/camera`` 图像用于标识调试。正式标识识别只能使用
+Go2 ``/go2/front_camera/image_raw``；保留本文件仅为历史调试复现。
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.conditions import IfCondition

@@ -44,6 +44,7 @@ setup(
         'console_scripts': [
             'competition_readiness_node = '
             'rk_bringup.competition_readiness_node:main',
+            'line_camera_node = rk_bringup.line_camera_node:main',
             'non_arm_smoke_publisher = '
             'rk_bringup.non_arm_smoke_publisher:main',
         ],

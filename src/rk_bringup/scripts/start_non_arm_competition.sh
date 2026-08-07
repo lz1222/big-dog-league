@@ -9,12 +9,16 @@ LOG_DIR="${RK_COMPETITION_LOG_DIR:-$HOME/rk_non_arm_competition_logs}"
 SESSION="${RK_COMPETITION_TMUX_SESSION:-rk_non_arm_competition}"
 HARDWARE_MODE="${RK_COMPETITION_HARDWARE_MODE:-true}"
 SOFTWARE_SMOKE_MODE="${RK_COMPETITION_SOFTWARE_SMOKE_MODE:-false}"
-START_REALSENSE="${RK_COMPETITION_START_REALSENSE:-true}"
+START_LINE_CAMERA="${RK_COMPETITION_START_LINE_CAMERA:-true}"
 START_SDK_SERVER="${RK_COMPETITION_START_SDK_SERVER:-true}"
 START_UDP_FORWARDER="${RK_COMPETITION_START_UDP_FORWARDER:-true}"
 ENABLE_DEBUG_IMAGE="${RK_COMPETITION_ENABLE_DEBUG_IMAGE:-false}"
 SDK_NETWORK_INTERFACE="${RK_COMPETITION_SDK_NETWORK_INTERFACE:-eth0}"
-IMAGE_TOPIC="${RK_COMPETITION_IMAGE_TOPIC:-/camera/camera/color/image_raw}"
+LINE_IMAGE_TOPIC="${RK_COMPETITION_LINE_IMAGE_TOPIC:-/line_camera/image_raw}"
+LINE_CAMERA_DEVICE="${RK_COMPETITION_LINE_CAMERA_DEVICE:-0}"
+LINE_CAMERA_WIDTH="${RK_COMPETITION_LINE_CAMERA_WIDTH:-640}"
+LINE_CAMERA_HEIGHT="${RK_COMPETITION_LINE_CAMERA_HEIGHT:-480}"
+LINE_CAMERA_FPS="${RK_COMPETITION_LINE_CAMERA_FPS:-15.0}"
 SDK_SERVER="${RK_COMPETITION_SDK_SERVER:-}"
 SDK_UDP_HOST="${RK_COMPETITION_SDK_UDP_HOST:-127.0.0.1}"
 SDK_UDP_PORT="${RK_COMPETITION_SDK_UDP_PORT:-15001}"
@@ -99,7 +103,7 @@ link_node_log() {
 }
 
 create_log_aliases() {
-    link_node_log camera realsense
+    link_node_log line_camera line_camera_node
     link_node_log tracker real_line_tracker_node
     link_node_log sign_detector real_sign_detector_node
     link_node_log line_follower line_follower_node
@@ -197,13 +201,17 @@ touch "${RUNTIME_DIR}/pids"
 LAUNCH_ARGS=(
     "hardware_mode:=${HARDWARE_MODE}"
     "software_smoke_mode:=${SOFTWARE_SMOKE_MODE}"
-    "start_realsense:=${START_REALSENSE}"
+    "start_line_camera:=${START_LINE_CAMERA}"
     # SDK server 由阶段 B 单独启动并确认 UDP listening；launch 仅负责阶段 C。
     "start_sdk_server:=false"
     "start_udp_forwarder:=${START_UDP_FORWARDER}"
     "enable_debug_image:=${ENABLE_DEBUG_IMAGE}"
     "sdk_network_interface:=${SDK_NETWORK_INTERFACE}"
-    "image_topic:=${IMAGE_TOPIC}"
+    "line_image_topic:=${LINE_IMAGE_TOPIC}"
+    "line_camera_device:=${LINE_CAMERA_DEVICE}"
+    "line_camera_width:=${LINE_CAMERA_WIDTH}"
+    "line_camera_height:=${LINE_CAMERA_HEIGHT}"
+    "line_camera_fps:=${LINE_CAMERA_FPS}"
     "sdk_udp_host:=${SDK_UDP_HOST}"
     "sdk_udp_port:=${SDK_UDP_PORT}"
 )

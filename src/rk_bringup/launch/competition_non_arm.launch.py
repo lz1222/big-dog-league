@@ -2,9 +2,9 @@
 
 """正式非机械臂比赛启动入口。
 
-生产模式只包含巡线、白横线、警示牌、步态、mux 与 UDP 后端。机械臂、
-避障、楼梯和 mock 均不在本 launch 中。software_smoke_mode 会强制切断
-相机/UDP/SDK 硬件后端，并以显式测试 ELF helper 走真实 gait Action 流程。
+生产模式只包含 USB 巡线、Go2 本体相机标识识别、白横线、警示牌、步态、mux
+与 UDP 后端。机械臂 D435i、避障、楼梯和 mock 均不在本 launch 中。
+software_smoke_mode 会强制切断相机/UDP/SDK 硬件后端。
 """
 
 from launch import LaunchDescription
@@ -116,7 +116,7 @@ def generate_launch_description():
     """组装单一最终 cmd_vel 发布者的正式非机械臂 ROS 图。"""
     hardware_mode = LaunchConfiguration('hardware_mode')
     software_smoke_mode = LaunchConfiguration('software_smoke_mode')
-    start_realsense = LaunchConfiguration('start_realsense')
+    start_line_camera = LaunchConfiguration('start_line_camera')
     start_sdk_server = LaunchConfiguration('start_sdk_server')
     start_udp_forwarder = LaunchConfiguration('start_udp_forwarder')
     start_go2_front_camera = LaunchConfiguration('start_go2_front_camera')
@@ -130,8 +130,10 @@ def generate_launch_description():
     sdk_server = LaunchConfiguration('sdk_server')
     sdk_udp_host = LaunchConfiguration('sdk_udp_host')
     sdk_udp_port = LaunchConfiguration('sdk_udp_port')
-    rgb_camera_profile = LaunchConfiguration('rgb_camera.profile')
-    depth_module_profile = LaunchConfiguration('depth_module.profile')
+    line_camera_device = LaunchConfiguration('line_camera_device')
+    line_camera_width = LaunchConfiguration('line_camera_width')
+    line_camera_height = LaunchConfiguration('line_camera_height')
+    line_camera_fps = LaunchConfiguration('line_camera_fps')
     fake_sdk_action_executable = LaunchConfiguration(
         'fake_sdk_action_executable'
     )
@@ -173,8 +175,8 @@ def generate_launch_description():
         ),
         value_type=float,
     )
-    use_hardware_realsense = IfCondition(_hardware_backend_expression(
-        hardware_mode, software_smoke_mode, start_realsense
+    use_hardware_line_camera = IfCondition(_hardware_backend_expression(
+        hardware_mode, software_smoke_mode, start_line_camera
     ))
     use_hardware_sdk_server = IfCondition(_hardware_backend_expression(
         hardware_mode, software_smoke_mode, start_sdk_server
@@ -203,13 +205,13 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'software_smoke_mode', default_value='false',
             description=(
-                'Force SOFTWARE_SMOKE_MODE: no RealSense, UDP server, '
+                'Force SOFTWARE_SMOKE_MODE: no USB/Go2 camera, UDP server, '
                 'UDP forwarder or Unitree SDK helper.'
             ),
         ),
         DeclareLaunchArgument(
-            'start_realsense', default_value='true',
-            description='Start realsense2_camera_node in hardware mode.',
+            'start_line_camera', default_value='true',
+            description='Start the only USB line-camera node in hardware mode.',
         ),
         DeclareLaunchArgument(
             'start_sdk_server', default_value='true',
@@ -229,7 +231,23 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'line_image_topic', default_value=DEFAULT_IMAGE_TOPIC,
-            description='D435i RGB topic for line tracker (ground-facing).',
+            description='Fixed USB line-camera topic for real_line_tracker_node.',
+        ),
+        DeclareLaunchArgument(
+            'line_camera_device', default_value='0',
+            description='Explicit /dev/videoN index for the USB line camera.',
+        ),
+        DeclareLaunchArgument(
+            'line_camera_width', default_value='640',
+            description='Requested USB line-camera width in pixels.',
+        ),
+        DeclareLaunchArgument(
+            'line_camera_height', default_value='480',
+            description='Requested USB line-camera height in pixels.',
+        ),
+        DeclareLaunchArgument(
+            'line_camera_fps', default_value='15.0',
+            description='Requested USB line-camera frame rate.',
         ),
         DeclareLaunchArgument(
             'sign_image_topic', default_value='/go2/front_camera/image_raw',
@@ -275,14 +293,6 @@ def generate_launch_description():
             description='Production SDK UDP port.',
         ),
         DeclareLaunchArgument(
-            'rgb_camera.profile', default_value='424x240x15',
-            description='RealSense RGB profile used in hardware mode.',
-        ),
-        DeclareLaunchArgument(
-            'depth_module.profile', default_value='424x240x15',
-            description='Kept for camera compatibility; depth stays disabled.',
-        ),
-        DeclareLaunchArgument(
             'fake_sdk_action_executable',
             default_value=[FindPackagePrefix('rk_go2_sdk_bridge'),
                            '/lib/rk_go2_sdk_bridge/fake_sdk_motion_helper'],
@@ -323,26 +333,23 @@ def generate_launch_description():
         ),
         LogInfo(
             msg=(
-                '*** SOFTWARE_SMOKE_MODE: RealSense, UDP server, UDP '
+                '*** SOFTWARE_SMOKE_MODE: USB/Go2 cameras, UDP server, UDP '
                 'forwarder and Unitree SDK are forcibly disabled. ***'
             ),
             condition=use_smoke_publisher,
         ),
-        # 生产模式才从 D435i 收图；深度/scan 避障均不接入本比赛范围。
+        # 正式巡线只使用明确指定的 USB UVC 设备；绝不枚举或回退到 D435i。
         Node(
-            package='realsense2_camera',
-            executable='realsense2_camera_node',
-            namespace='camera',
-            name='camera',
+            package='rk_bringup',
+            executable='line_camera_node',
+            name='line_camera_node',
             output='log',
-            condition=use_hardware_realsense,
+            condition=use_hardware_line_camera,
             parameters=[{
-                'enable_color': True,
-                'enable_depth': False,
-                'enable_gyro': False,
-                'enable_accel': False,
-                'rgb_camera.profile': rgb_camera_profile,
-                'depth_module.profile': depth_module_profile,
+                'device': ParameterValue(line_camera_device, value_type=int),
+                'width': ParameterValue(line_camera_width, value_type=int),
+                'height': ParameterValue(line_camera_height, value_type=int),
+                'fps': ParameterValue(line_camera_fps, value_type=float),
             }],
         ),
         # smoke 由测试 publisher 给出确定性证据，防止真实检测输出干扰。
@@ -535,7 +542,6 @@ def generate_launch_description():
                 'line_image_topic': line_image_topic,
                 'sign_image_topic': sign_image_topic,
                 'sign_camera_frame_id': go2_front_camera_frame_id,
-                'image_topic': line_image_topic,
                 'sdk_server': PathJoinSubstitution([
                     FindPackagePrefix('rk_go2_sdk_bridge'),
                     'lib',

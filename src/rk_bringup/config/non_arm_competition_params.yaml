@@ -6,8 +6,8 @@
 
 real_line_tracker_node:
   ros__parameters:
-    # 默认值；launch 通过 line_image_topic 显式注入 D435i 话题。
-    image_topic: /camera/color/image_raw
+    # 正式巡线只接 USB line camera；D435i 仅供机械臂 RGB-D。
+    image_topic: /line_camera/image_raw
     line_track_topic: /perception/line_track
     red_circle_topic: /perception/red_circle_detection
     stop_zone_topic: /perception/stop_zone_detection
@@ -330,7 +330,11 @@ competition_readiness_node:
   ros__parameters:
     # hardware_mode 和 software_smoke_mode 由 launch 显式注入
     # (ParameterValue(value_type=bool))，不在此放会覆盖注入值的默认。
-    image_topic: /camera/color/image_raw
+    # 非机械臂比赛只强制 USB / Go2；完整国赛可显式提升机械臂相机为必需项。
+    require_arm_camera: false
+    arm_color_topic: /arm_camera/color/image_raw
+    arm_depth_topic: /arm_camera/aligned_depth_to_color/image_raw
+    arm_camera_info_topic: /arm_camera/color/camera_info
     final_cmd_topic: /navigation/cmd_vel
     line_track_topic: /perception/line_track
     line_follower_status_topic: /navigation/line_follow_status
