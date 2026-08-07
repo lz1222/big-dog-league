@@ -162,6 +162,13 @@ if(unitree_sdk2_FOUND)
     rk_udp_motion_core
   )
   rk_configure_unitree_sdk_target(go2_sdk_udp_server)
+  add_executable(go2_sdk_udp_server_v2
+    src/go2_sdk_udp_server_v2.cpp
+  )
+  target_link_libraries(go2_sdk_udp_server_v2
+    rk_udp_motion_core
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_udp_server_v2)
   add_executable(go2_sdk_capture_image
     src/go2_sdk_capture_image.cpp
   )
@@ -192,6 +199,7 @@ if(unitree_sdk2_FOUND)
   )
   install(TARGETS
     go2_sdk_udp_server
+    go2_sdk_udp_server_v2
     go2_sdk_capture_image
     go2_sdk_speed_sweep
     go2_sdk_motion_action
