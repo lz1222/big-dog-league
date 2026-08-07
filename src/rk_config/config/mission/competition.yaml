@@ -1,0 +1,41 @@
+mission_state_machine_node:
+  ros__parameters:
+    auto_start: true
+
+    # Debug range. Leave empty to run the full mission.
+    start_stage: ''
+    end_stage: ''
+
+    # Timings.
+    action_timeout_sec: 15.0
+    detection_timeout_sec: 3.0
+    max_detection_age_sec: 2.0
+    wait_start_delay_sec: 0.2
+
+    # Navigation topic bridge for line_follower_node.
+    publish_navigation_start: true
+    stop_navigation_after_segment: true
+    mission_start_topic: /mission/start
+    mission_stop_topic: /mission/stop
+
+    # Perception topics and debug fallback.
+    sign_detections_topic: /perception/sign_detections
+    item_tags_topic: /perception/item_tags
+    allow_detection_fallback: true
+    default_place_target: place_platform_1
+    default_warning_action: stretch
+
+line_follower_node:
+  ros__parameters:
+    mission_start_topic: /mission/start
+    mission_stop_topic: /mission/stop
+    line_msg_timeout: 1.5
+
+mock_sign_detector_node:
+  ros__parameters:
+    # place_1/place_2 choose the final platform branch.
+    place_marker_value: place_1
+
+    # electric_shock -> stretch, strong_oxidizer -> wave,
+    # radiation -> blink_front_light_3.
+    warning_value: electric_shock

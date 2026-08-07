@@ -1,0 +1,351 @@
+# 非机械臂正式比赛链的唯一参数入口。
+#
+# 该文件只服务 competition_non_arm.launch.py；line_nav_params.yaml 仍供
+# 旧巡线 launch 使用。正式 launch 不叠加旧文件，避免相同参数被两套默认值
+# 覆盖。所有真实机器人的物理效果仍需要在 Foxy 机器人上分项验收。
+
+real_line_tracker_node:
+  ros__parameters:
+    # 默认值；launch 通过 line_image_topic 显式注入 D435i 话题。
+    image_topic: /camera/color/image_raw
+    line_track_topic: /perception/line_track
+    red_circle_topic: /perception/red_circle_detection
+    stop_zone_topic: /perception/stop_zone_detection
+    white_bar_topic: /perception/white_bar_detection
+    corner_candidate_topic: /perception/corner_candidate
+    enable_debug_image: false
+    debug_log: false
+
+    # 下列视觉数值沿用当前软件基线；它们不是本轮新的实体标定结论。
+    use_full_frame_roi: true
+    roi_top_fraction: 0.05
+    roi_bottom_margin_fraction: 0.03
+    roi_left_margin_fraction: 0.03
+    roi_right_margin_fraction: 0.03
+    threshold_value: 70
+    max_lateral_error: 1.0
+    robot_center_x_offset_fraction: 0.0
+    robot_center_x_offset_px: 0.0
+    line_width_cm: 10.0
+    num_scan_bands: 11
+    min_path_bands: 4
+    min_valid_bands: 4
+    require_bottom_band: true
+    min_line_width_fraction: 0.015
+    max_line_width_fraction: 0.26
+    perspective_width_enabled: true
+    min_line_width_top_fraction: 0.006
+    min_line_width_bottom_fraction: 0.018
+    max_line_width_top_fraction: 0.12
+    max_line_width_bottom_fraction: 0.42
+    max_dark_fraction: 0.22
+    visible_min_confidence: 0.35
+    track_lock_enabled: true
+    max_track_jump_fraction: 0.18
+    max_reacquire_jump_fraction: 0.12
+    bottom_band_preference_weight: 8.0
+    previous_center_weight: 10.0
+    bottom_start_max_center_error_fraction: 0.30
+    max_band_center_jump_fraction: 0.16
+    max_band_gap: 2
+    red_circle_min_area_ratio: 0.002
+    red_circle_min_circularity: 0.55
+    blue_h_min: 90
+    blue_h_max: 130
+    blue_s_min: 60
+    blue_v_min: 40
+    stop_zone_min_area_ratio: 0.05
+    stop_zone_reference_y_ratio: 0.85
+    white_bar_v_min: 180
+    white_bar_s_max: 80
+    white_bar_min_width_ratio: 0.20
+    white_bar_max_height_ratio: 0.15
+    white_bar_min_area_ratio: 0.002
+    corner_min_heading_error: 0.30
+    corner_edge_fraction: 0.28
+    frame_id: d435i_color_optical_frame
+
+real_sign_detector_node:
+  ros__parameters:
+    # 默认值；launch 通过 sign_image_topic 显式注入本体相机话题。
+    image_topic: /go2/front_camera/image_raw
+    sign_detections_topic: /perception/sign_detections
+    debug_image_topic: /perception/sign_debug_image
+    frame_id: go2_front_camera_optical_frame
+    min_confidence: 0.55
+    enable_qr: true
+    enable_warning_templates: true
+    template_min_score: 0.34
+    template_min_area_fraction: 0.010
+    enable_color: true
+    # 平台编号必须来自红环内黑白模板，避免红色背景或警示牌造成平台选择。
+    enable_place_markers: true
+    place_marker_enabled: true
+    place_marker_template_size: 128
+    place_marker_min_area_fraction: 0.007
+    place_marker_max_area_fraction: 0.45
+    place_marker_min_circularity: 0.70
+    place_marker_min_score: 0.62
+    place_marker_min_margin: 0.12
+    place_marker_rotation_angles: [-15, -10, -5, 0, 5, 10, 15]
+    place_marker_confirm_window: 7
+    place_marker_confirm_frames: 5
+    place_marker_min_confidence: 0.75
+    enable_debug_image: false
+    debug_log: false
+    log_period_sec: 1.0
+
+line_follower_node:
+  ros__parameters:
+    line_track_topic: /perception/line_track
+    suggested_cmd_topic: /navigation/line_follow_cmd_suggested
+    line_follow_status_topic: /navigation/line_follow_status
+    mission_start_topic: /mission/start
+    mission_stop_topic: /mission/stop
+    gait_control_lock_topic: /gait/control_lock
+    control_rate_hz: 10.0
+    debug_log: false
+
+    # 软件默认安全值：起步前由 START_READY 把候选速度保持为零。
+    min_driving_speed: 0.27
+    base_speed: 0.27
+    mid_speed: 0.27
+    slow_speed: 0.27
+    error_slow_threshold: 0.12
+    error_slowest_threshold: 0.28
+    kp_lateral: 0.85
+    kp_heading: 0.35
+    max_angular_z: 0.28
+    angular_deadband: 0.08
+    angular_smoothing_alpha: 0.22
+    line_follow_min_confidence: 0.0
+    short_lost_timeout: 0.75
+    short_lost_linear_speed: 0.0
+    search_angular_speed: 0.25
+    turn_90_duration: 0.8
+    turn_90_angular_speed: 0.35
+    turn_direction_mode: last_error
+    default_turn_direction: 1
+    turn_direction_deadband: 0.02
+    turn_lost_keep_time: 2.0
+    lost_turn_linear_speed: 0.0
+    lost_turn_angular_speed: 0.25
+    turn_lost_min_angular_z: 0.08
+    search_linear_speed: 0.0
+    search_line_angular_speed: 0.22
+    search_sweep_period: 1.0
+    search_timeout: 8.0
+    line_reacquire_count: 3
+    reacquire_confirm_frames: 3
+    reacquire_min_confidence: 0.65
+    reacquire_max_lateral_error: 0.75
+    line_msg_timeout: 1.0
+    continuous_search_enabled: true
+
+    # 启动稳定门：未获得连续可用 LineTrack 前绝不盲走。
+    start_ready_confirm_frames: 5
+    start_ready_timeout_sec: 5.0
+    start_ready_min_confidence: 0.55
+    start_ready_max_lateral_error: 0.80
+    start_ready_max_heading_error: 0.80
+
+line_course_mission_node:
+  ros__parameters:
+    # Mission 只发布候选 /control/mission_cmd，最终速度只由 mux 发布。
+    cmd_vel_topic: /control/mission_cmd
+    suggested_cmd_topic: /navigation/line_follow_cmd_suggested
+    line_follower_status_topic: /navigation/line_follow_status
+    mission_state_topic: /mission/line_course_state
+    line_track_topic: /perception/line_track
+    red_circle_topic: /perception/red_circle_detection
+    stop_zone_topic: /perception/stop_zone_detection
+    white_bar_topic: /perception/white_bar_detection
+    corner_candidate_topic: /perception/corner_candidate
+    mission_start_topic: /mission/start
+    mission_stop_topic: /mission/stop
+    white_bar_action_request_topic: /mission/white_bar_action_request
+    white_bar_action_done_topic: /mission/white_bar_action_done
+    white_bar_action_status_topic: /mission/white_bar_action_status
+    white_bar_stage_command_topic: /mission/white_bar_stage_command
+    white_bar_stage_status_topic: /mission/white_bar_stage_status
+    inspection_action_request_topic: /mission/inspection_action_request
+    inspection_action_status_topic: /mission/inspection_action_status
+    control_rate_hz: 10.0
+    suggested_cmd_timeout_sec: 0.5
+    detection_timeout_sec: 0.8
+    line_follower_status_timeout_sec: 1.0
+
+    # 重新找线时只能原地角速度对齐，超时进入 fail-closed emergency stop。
+    align_confirm_frames: 5
+    align_min_confidence: 0.60
+    align_max_lateral_error: 0.20
+    align_max_heading_error: 0.25
+    align_timeout_sec: 8.0
+    align_max_angular_z: 0.25
+    align_heading_gain: 0.80
+    align_lateral_gain: 0.20
+    inspection_action_timeout_sec: 32.0
+
+    red_circle_confirm_frames: 3
+    red_circle_min_confidence: 0.55
+    red_circle_approach_speed: 0.04
+    red_circle_stop_area_ratio: 0.020
+    red_circle_stop_y_ratio: 0.65
+    red_circle_approach_timeout_sec: 8.0
+    # Deprecated: 正式路径由 inspection request 和稳定警示牌决定 SDK 动作。
+    red_circle_sdk_action: ''
+    red_circle_sdk_wait_sec: 0.0
+    red_circle_action_timeout_sec: 15.0
+    turn_after_red_direction: left
+    turn_after_red_angle_deg: 90.0
+    turn_after_red_angular_z: 0.35
+    turn_after_red_timeout_sec: 5.0
+
+    # 白横线阶段来自显式 stage command；不再按白线次数推断。
+    white_bar_confirm_frames: 3
+    white_bar_min_confidence: 0.55
+    white_bar_approach_speed: 0.03
+    white_bar_stop_y_ratio: 0.70
+    white_bar_executor_action_timeout_sec: 22.0
+    white_bar_action_timeout_sec: 26.0
+    front_jump_start_worst_case_duration_sec: 17.0
+    front_jump_finish_worst_case_duration_sec: 17.0
+    white_bar_motion_name: ''
+    allow_finish_only_test: false
+
+    stop_zone_confirm_frames: 3
+    stop_zone_min_confidence: 0.55
+    stop_zone_approach_speed: 0.04
+    stop_zone_inside_confirm_frames: 3
+    stop_zone_approach_timeout_sec: 10.0
+    reacquire_timeout_sec: 8.0
+    reacquire_min_confidence: 0.30
+    reacquire_stable_frames: 3
+
+white_bar_action_executor:
+  ros__parameters:
+    request_topic: /mission/white_bar_action_request
+    done_topic: /mission/white_bar_action_done
+    status_topic: /mission/white_bar_action_status
+    mission_stop_topic: /mission/stop
+    action_name: /locomotion/execute_motion
+    server_wait_timeout_sec: 5.0
+    # 必须大于 start/finish FrontJump 最坏时长 17s 加 3s 余量。
+    action_timeout_sec: 22.0
+
+white_bar_stage_command_publisher:
+  ros__parameters:
+    mission_start_topic: /mission/start
+    mission_stop_topic: /mission/stop
+    white_bar_stage_status_topic: /mission/white_bar_stage_status
+    white_bar_stage_command_topic: /mission/white_bar_stage_command
+    line_course_state_topic: /mission/line_course_state
+    publisher_status_topic: /mission/white_bar_stage_command_publisher_status
+    finish_milestone_state: TURN_AFTER_RED
+    control_rate_hz: 10.0
+    command_retry_sec: 0.5
+    command_ack_timeout_sec: 5.0
+    max_command_retries: 5
+
+inspection_action_executor:
+  ros__parameters:
+    sign_detections_topic: /perception/sign_detections
+    mission_stop_topic: /mission/stop
+    final_cmd_topic: /navigation/cmd_vel
+    estop_state_topic: /safety/estop_state
+    cmd_mux_status_topic: /control/cmd_mux_status
+    # inspection 只发布自己的锁请求，最终 /gait/control_lock 由
+    # gait_lock_arbiter_node 对全部请求做 OR 聚合后单点发布。
+    gait_control_lock_topic: /gait/control_lock_req/inspection
+    sign_confirm_frames: 5
+    sign_min_confidence: 0.70
+    sign_wait_timeout_sec: 8.0
+    final_zero_epsilon: 0.001
+    final_zero_confirm_samples: 3
+    final_zero_timeout_sec: 3.0
+    final_cmd_stale_timeout_sec: 0.5
+    estop_state_stale_timeout_sec: 0.5
+    sdk_action_timeout_sec: 15.0
+    post_action_settle_sec: 1.5
+    sdk_network_interface: eth0
+    # helper 路径由正式 launch 显式注入（ParameterValue(value_type=str)）。
+    # 此处不再放空字符串默认值，避免在 Foxy 中覆盖 launch 注入的正确路径。
+    # software_smoke_mode 由 launch 显式注入 (ParameterValue(value_type=bool))。
+
+gait_control_node:
+  ros__parameters:
+    cmd_vel_topic: /control/locomotion_cmd
+    status_topic: /gait/status
+    # gait_control 只发布自己的锁请求，最终 /gait/control_lock 由
+    # gait_lock_arbiter_node 对全部请求做 OR 聚合后单点发布。
+    control_lock_topic: /gait/control_lock_req/gait
+    motion_action_name: /locomotion/execute_motion
+    enable_motion_action: true
+    # 本比赛范围明确排除避障；禁止 depth/scan 安全节点接入正式 launch。
+    obstacle_safety.enable_depth: false
+    obstacle_safety.enable_scan: false
+    obstacle_safety.require_fresh_data: false
+    front_jump:
+      # 默认是真实比赛链；仅 launch 的显式 smoke 参数可改为 true。
+      # software_smoke_mode 由 launch 显式注入 (ParameterValue(value_type=bool))。
+      start:
+        pre_stop_duration: 0.5
+        final_zero_epsilon: 0.001
+        final_zero_confirm_samples: 3
+        final_zero_timeout: 2.0
+        sdk_timeout: 12.0
+        post_settle_duration: 2.5
+      finish:
+        pre_stop_duration: 0.5
+        final_zero_epsilon: 0.001
+        final_zero_confirm_samples: 3
+        final_zero_timeout: 2.0
+        sdk_timeout: 12.0
+        post_settle_duration: 2.5
+      sdk_network_interface: eth0
+      zero_publish_rate_hz: 10.0
+      final_cmd_topic: /navigation/cmd_vel
+      final_cmd_stale_timeout: 0.20
+      cmd_mux_status_topic: /control/cmd_mux_status
+      estop_state_topic: /safety/estop_state
+      estop_state_stale_timeout: 0.20
+      # cleanup_guard_path 由 launch 注入；此处不放重复默认值。
+      shutdown_drain_timeout_sec: 5.0
+
+command_mux_node:
+  ros__parameters:
+    line_cmd_topic: /control/line_cmd
+    mission_cmd_topic: /control/mission_cmd
+    locomotion_cmd_topic: /control/locomotion_cmd
+    estop_topic: /safety/estop
+    estop_state_topic: /safety/estop_state
+    enable_estop_service: true
+    estop_service_name: /safety/estop
+    gait_lock_topic: /gait/control_lock
+    arm_lock_topic: /arm/control_lock
+    output_cmd_topic: /navigation/cmd_vel
+    status_topic: /control/cmd_mux_status
+
+competition_readiness_node:
+  ros__parameters:
+    # hardware_mode 和 software_smoke_mode 由 launch 显式注入
+    # (ParameterValue(value_type=bool))，不在此放会覆盖注入值的默认。
+    image_topic: /camera/color/image_raw
+    final_cmd_topic: /navigation/cmd_vel
+    line_track_topic: /perception/line_track
+    line_follower_status_topic: /navigation/line_follow_status
+    line_course_state_topic: /mission/line_course_state
+    white_stage_publisher_status_topic: /mission/white_bar_stage_command_publisher_status
+    white_action_status_topic: /mission/white_bar_action_status
+    inspection_action_status_topic: /mission/inspection_action_status
+    sign_detections_topic: /perception/sign_detections
+    gait_status_topic: /gait/status
+    estop_state_topic: /safety/estop_state
+    estop_service_name: /safety/estop
+    motion_action_name: /locomotion/execute_motion
+    cmd_mux_status_topic: /control/cmd_mux_status
+    # 生产 SDK server 安装路径；启动脚本和 launch 可显式覆盖此值。
+    sdk_server: /home/unitree/rk_inspection_ws/install/rk_go2_sdk_bridge/lib/rk_go2_sdk_bridge/go2_sdk_udp_server
+    # sdk_action_executable 和 cleanup_guard_path 由 launch 显式注入。
+    freshness_timeout_sec: 2.0
+    status_publish_rate_hz: 2.0

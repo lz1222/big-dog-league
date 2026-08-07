@@ -1,0 +1,16 @@
+<package format="3">
+  <name>rk_config</name>
+  <version>0.0.1</version>
+  <description>Configuration files for the RK inspection robot.</description>
+  <maintainer email="2605128876@qq.com">ZhenLi</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,46 @@
+pointcloud_sector_monitor:
+  ros__parameters:
+    cloud_topic: /utlidar/cloud_base
+
+    # base_link 坐标系：x 向前、y 向左、z 向上。
+    z_min: -0.15
+    z_max: 0.50
+
+    # 去除 Go2 机身及腿部附近的自身回波。
+    body_x_min: -0.45
+    body_x_max: 0.45
+    body_y_min: -0.25
+    body_y_max: 0.25
+
+    # 前方及斜前方仍按径向扇区距离统计。
+    front_angle: 45.0
+    min_range: 0.05
+    front_max_range: 3.00
+    side_max_range: 2.00
+    diagonal_angle_max: 67.5
+    side_angle_max: 112.5
+
+    # 侧墙正侧方无稳定回波时，从斜前墙点的 |y| 投影横向净距。
+    side_projection_angle_min: 15.0
+    side_projection_angle_max: 60.0
+    side_projection_x_min: 0.45
+    side_projection_x_max: 1.50
+    side_projection_min_x_span: 0.12
+    side_projection_lateral_tolerance: 0.04
+    side_min_points: 3
+
+    # 百分位必须大于零，避免退化为单个最小飞点。
+    distance_percentile: 10.0
+    stale_timeout: 0.50
+    print_rate: 2.0
+
+odom_yaw_monitor:
+  ros__parameters:
+    odom_topic: /utlidar/robot_odom
+    stale_timeout: 0.20
+    print_rate: 2.0
+
+    # 线速度和角速度均低于阈值时才累计静止漂移。
+    stationary_linear_speed_threshold: 0.02
+    stationary_angular_speed_threshold: 0.02
+    stationary_min_duration: 2.0

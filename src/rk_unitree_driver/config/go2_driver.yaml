@@ -1,0 +1,12 @@
+cmd_vel_bridge_node:
+  ros__parameters:
+    backend: mock
+    cmd_vel_topic: /navigation/cmd_vel
+    sport_request_topic: /api/sport/request
+    max_linear_x: 0.20
+    max_angular_z: 0.60
+    cmd_timeout_sec: 0.50
+    stop_publish_count: 3
+    stop_publish_period_sec: 0.05
+    zero_cmd_debounce_time: 0.60
+    stop_publish_min_interval: 0.50

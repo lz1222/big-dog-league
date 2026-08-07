@@ -1,0 +1,91 @@
+real_line_tracker_node:
+  ros__parameters:
+    # 单独启动 rk_perception 时会读取这里；比赛巡线启动优先看
+    # src/rk_bringup/config/line_nav_params.yaml。两处参数应保持一致。
+    image_topic: /camera/color/image_raw
+    line_track_topic: /perception/line_track
+    enable_debug_image: true
+    debug_log: true
+
+    # ROI 检测区域。D435i 向下看地面时保持接近全画面。
+    use_full_frame_roi: true
+    roi_top_fraction: 0.05
+    roi_bottom_margin_fraction: 0.03
+    roi_left_margin_fraction: 0.03
+    roi_right_margin_fraction: 0.03
+
+    # 黑线二值化阈值。黑线识别不到时提高，灰影/深色物体误识别时降低。
+    threshold_value: 70
+    max_lateral_error: 1.0
+
+    # 机器狗实际中心校准。紫色线=相机画面中心，橙色线=控制中心。
+    # 正数表示控制中心在画面中心右侧，负数表示在左侧。
+    robot_center_x_offset_fraction: 0.05
+    robot_center_x_offset_px: 0.0
+
+    line_width_cm: 10.0
+    num_scan_bands: 11
+    min_path_bands: 4
+    min_valid_bands: 4
+
+    # 急弯时底部扫描带可能不是完整黑线，先不强制底部必须看到线。
+    require_bottom_band: false
+
+    # 弯角处黑线在画面中会变宽，宽度限制比直线阶段放宽。
+    min_line_width_fraction: 0.015
+    max_line_width_fraction: 0.24
+    perspective_width_enabled: true
+    min_line_width_top_fraction: 0.006
+    min_line_width_bottom_fraction: 0.018
+    max_line_width_top_fraction: 0.16
+    max_line_width_bottom_fraction: 0.36
+
+    # 蓝色启停区/大块深色图案会让暗像素比例变高，仍保留上限避免整块误跟。
+    max_dark_fraction: 0.38
+    visible_min_confidence: 0.45
+    track_lock_enabled: true
+    max_track_jump_fraction: 0.26
+    max_reacquire_jump_fraction: 0.30
+    bottom_band_preference_weight: 5.0
+    previous_center_weight: 6.0
+    bottom_start_max_center_error_fraction: 0.42
+    max_band_center_jump_fraction: 0.24
+    max_band_gap: 3
+    frame_id: d435i_color_optical_frame
+
+real_sign_detector_node:
+  ros__parameters:
+    image_topic: /go2/front_camera/image_raw
+    sign_detections_topic: /perception/sign_detections
+    debug_image_topic: /perception/sign_debug_image
+    frame_id: d435i_color_optical_frame
+    min_confidence: 0.55
+    enable_qr: true
+    enable_warning_templates: true
+    template_min_score: 0.34
+    template_min_area_fraction: 0.010
+    enable_color: true
+    # 红环只定位，内部黑白模板决定 place_1/place_2；未确认不发布平台结果。
+    enable_place_markers: true
+    place_marker_enabled: true
+    place_marker_template_size: 128
+    place_marker_min_area_fraction: 0.007
+    place_marker_max_area_fraction: 0.45
+    place_marker_min_circularity: 0.70
+    place_marker_min_score: 0.62
+    place_marker_min_margin: 0.12
+    place_marker_rotation_angles: [-15, -10, -5, 0, 5, 10, 15]
+    place_marker_confirm_window: 7
+    place_marker_confirm_frames: 5
+    place_marker_min_confidence: 0.75
+    enable_debug_image: true
+    debug_log: true
+    log_period_sec: 1.0
+    # QR/text labels are normalized to lowercase with '_' separators.
+    # Prefer QR labels when possible; they are much more stable than color-only
+    # sign recognition under changing light.
+    qr_value_map_json: '{"1":{"sign_type":"place_marker","sign_value":"place_1"},"place_1":{"sign_type":"place_marker","sign_value":"place_1"},"2":{"sign_type":"place_marker","sign_value":"place_2"},"place_2":{"sign_type":"place_marker","sign_value":"place_2"},"electric":{"sign_type":"warning","sign_value":"electric_shock"},"electric_shock":{"sign_type":"warning","sign_value":"electric_shock"},"oxidizer":{"sign_type":"warning","sign_value":"strong_oxidizer"},"strong_oxidizer":{"sign_type":"warning","sign_value":"strong_oxidizer"},"radiation":{"sign_type":"warning","sign_value":"radiation"},"radioactive":{"sign_type":"warning","sign_value":"radiation"}}'
+    # 三种警示牌都是黄色三角形，黄色只能用来定位警示牌区域；
+    # 真正区分触电/强氧化物/辐射要靠内部黑色图案模板匹配。
+    # 这里保留红/蓝警示作为历史兜底，但不再使用 yellow_warning。
+    color_rules_json: '[{"name":"red_warning","sign_type":"warning","sign_value":"electric_shock","hsv_ranges":[[0,80,60,12,255,255],[170,80,60,180,255,255]],"min_area_fraction":0.012,"min_confidence":0.55},{"name":"blue_warning","sign_type":"warning","sign_value":"radiation","hsv_ranges":[[92,60,50,132,255,255]],"min_area_fraction":0.012,"min_confidence":0.55},{"name":"green_place_1","sign_type":"place_marker","sign_value":"place_1","hsv_ranges":[[42,50,50,88,255,255]],"min_area_fraction":0.014,"min_confidence":0.55},{"name":"purple_place_2","sign_type":"place_marker","sign_value":"place_2","hsv_ranges":[[132,45,45,164,255,255]],"min_area_fraction":0.014,"min_confidence":0.55}]'

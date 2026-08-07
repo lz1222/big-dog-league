@@ -1,0 +1,19 @@
+rosbag2_bagfile_information:
+  version: 4
+  storage_identifier: sqlite3
+  relative_file_paths:
+    - calib_080cm_0.db3
+  duration:
+    nanoseconds: 9288593208
+  starting_time:
+    nanoseconds_since_epoch: 1786006250942163274
+  message_count: 137
+  topics_with_message_count:
+    - topic_metadata:
+        name: /utlidar/cloud_base
+        type: sensor_msgs/msg/PointCloud2
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 137
+  compression_format: ""
+  compression_mode: ""

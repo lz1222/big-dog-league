@@ -1,0 +1,46 @@
+line_follower_node:
+  ros__parameters:
+    line_track_topic: /perception/line_track
+    suggested_cmd_topic: /navigation/line_follow_cmd_suggested
+    line_follow_status_topic: /navigation/line_follow_status
+    mission_start_topic: /mission/start
+    mission_stop_topic: /mission/stop
+    gait_control_lock_topic: /gait/control_lock
+    control_rate_hz: 10.0
+    debug_log: true
+
+    # Go2 实测低于约 0.27m/s 时腿基本不走；巡线速度先用 0.30。
+    min_driving_speed: 0.27
+    base_speed: 0.30
+    mid_speed: 0.28
+    slow_speed: 0.27
+    error_slow_threshold: 0.3
+    error_slowest_threshold: 0.75
+    kp_lateral: 0.18
+    kp_heading: 0.1
+    max_angular_z: 0.40
+    line_follow_min_confidence: 0.0
+
+    short_lost_timeout: 1.2
+    short_lost_linear_speed: 0.27
+    search_angular_speed: 0.20
+
+    turn_90_duration: 1.6
+    turn_90_angular_speed: 0.35
+    turn_direction_mode: last_error
+    default_turn_direction: 1
+    turn_direction_deadband: 0.02
+    turn_lost_keep_time: 2.0
+    lost_turn_linear_speed: 0.27
+    lost_turn_angular_speed: 0.15
+    turn_lost_min_angular_z: 0.12
+
+    search_linear_speed: 0.27
+    search_line_angular_speed: 0.15
+    search_timeout: 8.0
+    line_reacquire_count: 3
+    reacquire_confirm_frames: 3
+    reacquire_min_confidence: 0.65
+    reacquire_max_lateral_error: 0.75
+    line_msg_timeout: 1.0
+    continuous_search_enabled: true

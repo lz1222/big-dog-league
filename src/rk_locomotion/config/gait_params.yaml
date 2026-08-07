@@ -1,0 +1,190 @@
+gait_control_node:
+  ros__parameters:
+    cmd_vel_topic: /control/locomotion_cmd
+    status_topic: /gait/status
+    control_lock_topic: /gait/control_lock_req/gait
+    debug_topic: /gait/debug
+    current_mode_topic: /gait/current_mode
+    command_json_topic: /gait/command_json
+    motion_action_name: /locomotion/execute_motion
+    enable_motion_action: true
+
+    default_max_vx: 0.60
+    default_max_vy: 0.15
+    default_max_wz: 1.00
+    hard_max_vx: 0.60
+    hard_max_vy: 0.15
+    hard_max_wz: 1.00
+
+    max_action_duration_sec: 10.0
+    default_hold_duration_sec: 2.0
+    default_move_duration_sec: 1.0
+    default_turn_duration_sec: 1.0
+    navigation_segment_wait_sec: 3.0
+    publish_rate_hz: 10.0
+    status_publish_rate_hz: 5.0
+    stop_publish_count: 3
+    stop_publish_period_sec: 0.05
+
+    roll_pitch_limit_deg: 25.0
+
+    # FrontJump 开发初值；起点和终点必须分别完成隔离场地标定。
+    front_jump:
+      start:
+        pre_stop_duration: 0.5
+        final_zero_epsilon: 0.001
+        final_zero_confirm_samples: 3
+        final_zero_timeout: 2.0
+        sdk_timeout: 12.0
+        post_settle_duration: 2.5
+      finish:
+        pre_stop_duration: 0.5
+        final_zero_epsilon: 0.001
+        final_zero_confirm_samples: 3
+        final_zero_timeout: 2.0
+        sdk_timeout: 12.0
+        post_settle_duration: 2.5
+      # sdk_action_executable 和 cleanup_guard_path 由 launch 文件注入；
+      # YAML 中不放重复默认值避免覆盖 launch 的 smoke/production 选择。
+      # eth0 仅为开发默认值，尚未声明为机器人实测接口。
+      sdk_network_interface: eth0
+      zero_publish_rate_hz: 10.0
+      final_cmd_topic: /navigation/cmd_vel
+      final_cmd_stale_timeout: 0.20
+      cmd_mux_status_topic: /control/cmd_mux_status
+      estop_state_topic: /safety/estop_state
+      estop_state_stale_timeout: 0.20
+      shutdown_drain_timeout_sec: 5.0
+
+    obstacle_safety:
+      enable_depth: true
+      enable_scan: false
+      require_fresh_data: false
+      depth_image_topic: /camera/camera/depth/image_rect_raw
+      scan_topic: /scan
+      max_sensor_age_sec: 0.60
+      front_stop_distance_m: 0.35
+      front_slow_distance_m: 0.55
+      slow_vx: 0.25
+      side_stop_distance_m: 0.12
+      side_warn_distance_m: 0.25
+      side_balance_gain: 0.45
+      max_correction_wz: 0.18
+      depth_min_valid_m: 0.08
+      depth_max_valid_m: 2.50
+      depth_sample_step_px: 12
+      depth_roi_top_ratio: 0.30
+      depth_roi_bottom_ratio: 0.72
+      depth_roi_percentile: 0.20
+      scan_front_half_angle_deg: 22.5
+      scan_side_min_angle_deg: 35.0
+      scan_side_max_angle_deg: 110.0
+      scan_percentile: 0.20
+
+    practical_obstacle:
+      timeout_sec: 80.0
+      pre_stop_sec: 0.4
+      recover_sec: 0.6
+      enter_vx: 0.30
+      enter_duration_sec: 6.0
+      forward_vx: 0.30
+      forward_duration_sec: 5.0
+      turn_wz: 0.80
+      turn_duration_sec: 4.8
+      side_adjust_wz: 0.18
+      side_adjust_turn_sec: 0.45
+      side_adjust_forward_sec: 0.45
+      exit_vx: 0.30
+      exit_duration_sec: 4.0
+      step_names:
+        - entry_up
+        - turn_left_to_top
+        - top_left
+        - turn_left_to_middle_down
+        - middle_down
+        - turn_right_to_bottom_left
+        - bottom_left
+        - turn_right_to_left_up
+        - left_up
+        - turn_left_to_exit
+        - exit_left
+      # 调试避障区时优先只改下面 4 组数组：
+      # - step_distance_m：直行步长，单位 m；转弯行填 0.0。
+      # - step_turn_angle_deg：转弯角度，单位 deg；直行行填 0.0。
+      # - step_linear_speed：直行速度，单位 m/s。
+      # - step_turn_speed_deg：转弯角速度，单位 deg/s。
+      # - step_front_target_m：前方墙目标距离，单位 m；0.0 表示不用。
+      #   例如 entry_up 设置 0.50，就是走到离顶部墙 0.50m 就转弯。
+      # 数组顺序必须和 step_names 一一对应。
+      step_types:
+        - forward
+        - turn_left
+        - forward
+        - turn_left
+        - forward
+        - turn_right
+        - forward
+        - turn_right
+        - forward
+        - turn_left
+        - forward
+      step_distance_m:
+        - 0.48
+        - 0.00
+        - 0.40
+        - 0.00
+        - 0.40
+        - 0.00
+        - 0.32
+        - 0.00
+        - 0.40
+        - 0.00
+        - 0.32
+      step_turn_angle_deg:
+        - 0.0
+        - 90.0
+        - 0.0
+        - 90.0
+        - 0.0
+        - 90.0
+        - 0.0
+        - 90.0
+        - 0.0
+        - 90.0
+        - 0.0
+      step_linear_speed:
+        - 0.30
+        - 0.00
+        - 0.30
+        - 0.00
+        - 0.30
+        - 0.00
+        - 0.30
+        - 0.00
+        - 0.30
+        - 0.00
+        - 0.30
+      step_turn_speed_deg:
+        - 0.0
+        - 50.0
+        - 0.0
+        - 50.0
+        - 0.0
+        - 50.0
+        - 0.0
+        - 50.0
+        - 0.0
+        - 50.0
+        - 0.0
+      step_front_target_m:
+        - 0.50
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00
+        - 0.00

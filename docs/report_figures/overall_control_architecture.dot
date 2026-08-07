@@ -1,0 +1,57 @@
+digraph G {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    pad="0.25",
+    nodesep="0.45",
+    ranksep="0.55",
+    splines=polyline,
+    fontname="Noto Sans CJK SC",
+    label="总体控制架构图",
+    labelloc=t,
+    fontsize=26
+  ];
+  node [
+    shape=rect,
+    style="rounded,filled",
+    fontname="Noto Sans CJK SC",
+    fontsize=15,
+    color="#2F3A4A",
+    penwidth=1.4,
+    fillcolor="#F7F9FC",
+    margin="0.12,0.08"
+  ];
+  edge [
+    fontname="Noto Sans CJK SC",
+    fontsize=12,
+    color="#52606D",
+    arrowsize=0.8,
+    penwidth=1.2
+  ];
+
+  sensors [label="传感器输入\nD435i 相机 / 雷达 / 测距\n导引线 / 标志 / 物资", fillcolor="#FFF8E8"];
+  perception [label="感知处理\n黑线检测 / 标志识别 / 物资定位\n输出：LineTrack / SignDetection / ItemTag", fillcolor="#EBF5FF"];
+  mission [label="任务状态机\n比赛 23 阶段\n抽签结果映射 / 动作调度 / 阶段反馈", fillcolor="#F0F4FF"];
+  nav [label="导航控制\n线路跟踪 / 丢线恢复 / 速度生成\n输出：/navigation/cmd_vel", fillcolor="#ECFFF5"];
+  adapter [label="运动适配\nRobotMotionAdapter + gait_control_node\ncmd_vel 统一接口 / 动作锁 / 限速", fillcolor="#F2ECFF"];
+  driver [label="Go2 驱动桥接\ncmd_vel_bridge_node + Go2MotionClient\nMove / StopMove / 超时停止", fillcolor="#F2ECFF"];
+  execution [label="执行对象\nGo2：跳跃 / 台阶 / 巡线 / 停靠\n机械臂：抓取 / 卸载 / 放置", fillcolor="#FFF1F1"];
+  safety [label="安全监控\nSafetyMonitor + /safety/estop\n速度限幅 / 命令超时 / 重复停止 / 急停", fillcolor="#FFEFE8"];
+  feedback [label="状态反馈\nRunMission feedback / /gait/status / 动作结果\n驱动下一阶段切换", fillcolor="#F7F7F7"];
+
+  sensors -> perception [label="图像/深度/距离"];
+  perception -> mission [label="SignDetection\nItemTag"];
+  perception -> nav [label="LineTrack"];
+  mission -> nav [label="/mission/start\n/mission/stop"];
+  nav -> adapter [label="/navigation/cmd_vel"];
+  mission -> adapter [label="ExecuteMotion"];
+  mission -> execution [label="ExecuteArmTask"];
+  adapter -> driver [label="安全速度命令"];
+  driver -> execution [label="Unitree Sport Request"];
+  execution -> feedback [label="动作状态 / 任务结果"];
+  feedback -> mission [label="阶段推进"];
+  safety -> nav [style=dashed, label="任务停止"];
+  safety -> adapter [style=dashed, label="限速/锁定"];
+  safety -> driver [style=dashed, label="超时停止"];
+  safety -> execution [style=dashed, label="急停"];
+}

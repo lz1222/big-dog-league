@@ -1,0 +1,56 @@
+d1_arm:
+  ros__parameters:
+    command_topic: /arm/command_json
+    object_xy_json_topic: /perception/object_xy_json
+    object_xy_point_topic: /perception/object_xy
+    status_topic: /arm/status
+    control_lock_topic: /arm/control_lock
+
+    target_timeout_sec: 3.0
+    min_confidence: 0.50
+    task_timeout_sec: 12.0
+    dry_run: true
+    d1_sdk_root: /home/lqsdaba/daihao1/big-dog-league/third_party/unitree_d1_sdk
+
+    camera_to_arm:
+      a11: 1.0
+      a12: 0.0
+      a21: 0.0
+      a22: 1.0
+      tx: 0.0
+      ty: 0.0
+
+    workspace:
+      x_min: -0.30
+      x_max: 0.30
+      y_min: -0.25
+      y_max: 0.25
+      z_min: 0.02
+      z_max: 0.35
+
+    fixed_heights:
+      pre_pick_z: 0.16
+      pick_z: 0.06
+      lift_z: 0.22
+      place_z: 0.08
+      pre_place_z: 0.18
+
+    timing:
+      move_duration_sec: 1.0
+      gripper_wait_sec: 0.5
+      settle_wait_sec: 0.3
+
+    gripper:
+      open_value: 1.0
+      close_value: 0.0
+      open_duration_sec: 0.5
+      close_duration_sec: 0.5
+
+    poses:
+      home_xyzrpy: [0.00, 0.00, 0.22, 0.0, 0.0, 0.0]
+      transfer_place_xyzrpy: [0.18, 0.10, 0.08, 0.0, 0.0, 0.0]
+      safe_lift_xyzrpy: [0.00, 0.00, 0.24, 0.0, 0.0, 0.0]
+
+    pose_table:
+      calibrated_points_json: "[]"
+      max_nearest_distance_m: 0.05

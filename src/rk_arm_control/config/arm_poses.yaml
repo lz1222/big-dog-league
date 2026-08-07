@@ -1,0 +1,65 @@
+arm:
+  default_step_timeout_sec: 5.0
+  default_move_duration_sec: 1.0
+  gripper_wait_sec: 0.5
+
+  poses:
+    HOME:
+      joints: [0.0, 0.0, 0.0, 0.0]
+      duration_sec: 1.0
+
+    PRE_PICK_START:
+      joints: [0.0, 0.2, 0.3, 0.0]
+      duration_sec: 1.0
+
+    PICK_START:
+      joints: [0.0, 0.4, 0.5, 0.0]
+      duration_sec: 1.0
+
+    LIFT_START:
+      joints: [0.0, 0.1, 0.2, 0.0]
+      duration_sec: 1.0
+
+    PRE_PLACE_TRANSFER:
+      joints: [0.3, 0.2, 0.3, 0.0]
+      duration_sec: 1.0
+
+    PLACE_TRANSFER:
+      joints: [0.3, 0.4, 0.5, 0.0]
+      duration_sec: 1.0
+
+    LIFT_TRANSFER:
+      joints: [0.3, 0.1, 0.2, 0.0]
+      duration_sec: 1.0
+
+    PRE_PICK_FIELD:
+      joints: [-0.3, 0.2, 0.3, 0.0]
+      duration_sec: 1.0
+
+    PICK_FIELD:
+      joints: [-0.3, 0.4, 0.5, 0.0]
+      duration_sec: 1.0
+
+    LIFT_FIELD:
+      joints: [-0.3, 0.1, 0.2, 0.0]
+      duration_sec: 1.0
+
+    PRE_PLACE_TARGET:
+      joints: [0.5, 0.2, 0.3, 0.0]
+      duration_sec: 1.0
+
+    PLACE_TARGET:
+      joints: [0.5, 0.4, 0.5, 0.0]
+      duration_sec: 1.0
+
+    LIFT_TARGET:
+      joints: [0.5, 0.1, 0.2, 0.0]
+      duration_sec: 1.0
+
+  gripper:
+    open:
+      value: 1.0
+      duration_sec: 0.5
+    close:
+      value: 0.0
+      duration_sec: 0.5

@@ -1,0 +1,54 @@
+digraph G {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    pad="0.25",
+    nodesep="0.35",
+    ranksep="0.55",
+    splines=polyline,
+    fontname="Noto Sans CJK SC",
+    label="系统软件架构图",
+    labelloc=t,
+    fontsize=26
+  ];
+  node [
+    shape=rect,
+    style="rounded,filled",
+    fontname="Noto Sans CJK SC",
+    fontsize=15,
+    color="#2F3A4A",
+    penwidth=1.4,
+    fillcolor="#F7F9FC",
+    margin="0.12,0.08"
+  ];
+  edge [
+    fontname="Noto Sans CJK SC",
+    fontsize=12,
+    color="#52606D",
+    arrowsize=0.8,
+    penwidth=1.2
+  ];
+
+  input [label="输入与配置\n比赛场地：导引线 / 障碍 / 台阶 / 平台 / 标志 / 物资\n参数文件：competition.yaml / navigation.yaml / gait_params.yaml", fillcolor="#FFF8E8"];
+  perception [label="感知层  rk_perception\nreal_line_tracker_node：黑线检测、误差计算、置信度输出\nmock_sign_detector_node：抓取平台标志、警示标志\nmock_item_tag_node：起始物资、场地物资定位", fillcolor="#EBF5FF"];
+  interfaces [label="统一接口层  rk_interfaces\n消息：LineTrack / SignDetectionArray / ItemTagArray\n动作：RunMission / ExecuteMotion / ExecuteArmTask", fillcolor="#F7F9FC"];
+  decision [label="任务决策层  rk_mission\nmission_state_machine_node\n23 阶段完整比赛流程 / 抽签标志映射 / 动作调度 / 进度反馈", fillcolor="#F0F4FF"];
+  navigation [label="导航控制层  rk_navigation\nline_follower_node\nWAIT_START / LINE_FOLLOW / SHORT_LOST / SEARCH_LINE / STOP\n输出：/navigation/cmd_vel", fillcolor="#ECFFF5"];
+  motion [label="运动适配与驱动层\nrk_locomotion：gait_control_node + RobotMotionAdapter\nrk_unitree_driver：cmd_vel_bridge_node + Go2MotionClient\n限速 / 超时 / Move / StopMove", fillcolor="#F2ECFF"];
+  execution [label="执行与工具层  rk_tools\nmock_locomotion_server：跳跃 / 台阶 / 警示动作 / 停止\nmock_arm_server：抓取 / 卸载 / 放置\nsafety_node：/safety/estop 急停服务", fillcolor="#FFF1F1"];
+  bringup [label="系统启动层  rk_bringup\nmock_competition.launch.py\n一键启动感知、导航、任务、执行与安全节点", fillcolor="#F7F7F7"];
+
+  input -> perception [label="环境信息"];
+  perception -> interfaces [label="标准 ROS2 消息"];
+  interfaces -> decision [label="标志 / 物资"];
+  interfaces -> navigation [label="导引线误差"];
+  decision -> navigation [label="/mission/start / stop"];
+  decision -> execution [label="ExecuteMotion / ExecuteArmTask"];
+  navigation -> motion [label="/navigation/cmd_vel"];
+  motion -> execution [label="Go2 可执行命令"];
+  execution -> decision [label="动作结果 / 阶段反馈"];
+  bringup -> input [style=dashed, label="加载参数"];
+  bringup -> perception [style=dashed, label="启动节点"];
+  bringup -> decision [style=dashed];
+  bringup -> execution [style=dashed];
+}

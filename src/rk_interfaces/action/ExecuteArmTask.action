@@ -1,0 +1,8 @@
+string task_name
+string target
+---
+bool success
+string message
+---
+string current_step
+float32 progress

@@ -1,0 +1,50 @@
+digraph G {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    pad="0.25",
+    nodesep="0.45",
+    ranksep="0.35",
+    splines=ortho,
+    fontname="Noto Sans CJK SC",
+    label="六层一体化技术架构图",
+    labelloc=t,
+    fontsize=26
+  ];
+  node [
+    shape=rect,
+    style="rounded,filled",
+    fontname="Noto Sans CJK SC",
+    fontsize=15,
+    color="#2F3A4A",
+    penwidth=1.4,
+    fillcolor="#F7F9FC",
+    margin="0.14,0.08"
+  ];
+  edge [
+    fontname="Noto Sans CJK SC",
+    fontsize=12,
+    color="#52606D",
+    arrowsize=0.8,
+    penwidth=1.2
+  ];
+
+  perception [label="第一层：多模态感知层\nD435i 相机 / 雷达 / 测距\n黑线检测 / 标志识别 / 物资定位\n输出：LineTrack、SignDetectionArray、ItemTagArray", fillcolor="#EBF5FF"];
+  navigation [label="第二层：导航控制层\nline_follower_node\n巡线闭环 / 丢线恢复 / 转向搜索\n输出：/navigation/cmd_vel", fillcolor="#ECFFF5"];
+  mission [label="第三层：任务决策层\nmission_state_machine_node\n23 阶段比赛状态机\n抽签标志映射 / 动作调度 / 进度反馈", fillcolor="#F0F4FF"];
+  adapter [label="第四层：运动适配层\nRobotMotionAdapter + gait_control_node\nJSON 步态命令 / cmd_vel 封装\n限速 / 超时 / 控制锁", fillcolor="#F2ECFF"];
+  execution [label="第五层：执行驱动层\ncmd_vel_bridge_node / Go2MotionClient / Arm Task\nGo2 行走跳跃 / 台阶 / 警示动作\n机械臂抓取 / 卸载 / 放置", fillcolor="#FFF1F1"];
+  safety [label="第六层：安全保障层\nSafetyMonitor + /safety/estop\n速度边界 / 命令超时 / 重复停止\n急停保护 / 状态监控 / 赛前检查", fillcolor="#FFEFE8"];
+
+  perception -> navigation [label="导引线误差"];
+  perception -> mission [label="标志与物资信息"];
+  navigation -> adapter [label="速度控制"];
+  mission -> navigation [label="导航起停"];
+  mission -> adapter [label="运动动作"];
+  mission -> execution [label="机械臂任务"];
+  adapter -> execution [label="Go2 可执行命令"];
+  safety -> perception [style=dashed, label="状态监控"];
+  safety -> navigation [style=dashed, label="任务停止"];
+  safety -> adapter [style=dashed, label="限速/锁定"];
+  safety -> execution [style=dashed, label="急停/停止"];
+}
