@@ -13,8 +13,8 @@ from rk_maze.heading_controller import HeadingController, HeadingControllerConfi
 
 ROUTE = ['LEFT', 'LEFT', 'RIGHT', 'RIGHT', 'LEFT']
 TURN_YAWS = {'LEFT': +90.0, 'RIGHT': -90.0}
-STOP_DIST = 0.20       # 前墙<20cm才触发
-SIDE_OPEN = 0.50       # 侧向>50cm认为有开口
+STOP_DIST = 0.30
+EMERG_DIST = 0.10
 VX_CRUISE = 0.30
 VX_TURN = 0.10
 WZ_TURN = 0.50
@@ -58,11 +58,26 @@ last_imu_time = 0.0
 print(f'迷宫全自主 L-L-R-R-L 启动')
 print(f'状态: {state}  弯: {turn_idx+1}/{len(ROUTE)}')
 
+# Shared state for high-frequency publishing
+current_twist = Twist()
+lock_twist = threading.Lock()
+
+def publish_loop():
+    """Continuous high-frequency publisher to prevent watchdog timeouts."""
+    while True:
+        with lock_twist:
+            tw = Twist(); tw.linear.x = current_twist.linear.x; tw.angular.z = current_twist.angular.z
+        pub.publish(tw)
+        time.sleep(0.02)  # 50Hz
+
+pub_thread = threading.Thread(target=publish_loop, daemon=True)
+pub_thread.start()
+
 t0 = time.time()
 while time.time() - t0 < 120:
-    rclpy.spin_once(chk, timeout_sec=0.02)
+    rclpy.spin_once(chk, timeout_sec=0.01)
     frame[0] += 1
-    if frame[0] % 6 != 0: continue
+    if frame[0] % 2 != 0: continue
 
     with lock:
         pts = list(cloud_data); o_yaw = odo_yaw[0]; o_yaw0 = odo_yaw0[0]; i_wz = imu_wz[0]
@@ -101,7 +116,21 @@ while time.time() - t0 < 120:
         # Front corner wall: close front AND left opens up (for LEFT turn)
         turn_left_ready = (0.01 < front < 0.40) and (left_cl > 0.50)
         turn_right_ready = (0.01 < front < 0.40) and (right_cl > 0.50)
-        corner = (0.01 < front < 0.15) or turn_left_ready or turn_right_ready
+        # Emergency stop
+        if 0.01 < front < EMERG_DIST and turn_idx < len(ROUTE):
+            tw.linear.x = 0.0; tw.angular.z = 0.0
+            with lock_twist: current_twist = tw
+            print(f'EMERG! front={front:.2f}m')
+            time.sleep(0.3); continue
+
+        side_blocked = (left_cl < 0.25 and right_cl < 0.25)
+        corner = (0.01 < front < STOP_DIST) and not side_blocked
+
+        if 0.01 < front < STOP_DIST and side_blocked:
+            tw.linear.x = -0.10; tw.angular.z = 0.0
+            with lock_twist: current_twist = tw
+            if log_flag: print(f'BACKUP front={front:.2f}m L={left_cl:.2f}m R={right_cl:.2f}m')
+            continue
 
         if corner:
             state = 'TURN'; state_enter_frame = frame[0]
@@ -109,12 +138,11 @@ while time.time() - t0 < 120:
             turn_start_yaw = rel_yaw; turn_imu_yaw = 0.0; last_imu_time = now
             reacquire_count = 0
             grid = LocalOccupancyGrid(LocalGridConfig())
-            trigger = 'wall' if front < STOP_DIST else 'side_open'
-            print(f'拐角[{trigger}]! 前={front:.2f}m L={left_cl:.2f}m R={right_cl:.2f}m  弯{turn_idx+1}: {turn_dir}')
+            print(f'拐角! 前={front:.2f}m L={left_cl:.2f}m R={right_cl:.2f}m  弯{turn_idx+1}: {turn_dir}')
             continue
 
         tw.linear.x = VX_CRUISE
-        tw.angular.z = min(0.30, max(-0.30, heading_deg * 0.02))
+        tw.angular.z = min(0.15, max(-0.15, heading_deg * 0.01))
 
         if log_flag: print(f'CRUISE front={front:.2f}m L={left_cl:.2f}m R={right_cl:.2f}m hdg={heading_deg:+.1f}deg')
 
@@ -144,9 +172,9 @@ while time.time() - t0 < 120:
     elif state == 'DONE':
         print('迷宫完成!'); break
 
-    for _ in range(3): pub.publish(tw)  # publish 3x for reliability
+    with lock_twist: current_twist = tw
 
 # Final stop
-tw = Twist()
-for i in range(30): pub.publish(tw); time.sleep(0.05)
+with lock_twist: current_twist = Twist()
+time.sleep(0.5)
 print(f'结束。状态={state} 完成弯数={turn_idx}/{len(ROUTE)}')
