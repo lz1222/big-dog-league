@@ -290,6 +290,30 @@ def test_formal_motion_limits_share_one_contract_across_all_backends():
     assert '--max-yaw "$MOTION_MAX_YAW"' in start_script
 
 
+def test_formal_white_bar_uses_structural_contract_not_hsv_brightness_gate():
+    """正式白杆必须使用经实景回归的相对结构检测与有限时序稳定。"""
+    config = read_formal_config()
+    tracker = config['real_line_tracker_node']['ros__parameters']
+
+    assert tracker['white_bar_structural_enabled'] is True
+    assert tracker['white_bar_roi_top_fraction'] == pytest.approx(0.15)
+    assert tracker['white_bar_roi_bottom_fraction'] == pytest.approx(0.98)
+    assert tracker['white_bar_min_edge_strength'] == pytest.approx(35.0)
+    assert tracker['white_bar_min_span_ratio'] == pytest.approx(0.18)
+    assert tracker['white_bar_min_pair_height_px'] == 4
+    assert tracker['white_bar_max_pair_height_px'] == 26
+    assert tracker['white_bar_route_margin_fraction'] == pytest.approx(0.04)
+    assert tracker['white_bar_min_local_contrast'] == pytest.approx(3.0)
+    assert tracker['white_bar_max_candidate_rows'] == 16
+    assert tracker['white_bar_stable_frames'] == 3
+    assert tracker['white_bar_max_y_jump_px'] == pytest.approx(5.0)
+    assert tracker['white_bar_max_missed_frames'] == 2
+
+    # 旧 HSV 参数只能作为 legacy/debug 对照，不能被本测试改成新正式阈值。
+    assert tracker['white_bar_v_min'] == 180
+    assert tracker['white_bar_s_max'] == 80
+
+
 def test_formal_line_camera_uses_the_validated_sonix_profile_end_to_end():
     """正式入口必须把已验收的 USB profile 传到唯一的 camera source。"""
     launch_source = FORMAL_LAUNCH.read_text(encoding='utf-8')

@@ -319,6 +319,337 @@ def detect_white_bar(
     )
 
 
+@dataclass(frozen=True)
+class StructuralWhiteBarConfig:
+    """白横杆结构检测配置：仅约束几何/局部对比，不使用绝对白度门。"""
+
+    enabled: bool = True
+    roi_top_fraction: float = 0.15
+    roi_bottom_fraction: float = 0.98
+    min_edge_strength: float = 35.0
+    min_span_ratio: float = 0.18
+    min_pair_height_px: int = 4
+    max_pair_height_px: int = 26
+    route_margin_fraction: float = 0.04
+    min_local_contrast: float = 3.0
+    max_candidate_rows: int = 16
+    stable_frames: int = 3
+    max_y_jump_px: float = 5.0
+    max_missed_frames: int = 2
+
+    def normalized(self):
+        """限制运行时参数，保证有限搜索和白杆离开视野后的安全失效。"""
+        return StructuralWhiteBarConfig(
+            enabled=bool(self.enabled),
+            roi_top_fraction=clamp(float(self.roi_top_fraction), 0.0, 0.85),
+            roi_bottom_fraction=clamp(
+                float(self.roi_bottom_fraction), 0.15, 1.0
+            ),
+            min_edge_strength=max(1.0, float(self.min_edge_strength)),
+            min_span_ratio=clamp(float(self.min_span_ratio), 0.02, 1.0),
+            min_pair_height_px=max(1, int(self.min_pair_height_px)),
+            max_pair_height_px=max(2, int(self.max_pair_height_px)),
+            route_margin_fraction=clamp(
+                float(self.route_margin_fraction), 0.0, 0.45
+            ),
+            min_local_contrast=max(0.0, float(self.min_local_contrast)),
+            max_candidate_rows=max(2, min(64, int(self.max_candidate_rows))),
+            stable_frames=max(1, min(20, int(self.stable_frames))),
+            max_y_jump_px=max(0.5, float(self.max_y_jump_px)),
+            max_missed_frames=max(0, min(10, int(self.max_missed_frames))),
+        )
+
+
+@dataclass(frozen=True)
+class StructuralWhiteBarCandidate:
+    """仅供节点时序过滤和 debug overlay 使用的原始结构候选。"""
+
+    result: SpecialDetectionResult
+    reference_x: float
+    roi_top_y: int
+    roi_bottom_y: int
+    top_y: Optional[int] = None
+    bottom_y: Optional[int] = None
+    left_x: Optional[int] = None
+    right_x: Optional[int] = None
+    support_ratio: float = 0.0
+    local_contrast: float = 0.0
+
+
+def _structural_white_bar_reference_x(line_result, robot_center_x, image_width):
+    """优先使用当前可靠路径锚点；丢线时回退到已标定机身中心。"""
+    fallback = _normalize_preferred_center(robot_center_x, image_width)
+    anchor = getattr(line_result, 'tracking_anchor_x', None)
+    if bool(getattr(line_result, 'line_visible', False)) and anchor is not None:
+        return _normalize_preferred_center(anchor, image_width)
+    return fallback
+
+
+def _cluster_structural_fragments(mask, max_gap_px):
+    """合并被黑线切开的水平边缘片段，避免要求单一完整 contour。"""
+    values = np.asarray(mask, dtype=np.uint8)
+    padded = np.pad(values, (1, 1))
+    changes = np.flatnonzero(np.diff(padded))
+    spans = [
+        [int(start), int(end)]
+        for start, end in zip(changes[0::2], changes[1::2])
+    ]
+    if not spans:
+        return []
+    clusters = [spans[0]]
+    for start, end in spans[1:]:
+        previous = clusters[-1]
+        if start - previous[1] <= max_gap_px:
+            previous[1] = end
+        else:
+            clusters.append([start, end])
+    return [(start, end) for start, end in clusters]
+
+
+def _detect_white_bar_structural_candidate(
+    image,
+    line_result,
+    robot_center_x,
+    config,
+):
+    """提取相反 Scharr-Y 边缘对；该函数无历史状态，适合离线回归。"""
+    config = config.normalized()
+    height, width = image.shape[:2]
+    reference_x = _structural_white_bar_reference_x(
+        line_result, robot_center_x, width
+    )
+    roi_top = int(round(height * config.roi_top_fraction))
+    roi_bottom = int(round(height * config.roi_bottom_fraction))
+    roi_top = int(clamp(roi_top, 0, max(0, height - 2)))
+    roi_bottom = int(clamp(roi_bottom, roi_top + 2, height))
+    empty = StructuralWhiteBarCandidate(
+        result=SpecialDetectionResult(
+            target_type='white_bar', reason='structural_not_detected'
+        ),
+        reference_x=reference_x,
+        roi_top_y=roi_top,
+        roi_bottom_y=roi_bottom,
+    )
+    if not config.enabled or image is None or height < 4 or width < 4:
+        return empty
+
+    # 仅做一次图像梯度和按行 reduce；随后只配对 top-K 强边缘行，避免 N² 全图扫描。
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    smooth = cv2.GaussianBlur(gray, (3, 3), 0)
+    gradient_y = cv2.Scharr(smooth, cv2.CV_32F, 0, 1)
+    positive = gradient_y > config.min_edge_strength
+    negative = gradient_y < -config.min_edge_strength
+    positive_support = np.mean(positive[roi_top:roi_bottom], axis=1)
+    negative_support = np.mean(negative[roi_top:roi_bottom], axis=1)
+    top_rows = np.flatnonzero(positive_support >= config.min_span_ratio)
+    bottom_rows = np.flatnonzero(negative_support >= config.min_span_ratio)
+    if not len(top_rows) or not len(bottom_rows):
+        return empty
+
+    # 只保留最强有限行；原始支持率用于排序，避免膨胀后的地面纹理挤入候选。
+    top_rows = top_rows[np.argsort(positive_support[top_rows])[
+        -config.max_candidate_rows:
+    ]] + roi_top
+    bottom_rows = bottom_rows[np.argsort(negative_support[bottom_rows])[
+        # 下边缘只保留有限强候选；八行覆盖 FINISH 的局部曝光断裂，
+        # 同时避免退回全行 N² 搜索而拖慢 13Hz 巡线链。
+        -max(2, min(8, config.max_candidate_rows)):
+    ]] + roi_top
+    positive_connected = cv2.dilate(
+        cv2.dilate(positive.astype(np.uint8), np.ones((3, 1), np.uint8)),
+        np.ones((1, 9), np.uint8)
+    ).astype(bool)
+    negative_connected = cv2.dilate(
+        cv2.dilate(negative.astype(np.uint8), np.ones((3, 1), np.uint8)),
+        np.ones((1, 9), np.uint8)
+    ).astype(bool)
+    route_margin_px = int(round(width * config.route_margin_fraction))
+    max_fragment_gap_px = max(9, int(round(width * 0.18)))
+    best = None
+
+    for top_y in top_rows:
+        for bottom_y in bottom_rows:
+            pair_height = int(bottom_y - top_y)
+            if not (
+                config.min_pair_height_px <= pair_height
+                <= config.max_pair_height_px
+            ):
+                continue
+            paired = positive_connected[top_y] & negative_connected[bottom_y]
+            support_ratio = float(np.mean(paired))
+            if support_ratio < config.min_span_ratio:
+                continue
+            # fragments 可被黑线切开：总 support 与首尾 span 共同约束，且
+            # 路径参考附近的空洞不得超过 18% 图宽，防止远处两段噪声被误合并。
+            indices = np.flatnonzero(paired)
+            left_x, right_x = int(indices[0]), int(indices[-1] + 1)
+            span_px = right_x - left_x
+            if span_px / max(1.0, float(width)) < config.min_span_ratio:
+                continue
+            if not (
+                left_x <= reference_x - route_margin_px
+                and right_x >= reference_x + route_margin_px
+            ):
+                continue
+            left_of_route = indices[indices <= reference_x]
+            right_of_route = indices[indices >= reference_x]
+            if not len(left_of_route) or not len(right_of_route):
+                continue
+            if int(right_of_route[0] - left_of_route[-1]) > max_fragment_gap_px:
+                continue
+            # 上下文只在 y 方向局部取样、横向覆盖全赛道，避免黑线路径
+            # 在白杆中央形成的小缺口把片段内 median 错误放大。
+            inner = gray[top_y + 1:bottom_y]
+            upper = gray[max(0, top_y - 5):top_y]
+            lower = gray[bottom_y + 1:min(height, bottom_y + 6)]
+            if not inner.size or not upper.size or not lower.size:
+                continue
+            context = np.concatenate((upper, lower), axis=0)
+            local_contrast = float(np.median(inner) - np.median(context))
+            if local_contrast < config.min_local_contrast:
+                continue
+            edge_score = clamp(
+                (support_ratio - config.min_span_ratio)
+                / max(0.01, 0.60 - config.min_span_ratio), 0.0, 1.0
+            )
+            span_score = clamp(
+                (span_px / float(width) - config.min_span_ratio)
+                / max(0.01, 0.70 - config.min_span_ratio), 0.0, 1.0
+            )
+            contrast_score = clamp(local_contrast / 12.0, 0.0, 1.0)
+            confidence = clamp(
+                0.35 * edge_score + 0.25 * span_score
+                + 0.25 * contrast_score + 0.15,
+                0.0, 1.0
+            )
+            score = support_ratio * pair_height * (1.0 + contrast_score)
+            candidate = StructuralWhiteBarCandidate(
+                result=SpecialDetectionResult(
+                    target_type='white_bar',
+                    visible=True,
+                    confidence=confidence,
+                    center_x=clamp(
+                        ((left_x + right_x) / 2.0) / float(width),
+                        0.0, 1.0
+                    ),
+                    center_y=clamp(
+                        ((top_y + bottom_y) / 2.0) / float(height),
+                        0.0, 1.0
+                    ),
+                    area_ratio=clamp(
+                        (span_px * pair_height) / float(width * height),
+                        0.0, 1.0
+                    ),
+                    width_ratio=clamp(span_px / float(width), 0.0, 1.0),
+                    height_ratio=clamp(pair_height / float(height), 0.0, 1.0),
+                    inside_candidate=True,
+                    reason='structural_raw',
+                ),
+                reference_x=reference_x,
+                roi_top_y=roi_top,
+                roi_bottom_y=roi_bottom,
+                top_y=int(top_y),
+                bottom_y=int(bottom_y),
+                left_x=int(left_x),
+                right_x=int(right_x),
+                support_ratio=support_ratio,
+                local_contrast=local_contrast,
+            )
+            if best is None or score > best[0]:
+                best = (score, candidate)
+    return best[1] if best is not None else empty
+
+
+def detect_white_bar_structural(
+    image,
+    line_result=None,
+    robot_center_x=None,
+    config=None,
+):
+    """正式白横杆原始检测入口；时序稳定由节点独立处理。"""
+    if config is None:
+        config = StructuralWhiteBarConfig()
+    if robot_center_x is None:
+        robot_center_x = float(image.shape[1]) / 2.0
+    return _detect_white_bar_structural_candidate(
+        image, line_result, robot_center_x, config
+    ).result
+
+
+class StructuralWhiteBarTemporalFilter:
+    """有限短时关联：滤掉单帧 y 跳变，且不会无限保持已离开视野的横杆。"""
+
+    def __init__(self, config):
+        self.config = config.normalized()
+        self.stable_candidate = None
+        self.pending_candidate = None
+        self.pending_count = 0
+        self.missed_count = 0
+
+    def reset(self):
+        self.stable_candidate = None
+        self.pending_candidate = None
+        self.pending_count = 0
+        self.missed_count = 0
+
+    def configure(self, config):
+        normalized = config.normalized()
+        if normalized != self.config:
+            self.config = normalized
+            self.reset()
+
+    def update(self, raw_candidate):
+        """输出稳定候选；不匹配帧最多短暂保持，超过上限立即失效。"""
+        raw = raw_candidate.result
+        if not raw.visible:
+            return self._handle_miss('structural_miss')
+        if self.stable_candidate is not None:
+            stable_y = self.stable_candidate.result.center_y
+            current_y = raw.center_y
+            image_height = max(1.0, float(raw_candidate.roi_bottom_y))
+            if abs(current_y - stable_y) * image_height > self.config.max_y_jump_px:
+                return self._handle_miss('structural_unstable_y')
+            self.stable_candidate = raw_candidate
+            self.missed_count = 0
+            stable = replace(raw, visible=True, reason='structural_stable')
+            return stable
+
+        if self.pending_candidate is None:
+            self.pending_candidate = raw_candidate
+            self.pending_count = 1
+        else:
+            pending_y = self.pending_candidate.result.center_y
+            image_height = max(1.0, float(raw_candidate.roi_bottom_y))
+            if abs(raw.center_y - pending_y) * image_height <= self.config.max_y_jump_px:
+                self.pending_candidate = raw_candidate
+                self.pending_count += 1
+            else:
+                self.pending_candidate = raw_candidate
+                self.pending_count = 1
+        if self.pending_count >= self.config.stable_frames:
+            self.stable_candidate = self.pending_candidate
+            self.pending_candidate = None
+            self.missed_count = 0
+            return replace(raw, visible=True, reason='structural_stable')
+        return replace(raw, visible=False, confidence=0.0,
+                       reason='structural_warming_up')
+
+    def _handle_miss(self, reason):
+        self.pending_candidate = None
+        self.pending_count = 0
+        self.missed_count += 1
+        if (
+            self.stable_candidate is not None
+            and self.missed_count <= self.config.max_missed_frames
+        ):
+            held = self.stable_candidate.result
+            return replace(held, visible=True,
+                           confidence=held.confidence * 0.85,
+                           reason='structural_miss_hold')
+        self.stable_candidate = None
+        return SpecialDetectionResult(target_type='white_bar', reason=reason)
+
+
 def detect_corner_candidate(
     line_result,
     image_width,
@@ -1245,6 +1576,20 @@ class RealLineTrackerNode(Node):
         self.declare_parameter('white_bar_min_width_ratio', 0.20)
         self.declare_parameter('white_bar_max_height_ratio', 0.15)
         self.declare_parameter('white_bar_min_area_ratio', 0.002)
+        # 正式白横杆使用相对结构证据；旧 HSV 参数保留给 legacy/debug 对照。
+        self.declare_parameter('white_bar_structural_enabled', True)
+        self.declare_parameter('white_bar_roi_top_fraction', 0.15)
+        self.declare_parameter('white_bar_roi_bottom_fraction', 0.98)
+        self.declare_parameter('white_bar_min_edge_strength', 35.0)
+        self.declare_parameter('white_bar_min_span_ratio', 0.18)
+        self.declare_parameter('white_bar_min_pair_height_px', 4)
+        self.declare_parameter('white_bar_max_pair_height_px', 32)
+        self.declare_parameter('white_bar_route_margin_fraction', 0.04)
+        self.declare_parameter('white_bar_min_local_contrast', 2.0)
+        self.declare_parameter('white_bar_max_candidate_rows', 24)
+        self.declare_parameter('white_bar_stable_frames', 3)
+        self.declare_parameter('white_bar_max_y_jump_px', 5.0)
+        self.declare_parameter('white_bar_max_missed_frames', 2)
         self.declare_parameter('corner_min_heading_error', 0.30)
         self.declare_parameter('corner_edge_fraction', 0.28)
 
@@ -1283,6 +1628,12 @@ class RealLineTrackerNode(Node):
         self.last_result = None
         self.pending_bottom_x = None
         self.pending_stable_count = 0
+        # 白杆时序状态独立于黑线锁线；短暂视觉抖动不得污染巡线状态。
+        self.white_bar_temporal_filter = StructuralWhiteBarTemporalFilter(
+            StructuralWhiteBarConfig()
+        )
+        self.last_white_bar_debug = None
+        self.last_white_bar_result = None
         self.refresh_parameters()
 
         self.publisher = self.create_publisher(
@@ -1434,6 +1785,48 @@ class RealLineTrackerNode(Node):
         self.white_bar_min_area_ratio = max(
             0.0,
             float(self.get_parameter('white_bar_min_area_ratio').value)
+        )
+        self.white_bar_structural_config = StructuralWhiteBarConfig(
+            enabled=self._get_bool_parameter('white_bar_structural_enabled', True),
+            roi_top_fraction=float(
+                self.get_parameter('white_bar_roi_top_fraction').value
+            ),
+            roi_bottom_fraction=float(
+                self.get_parameter('white_bar_roi_bottom_fraction').value
+            ),
+            min_edge_strength=float(
+                self.get_parameter('white_bar_min_edge_strength').value
+            ),
+            min_span_ratio=float(
+                self.get_parameter('white_bar_min_span_ratio').value
+            ),
+            min_pair_height_px=int(
+                self.get_parameter('white_bar_min_pair_height_px').value
+            ),
+            max_pair_height_px=int(
+                self.get_parameter('white_bar_max_pair_height_px').value
+            ),
+            route_margin_fraction=float(
+                self.get_parameter('white_bar_route_margin_fraction').value
+            ),
+            min_local_contrast=float(
+                self.get_parameter('white_bar_min_local_contrast').value
+            ),
+            max_candidate_rows=int(
+                self.get_parameter('white_bar_max_candidate_rows').value
+            ),
+            stable_frames=int(
+                self.get_parameter('white_bar_stable_frames').value
+            ),
+            max_y_jump_px=float(
+                self.get_parameter('white_bar_max_y_jump_px').value
+            ),
+            max_missed_frames=int(
+                self.get_parameter('white_bar_max_missed_frames').value
+            ),
+        ).normalized()
+        self.white_bar_temporal_filter.configure(
+            self.white_bar_structural_config
         )
         self.corner_min_heading_error = max(
             0.0,
@@ -1730,6 +2123,19 @@ class RealLineTrackerNode(Node):
     def publish_special_detections(self, image_msg, image, line_result):
         image_width = image.shape[1]
         robot_center_x = self.robot_center_x(image_width)
+        # 正式 topic 只发布结构检测结果；旧 HSV detect_white_bar() 保留为
+        # rollback/离线基线，不能与正式结果竞争发布。
+        raw_white_bar = _detect_white_bar_structural_candidate(
+            image,
+            line_result,
+            robot_center_x,
+            self.white_bar_structural_config,
+        )
+        white_bar_result = self.white_bar_temporal_filter.update(
+            raw_white_bar
+        )
+        self.last_white_bar_debug = raw_white_bar
+        self.last_white_bar_result = white_bar_result
         detections = (
             (
                 self.red_circle_publisher,
@@ -1754,14 +2160,7 @@ class RealLineTrackerNode(Node):
             ),
             (
                 self.white_bar_publisher,
-                detect_white_bar(
-                    image,
-                    self.white_bar_v_min,
-                    self.white_bar_s_max,
-                    self.white_bar_min_width_ratio,
-                    self.white_bar_max_height_ratio,
-                    self.white_bar_min_area_ratio
-                ),
+                white_bar_result,
             ),
             (
                 self.corner_candidate_publisher,
@@ -2252,6 +2651,8 @@ class RealLineTrackerNode(Node):
                 2
             )
 
+        self.draw_white_bar_structural_debug(overlay)
+
         text_lines = [
             f'reason={result.reason}',
             f'line_width_cm={self.tracker_config.line_width_cm:.1f}',
@@ -2295,6 +2696,61 @@ class RealLineTrackerNode(Node):
         self.draw_overlay_text(overlay, text_lines)
 
         return overlay
+
+    def draw_white_bar_structural_debug(self, overlay):
+        """在既有 overlay 上叠加结构候选，默认关闭 debug 时不会产生额外成本。"""
+        candidate = self.last_white_bar_debug
+        if candidate is None:
+            return
+        height, width = overlay.shape[:2]
+        cv2.rectangle(
+            overlay,
+            (0, int(clamp(candidate.roi_top_y, 0, height - 1))),
+            (width - 1, int(clamp(candidate.roi_bottom_y - 1, 0, height - 1))),
+            (255, 128, 0),
+            1,
+        )
+        self.draw_optional_vertical_line(
+            overlay, candidate.reference_x, (255, 128, 0), 1
+        )
+        if candidate.top_y is None or candidate.bottom_y is None:
+            return
+        left_x = int(clamp(candidate.left_x, 0, width - 1))
+        right_x = int(clamp(candidate.right_x - 1, left_x, width - 1))
+        raw_color = (0, 255, 255)
+        cv2.rectangle(
+            overlay,
+            (left_x, int(candidate.top_y)),
+            (right_x, int(candidate.bottom_y)),
+            raw_color,
+            1,
+        )
+        accepted = bool(
+            self.last_white_bar_result is not None
+            and self.last_white_bar_result.visible
+        )
+        if accepted:
+            cv2.rectangle(
+                overlay,
+                (left_x, int(candidate.top_y)),
+                (right_x, int(candidate.bottom_y)),
+                (0, 255, 0),
+                2,
+            )
+        white_reason = (
+            self.last_white_bar_result.reason
+            if self.last_white_bar_result is not None else 'none'
+        )
+        label = (
+            f'white_struct={white_reason} '
+            f'y={(candidate.top_y + candidate.bottom_y) / 2.0:.1f} '
+            f'span={candidate.right_x - candidate.left_x} '
+            f'contrast={candidate.local_contrast:.1f}'
+        )
+        cv2.putText(
+            overlay, label, (5, max(16, height - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.38, raw_color, 1, cv2.LINE_AA
+        )
 
     def make_failure_overlay(self, image_msg, image, reason, stage):
         overlay = self.make_overlay_base(image_msg, image)
