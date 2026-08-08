@@ -290,6 +290,40 @@ def test_formal_motion_limits_share_one_contract_across_all_backends():
     assert '--max-yaw "$MOTION_MAX_YAW"' in start_script
 
 
+def test_formal_line_camera_uses_the_validated_sonix_profile_end_to_end():
+    """正式入口必须把已验收的 USB profile 传到唯一的 camera source。"""
+    launch_source = FORMAL_LAUNCH.read_text(encoding='utf-8')
+    start_script = FORMAL_START_SCRIPT.read_text(encoding='utf-8')
+
+    # launch 默认值定义正式请求，Node 参数必须将同一组值注入 source。
+    assert "'line_camera_width', default_value='424'" in launch_source
+    assert "'line_camera_height', default_value='240'" in launch_source
+    assert "'line_camera_fps', default_value='15.0'" in launch_source
+    assert "'width': ParameterValue(line_camera_width, value_type=int)" in (
+        launch_source
+    )
+    assert "'height': ParameterValue(line_camera_height, value_type=int)" in (
+        launch_source
+    )
+    assert "'fps': ParameterValue(line_camera_fps, value_type=float)" in (
+        launch_source
+    )
+
+    # 一键脚本不允许以另一套默认值覆盖 launch 的已验收 profile。
+    assert 'LINE_CAMERA_WIDTH="${RK_COMPETITION_LINE_CAMERA_WIDTH:-424}"' in (
+        start_script
+    )
+    assert 'LINE_CAMERA_HEIGHT="${RK_COMPETITION_LINE_CAMERA_HEIGHT:-240}"' in (
+        start_script
+    )
+    assert 'LINE_CAMERA_FPS="${RK_COMPETITION_LINE_CAMERA_FPS:-15.0}"' in (
+        start_script
+    )
+    assert '"line_camera_width:=${LINE_CAMERA_WIDTH}"' in start_script
+    assert '"line_camera_height:=${LINE_CAMERA_HEIGHT}"' in start_script
+    assert '"line_camera_fps:=${LINE_CAMERA_FPS}"' in start_script
+
+
 def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
     """巡线与标识相机必须独立配置，并由 launch 覆盖 YAML 默认值。"""
     source = FORMAL_LAUNCH.read_text(encoding='utf-8')

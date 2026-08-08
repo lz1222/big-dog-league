@@ -245,12 +245,18 @@ def generate_launch_description():
             description='Stable explicit /dev/v4l/by-id path for USB line camera.',
         ),
         DeclareLaunchArgument(
-            'line_camera_width', default_value='640',
-            description='Requested USB line-camera width in pixels.',
+            'line_camera_width', default_value='424',
+            description=(
+                'Validated USB line-camera request width; Sonix may '
+                'negotiate its tested 320-pixel output.'
+            ),
         ),
         DeclareLaunchArgument(
-            'line_camera_height', default_value='480',
-            description='Requested USB line-camera height in pixels.',
+            'line_camera_height', default_value='240',
+            description=(
+                'Validated USB line-camera request height; negotiated '
+                'hardware dimensions are logged by line_camera_node.'
+            ),
         ),
         DeclareLaunchArgument(
             'line_camera_fps', default_value='15.0',
