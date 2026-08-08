@@ -24,7 +24,8 @@ real_line_tracker_node:
     roi_right_margin_fraction: 0.03
     threshold_value: 70
     max_lateral_error: 1.0
-    robot_center_x_offset_fraction: 0.0
+    # 320 px 图像下，机身几何中心对准黑线时的实测参考偏置为 +13.5 px。
+    robot_center_x_offset_fraction: 0.0422
     robot_center_x_offset_px: 0.0
     line_width_cm: 10.0
     num_scan_bands: 11
