@@ -91,6 +91,9 @@ def test_launch_uses_installed_wrapper_and_absolute_server_path():
     assert "'--interface', sdk_network_interface" in launch_source
     assert "'--listen-ip', sdk_udp_host" in launch_source
     assert "'--port', sdk_udp_port" in launch_source
+    assert "'--max-vx', motion_max_vx" in launch_source
+    assert "'--max-vy', motion_max_vy" in launch_source
+    assert "'--max-yaw', motion_max_yaw" in launch_source
     assert "'sdk_runtime_wrapper': ParameterValue(" in launch_source
     assert "'channel_factory_domain=0'" not in launch_source
     assert 'go2_sdk_udp_server' in launch_source

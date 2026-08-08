@@ -130,6 +130,9 @@ def generate_launch_description():
     sdk_server = LaunchConfiguration('sdk_server')
     sdk_udp_host = LaunchConfiguration('sdk_udp_host')
     sdk_udp_port = LaunchConfiguration('sdk_udp_port')
+    motion_max_vx = LaunchConfiguration('motion_max_vx')
+    motion_max_vy = LaunchConfiguration('motion_max_vy')
+    motion_max_yaw = LaunchConfiguration('motion_max_yaw')
     line_camera_device = LaunchConfiguration('line_camera_device')
     line_camera_width = LaunchConfiguration('line_camera_width')
     line_camera_height = LaunchConfiguration('line_camera_height')
@@ -295,6 +298,20 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'sdk_udp_port', default_value='15001',
             description='Production SDK UDP port.',
+        ),
+        # 正式比赛速度上限必须同时约束 ROS 转发器和 SDK server，避免任一端
+        # 回退到二进制默认值后产生“上游放行、下游停车”的合同断裂。
+        DeclareLaunchArgument(
+            'motion_max_vx', default_value='0.30',
+            description='Formal maximum absolute forward velocity in m/s.',
+        ),
+        DeclareLaunchArgument(
+            'motion_max_vy', default_value='0.05',
+            description='Formal maximum absolute lateral velocity in m/s.',
+        ),
+        DeclareLaunchArgument(
+            'motion_max_yaw', default_value='0.80',
+            description='Formal maximum absolute yaw velocity in rad/s.',
         ),
         DeclareLaunchArgument(
             'fake_sdk_action_executable',
@@ -574,6 +591,9 @@ def generate_launch_description():
                 '--interface', sdk_network_interface,
                 '--listen-ip', sdk_udp_host,
                 '--port', sdk_udp_port,
+                '--max-vx', motion_max_vx,
+                '--max-vy', motion_max_vy,
+                '--max-yaw', motion_max_yaw,
             ], output='log',
             condition=use_hardware_sdk_server,
         ),
@@ -587,8 +607,9 @@ def generate_launch_description():
                 'cmd_vel_topic': '/navigation/cmd_vel',
                 'udp_host': sdk_udp_host,
                 'udp_port': ParameterValue(sdk_udp_port, value_type=int),
-                'max_vx': 0.30,
-                'max_yaw': 0.80,
+                'max_vx': ParameterValue(motion_max_vx, value_type=float),
+                'max_vy': ParameterValue(motion_max_vy, value_type=float),
+                'max_yaw': ParameterValue(motion_max_yaw, value_type=float),
             }],
         ),
         # 这是测试专用合成输入，不是 mock locomotion Action Server。

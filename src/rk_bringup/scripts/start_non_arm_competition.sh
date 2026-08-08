@@ -24,6 +24,11 @@ LINE_CAMERA_FPS="${RK_COMPETITION_LINE_CAMERA_FPS:-15.0}"
 SDK_SERVER="${RK_COMPETITION_SDK_SERVER:-}"
 SDK_UDP_HOST="${RK_COMPETITION_SDK_UDP_HOST:-127.0.0.1}"
 SDK_UDP_PORT="${RK_COMPETITION_SDK_UDP_PORT:-15001}"
+# 正式速度合同由这组三个变量统一注入阶段 B 的 SDK server 和阶段 C 的
+# launch/forwarder；禁止其中任一端回退到 SDK 二进制自身的保守默认值。
+MOTION_MAX_VX="${RK_COMPETITION_MOTION_MAX_VX:-0.30}"
+MOTION_MAX_VY="${RK_COMPETITION_MOTION_MAX_VY:-0.05}"
+MOTION_MAX_YAW="${RK_COMPETITION_MOTION_MAX_YAW:-0.80}"
 STARTUP_TIMEOUT_SEC="${RK_COMPETITION_STARTUP_TIMEOUT_SEC:-25}"
 # 下列门禁数值必须由本机冷启动实测填写。留空不是“使用方便的默认值”，
 # 而是明确拒绝启动，避免把 ping 成功误当作 Sport 控制面就绪。
@@ -262,6 +267,9 @@ LAUNCH_ARGS=(
     "line_camera_fps:=${LINE_CAMERA_FPS}"
     "sdk_udp_host:=${SDK_UDP_HOST}"
     "sdk_udp_port:=${SDK_UDP_PORT}"
+    "motion_max_vx:=${MOTION_MAX_VX}"
+    "motion_max_vy:=${MOTION_MAX_VY}"
+    "motion_max_yaw:=${MOTION_MAX_YAW}"
 )
 # sdk_server 仅在显式指定时覆盖 launch 文件中 FindPackagePrefix 默认值。
 if [ -n "${SDK_SERVER}" ]; then
@@ -283,7 +291,8 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ] \
         --max-frame-gap-ms "$CONTROL_PLANE_MAX_FRAME_GAP_MS")"
     SERVER_COMMAND="$(printf '%q ' "$SDK_RUNTIME_WRAPPER" "$SDK_SERVER_BINARY" \
         --interface "$SDK_NETWORK_INTERFACE" --listen-ip "$SDK_UDP_HOST" \
-        --port "$SDK_UDP_PORT")"
+        --port "$SDK_UDP_PORT" --max-vx "$MOTION_MAX_VX" \
+        --max-vy "$MOTION_MAX_VY" --max-yaw "$MOTION_MAX_YAW")"
     # 阶段 A 成功后才启动阶段 B；以 server 的明确 listening 日志作为阶段 C
     # 放行条件。轮询只是观察状态，绝非用固定 sleep 猜测 DDS 是否完成发现。
     LAUNCH_COMMAND="source $(printf '%q' "$ENV_SCRIPT"); set -e; ${GATE_COMMAND}; ${SERVER_COMMAND} > $(printf '%q' "${LOG_DIR}/sdk_server.log") 2>&1 & sdk_pid=\$!; deadline=\$(( \$(date +%s) + $(printf '%q' "$SDK_LISTEN_TIMEOUT_SEC") )); while [ \$(date +%s) -lt \$deadline ]; do if grep -Fq 'UDP server listening on' $(printf '%q' "${LOG_DIR}/sdk_server.log"); then break; fi; if ! kill -0 \$sdk_pid 2>/dev/null; then echo 'SDK_STARTUP_DIAG classification=SDK_RUNTIME_LIBRARY_ERROR'; cat $(printf '%q' "${LOG_DIR}/sdk_server.log"); exit 1; fi; sleep 0.1; done; if ! grep -Fq 'UDP server listening on' $(printf '%q' "${LOG_DIR}/sdk_server.log"); then echo 'SDK_STARTUP_DIAG classification=ROBOT_CONTROL_PLANE_NOT_READY'; kill \$sdk_pid 2>/dev/null || true; exit 1; fi; echo 'CONTROL_PLANE_DIAG event=SDK_UDP_LISTENING'; ${LAUNCH_COMMAND}"

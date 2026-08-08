@@ -43,6 +43,9 @@ FORMAL_CONFIG = (
 FORMAL_LAUNCH = (
     PACKAGE_ROOT / 'launch' / 'competition_non_arm.launch.py'
 )
+FORMAL_START_SCRIPT = (
+    PACKAGE_ROOT / 'scripts' / 'start_non_arm_competition.sh'
+)
 PYTHON38_COMPATIBILITY_FILES = (
     PACKAGE_ROOT / 'rk_bringup' / 'non_arm_competition_contract.py',
     PACKAGE_ROOT / 'rk_bringup' / 'competition_readiness_node.py',
@@ -240,6 +243,51 @@ def test_formal_launch_declares_all_required_nodes_without_excluded_nodes():
     # 会令 readiness 的“可用”检查掩盖控制权分裂。
     assert executables.count('gait_control_node') == 1
     assert executables.count('command_mux_node') == 1
+
+
+def test_formal_motion_limits_share_one_contract_across_all_backends():
+    """正式巡线速度必须被 follower、forwarder 和 SDK server 同时接受。"""
+    config = read_formal_config()
+    follower = config['line_follower_node']['ros__parameters']
+    launch_source = FORMAL_LAUNCH.read_text(encoding='utf-8')
+    start_script = FORMAL_START_SCRIPT.read_text(encoding='utf-8')
+
+    # 所有正式 follower 速度档位都不能越过 SDK server 的正式硬上限。
+    max_follower_speed = max(
+        follower[name]
+        for name in (
+            'min_driving_speed', 'base_speed', 'mid_speed', 'slow_speed'
+        )
+    )
+    formal_max_vx = 0.30
+    assert max_follower_speed == pytest.approx(0.27)
+    assert max_follower_speed <= formal_max_vx
+
+    # launch 的同一参数必须同时到达 UDP forwarder 和 SDK server argv。
+    assert "'motion_max_vx', default_value='0.30'" in launch_source
+    assert "'--max-vx', motion_max_vx" in launch_source
+    assert "'max_vx': ParameterValue(motion_max_vx, value_type=float)" in (
+        launch_source
+    )
+    assert "'--max-vy', motion_max_vy" in launch_source
+    assert "'max_vy': ParameterValue(motion_max_vy, value_type=float)" in (
+        launch_source
+    )
+    assert "'--max-yaw', motion_max_yaw" in launch_source
+    assert "'max_yaw': ParameterValue(motion_max_yaw, value_type=float)" in (
+        launch_source
+    )
+
+    # 脚本阶段 B 启动 server、阶段 C 启动 forwarder 时复用同一环境变量。
+    assert 'MOTION_MAX_VX="${RK_COMPETITION_MOTION_MAX_VX:-0.30}"' in (
+        start_script
+    )
+    assert '"motion_max_vx:=${MOTION_MAX_VX}"' in start_script
+    assert '--max-vx "$MOTION_MAX_VX"' in start_script
+    assert '"motion_max_vy:=${MOTION_MAX_VY}"' in start_script
+    assert '--max-vy "$MOTION_MAX_VY"' in start_script
+    assert '"motion_max_yaw:=${MOTION_MAX_YAW}"' in start_script
+    assert '--max-yaw "$MOTION_MAX_YAW"' in start_script
 
 
 def test_formal_launch_shares_image_and_suppresses_hardware_in_smoke():
