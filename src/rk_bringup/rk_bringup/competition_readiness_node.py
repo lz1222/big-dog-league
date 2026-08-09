@@ -44,6 +44,13 @@ from rk_bringup.non_arm_competition_contract import (
     status_is_terminal_or_idle,
     smoke_test_helper_status,
 )
+from rk_bringup.readiness_profile import (
+    ISOLATED_LINE_VALIDATION_PROFILE,
+    profile_skips_check,
+    readiness_profile_graph_check,
+    skipped_by_profile_detail,
+    validate_readiness_profile,
+)
 
 
 class CompetitionReadinessNode(Node):
@@ -164,6 +171,10 @@ class CompetitionReadinessNode(Node):
         defaults = {
             'hardware_mode': True,
             'software_smoke_mode': False,
+            # 生产默认永远完整检查；isolated profile 只供明确关闭 mission
+            # nodes 的单次巡线 validation，不能用多个模糊 skip 参数替代。
+            'readiness_profile': 'production',
+            'start_mission_nodes': True,
             'line_image_topic': DEFAULT_LINE_IMAGE_TOPIC,
             'sign_image_topic': DEFAULT_SIGN_IMAGE_TOPIC,
             'sign_camera_frame_id': DEFAULT_SIGN_CAMERA_FRAME_ID,
@@ -213,6 +224,12 @@ class CompetitionReadinessNode(Node):
         self.hardware_mode = self._bool_parameter('hardware_mode')
         self.software_smoke_mode = self._bool_parameter(
             'software_smoke_mode'
+        )
+        self.start_mission_nodes = self._bool_parameter(
+            'start_mission_nodes'
+        )
+        self.readiness_profile = validate_readiness_profile(
+            self.get_parameter('readiness_profile').value
         )
         for name in (
             'line_image_topic',
@@ -555,9 +572,28 @@ class CompetitionReadinessNode(Node):
             )
         return ReadinessCheck(label, True, 'terminal_or_idle')
 
+    def _profile_skipped_check(self, label):
+        """显式标注 profile 豁免，绝不把刻意不存在伪装成实际 PASS。"""
+        return ReadinessCheck(
+            label, True, skipped_by_profile_detail(self.readiness_profile),
+            critical=False,
+        )
+
+    @property
+    def _isolated_line_validation(self):
+        return self.readiness_profile == ISOLATED_LINE_VALIDATION_PROFILE
+
     def evaluate(self):
         """执行一次完整的只读检查，返回可序列化的检查列表。"""
         checks = []
+        # profile 与 launch graph 必须成对出现，阻止比赛现场误用 validation
+        # profile 或带着关闭 mission nodes 的 production 启动。
+        profile_ok, profile_detail = readiness_profile_graph_check(
+            self.readiness_profile, self.start_mission_nodes,
+        )
+        checks.append(ReadinessCheck(
+            'readiness_profile_graph_consistency', profile_ok, profile_detail,
+        ))
         # cmd_vel：按 GID 去重，必须恰好一个唯一发布者且为 command_mux_node。
         publisher_infos = self.get_publishers_info_by_topic(
             self.final_cmd_topic
@@ -581,11 +617,18 @@ class CompetitionReadinessNode(Node):
             'gait_control_lock_single_arbiter_publisher',
             lock_ok, lock_detail,
         ))
-        checks.append(ReadinessCheck(
-            'execute_motion_action_server',
-            bool(self.action_client.server_is_ready()),
-            self.motion_action_name,
-        ))
+        if profile_skips_check(
+            self.readiness_profile, 'execute_motion_action_server'
+        ):
+            checks.append(self._profile_skipped_check(
+                'execute_motion_action_server'
+            ))
+        else:
+            checks.append(ReadinessCheck(
+                'execute_motion_action_server',
+                bool(self.action_client.server_is_ready()),
+                self.motion_action_name,
+            ))
 
         node_names = self._node_names()
         gait_present = any(
@@ -722,18 +765,29 @@ class CompetitionReadinessNode(Node):
         checks.append(self._status_available(
             'line_follower_status', 'line_follower_status_available'
         ))
-        checks.append(self._status_available(
-            'line_course_state', 'line_course_state_available'
-        ))
-        checks.append(self._status_available(
-            'white_stage_status', 'white_stage_publisher_status_available'
-        ))
-        checks.append(self._action_idle_check(
-            'white_action_status', 'white_bar_action_idle'
-        ))
-        checks.append(self._action_idle_check(
-            'inspection_action_status', 'inspection_action_idle'
-        ))
+        if profile_skips_check(
+            self.readiness_profile, 'line_course_state_available'
+        ):
+            for label in (
+                'line_course_state_available',
+                'white_stage_publisher_status_available',
+                'white_bar_action_idle',
+                'inspection_action_idle',
+            ):
+                checks.append(self._profile_skipped_check(label))
+        else:
+            checks.append(self._status_available(
+                'line_course_state', 'line_course_state_available'
+            ))
+            checks.append(self._status_available(
+                'white_stage_status', 'white_stage_publisher_status_available'
+            ))
+            checks.append(self._action_idle_check(
+                'white_action_status', 'white_bar_action_idle'
+            ))
+            checks.append(self._action_idle_check(
+                'inspection_action_status', 'inspection_action_idle'
+            ))
         checks.append(ReadinessCheck(
             'sign_detector_output_topic',
             self._has_publisher(self.sign_detections_topic),
@@ -765,12 +819,19 @@ class CompetitionReadinessNode(Node):
                 final_cmd_age
             ),
         ))
-        course_state, course_age = self._fresh_value('line_course_state')
-        checks.append(ReadinessCheck(
-            'route_wait_start_without_active_action',
-            route_is_wait_start(course_state),
-            'missing' if course_age is None else str(course_state),
-        ))
+        if profile_skips_check(
+            self.readiness_profile, 'route_wait_start_without_active_action'
+        ):
+            checks.append(self._profile_skipped_check(
+                'route_wait_start_without_active_action'
+            ))
+        else:
+            course_state, course_age = self._fresh_value('line_course_state')
+            checks.append(ReadinessCheck(
+                'route_wait_start_without_active_action',
+                route_is_wait_start(course_state),
+                'missing' if course_age is None else str(course_state),
+            ))
 
         forbidden_nodes = sorted(
             name for name in node_names
@@ -899,6 +960,8 @@ class CompetitionReadinessNode(Node):
                 'SOFTWARE_SMOKE_MODE'
                 if self.software_smoke_mode else 'HARDWARE_MODE'
             ),
+            'profile': self.readiness_profile,
+            'start_mission_nodes': bool(self.start_mission_nodes),
             'checks': [check.as_dict() for check in checks],
             'timestamp_monotonic_sec': time.monotonic(),
         }

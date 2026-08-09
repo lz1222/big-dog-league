@@ -1088,6 +1088,23 @@ def test_validation_start_override_is_scoped_to_follower_only():
     assert launch_source.count('line_follower_start_topic') == 4
 
 
+def test_dynamic_validation_can_exclude_wait_start_mission_zero_candidates():
+    """validation 仅关闭 mission nodes；正式默认仍完整启动。"""
+    launch_source = FORMAL_LAUNCH.read_text(encoding='utf-8')
+    start_source = FORMAL_START_SCRIPT.read_text(encoding='utf-8')
+
+    assert "'start_mission_nodes', default_value='true'" in launch_source
+    assert launch_source.count('condition=IfCondition(start_mission_nodes)') == 4
+    assert "'readiness_profile', default_value='production'" in launch_source
+    assert 'RK_COMPETITION_START_MISSION_NODES:-true' in start_source
+    assert 'RK_COMPETITION_READINESS_PROFILE:-production' in start_source
+    readiness_section = launch_source.split(
+        "executable='competition_readiness_node'", 1
+    )[1].split('ExecuteProcess(', 1)[0]
+    assert "'readiness_profile': readiness_profile" in readiness_section
+    assert "'start_mission_nodes': ParameterValue(" in readiness_section
+
+
 def test_mission_start_uses_reliable_volatile_dual_ack_delivery():
     """正式 start 不能以单次 publish 或固定 sleep 假定两个消费者已接收。"""
     delivery_source = (

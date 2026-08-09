@@ -144,6 +144,8 @@ def generate_launch_description():
     line_follower_start_topic = LaunchConfiguration(
         'line_follower_start_topic'
     )
+    start_mission_nodes = LaunchConfiguration('start_mission_nodes')
+    readiness_profile = LaunchConfiguration('readiness_profile')
     fake_sdk_action_executable = LaunchConfiguration(
         'fake_sdk_action_executable'
     )
@@ -285,6 +287,21 @@ def generate_launch_description():
                 'Start topic subscribed only by line_follower_node. The '
                 'production default remains /mission/start; dynamic '
                 'preflight may inject a private validation topic.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'start_mission_nodes', default_value='true',
+            description=(
+                'Keep formal mission/action nodes enabled by default. Dynamic '
+                'validation may set false so WAIT_START zero candidates cannot '
+                'override the isolated follower adapter.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'readiness_profile', default_value='production',
+            description=(
+                'Readiness contract: production by default; the isolated '
+                'profile is valid only with start_mission_nodes=false.'
             ),
         ),
         DeclareLaunchArgument(
@@ -466,6 +483,7 @@ def generate_launch_description():
             executable='line_course_mission_node',
             name='line_course_mission_node',
             output='log',
+            condition=IfCondition(start_mission_nodes),
             parameters=[formal_config, {
                 'cmd_vel_topic': '/control/mission_cmd',
                 'sdk_network_interface': ParameterValue(
@@ -478,6 +496,7 @@ def generate_launch_description():
             executable='white_bar_stage_command_publisher',
             name='white_bar_stage_command_publisher',
             output='log',
+            condition=IfCondition(start_mission_nodes),
             parameters=[formal_config],
         ),
         Node(
@@ -485,6 +504,7 @@ def generate_launch_description():
             executable='white_bar_action_executor',
             name='white_bar_action_executor',
             output='log',
+            condition=IfCondition(start_mission_nodes),
             parameters=[formal_config],
         ),
         # 真实 Action server 保持唯一；smoke 只替换其 helper，不替换 server。
@@ -527,6 +547,7 @@ def generate_launch_description():
             executable='inspection_action_executor',
             name='inspection_action_executor',
             output='log',
+            condition=IfCondition(start_mission_nodes),
             parameters=[formal_config, {
                 'sdk_network_interface': ParameterValue(
                     sdk_network_interface, value_type=str
@@ -608,6 +629,12 @@ def generate_launch_description():
                 ),
                 'software_smoke_mode': ParameterValue(
                     software_smoke_mode, value_type=bool
+                ),
+                # profile 只交给 readiness；业务节点不得因 validation 参数
+                # 改变生产状态机或动作逻辑。
+                'readiness_profile': readiness_profile,
+                'start_mission_nodes': ParameterValue(
+                    start_mission_nodes, value_type=bool
                 ),
                 'line_image_topic': line_image_topic,
                 'sign_image_topic': sign_image_topic,

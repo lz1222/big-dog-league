@@ -6,12 +6,17 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <condition_variable>
+#include <cerrno>
+#include <fcntl.h>
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 #include <unitree/idl/go2/SportModeState_.hpp>
 #include <unitree/robot/channel/channel_factory.hpp>
@@ -35,6 +40,19 @@ struct GateConfig
   double timeout_sec{0.0};
   int required_frames{0};
   int max_frame_gap_ms{0};
+  std::string probe_instance_id;
+  std::string pass_evidence_path;
+  bool controlled_terminal_success{false};
+};
+
+struct MonitorStatistics
+{
+  int raw_frames{0};
+  int valid_frames{0};
+  int invalid_frames{0};
+  int max_frame_gap_ms{0};
+  std::int64_t first_valid_monotonic_ns{0};
+  std::int64_t last_valid_monotonic_ns{0};
 };
 
 double ParsePositiveDouble(const char* raw, const std::string& name)
@@ -117,14 +135,32 @@ public:
   /** 返回自启动以来收到的原始、有效状态帧和相邻有效帧最大间隔。
    * 时间戳使用本机单调时钟，只用于判断 DDS 数据连续性，绝不信任机器人墙钟。
    */
-  void GetStatistics(
-      int& raw_frames, int& valid_frames, int& invalid_frames,
-      int& max_frame_gap_ms) const
+  MonitorStatistics GetStatistics() const
   {
-    raw_frames = raw_frames_.load();
-    valid_frames = valid_frames_.load();
-    invalid_frames = invalid_frames_.load();
-    max_frame_gap_ms = max_frame_gap_ms_.load();
+    MonitorStatistics statistics;
+    statistics.raw_frames = raw_frames_.load();
+    statistics.valid_frames = valid_frames_.load();
+    statistics.invalid_frames = invalid_frames_.load();
+    statistics.max_frame_gap_ms = max_frame_gap_ms_.load();
+    statistics.first_valid_monotonic_ns = first_valid_monotonic_ns_.load();
+    statistics.last_valid_monotonic_ns = last_valid_monotonic_ns_.load();
+    return statistics;
+  }
+
+  bool Shutdown()
+  {
+    // SDK reader 的回调运行于 DDS 线程。先拒绝新回调、断开 reader，再等待
+    // 已进入的回调离开，避免 ChannelFactory::Release 时仍有 this 指针被持有。
+    accepting_callbacks_.store(false);
+    if (subscriber_) {
+      subscriber_->CloseChannel();
+      subscriber_.reset();
+    }
+    std::unique_lock<std::mutex> lock(callback_mutex_);
+    return callback_cv_.wait_for(
+        lock, std::chrono::seconds(1), [this]() {
+          return active_callbacks_.load() == 0;
+        });
   }
 
 private:
@@ -157,7 +193,12 @@ private:
 
   void OnState(const void* message)
   {
-    if (message == nullptr) {
+    if (!accepting_callbacks_.load() || message == nullptr) {
+      return;
+    }
+    active_callbacks_.fetch_add(1);
+    if (!accepting_callbacks_.load()) {
+      FinishCallback();
       return;
     }
     const int raw_frame = raw_frames_.fetch_add(1) + 1;
@@ -179,6 +220,7 @@ private:
                   << " reason=nonfinite_field wall_ns=" << wall_ns
                   << " monotonic_ns=" << monotonic_ns << std::endl;
       }
+      FinishCallback();
       return;
     }
     const auto now = std::chrono::steady_clock::now();
@@ -200,11 +242,24 @@ private:
     state_ = received;
     received_.store(true);
     const int valid_frame = valid_frames_.fetch_add(1) + 1;
+    if (valid_frame == 1) {
+      first_valid_monotonic_ns_.store(monotonic_ns);
+    }
+    last_valid_monotonic_ns_.store(monotonic_ns);
     if (emit_calibration_frames_) {
       std::cout << "CALIBRATION_FRAME raw_index=" << raw_frame
                 << " valid=1 valid_index=" << valid_frame
                 << " reason=none wall_ns=" << wall_ns
-                << " monotonic_ns=" << monotonic_ns << std::endl;
+                  << " monotonic_ns=" << monotonic_ns << std::endl;
+    }
+    FinishCallback();
+  }
+
+  void FinishCallback()
+  {
+    if (active_callbacks_.fetch_sub(1) == 1) {
+      std::lock_guard<std::mutex> lock(callback_mutex_);
+      callback_cv_.notify_all();
     }
   }
 
@@ -215,6 +270,12 @@ private:
   std::atomic<int> valid_frames_{0};
   std::atomic<int> invalid_frames_{0};
   std::atomic<int> max_frame_gap_ms_{0};
+  std::atomic<std::int64_t> first_valid_monotonic_ns_{0};
+  std::atomic<std::int64_t> last_valid_monotonic_ns_{0};
+  std::atomic<bool> accepting_callbacks_{true};
+  std::atomic<int> active_callbacks_{0};
+  std::mutex callback_mutex_;
+  std::condition_variable callback_cv_;
   bool has_valid_frame_{false};
   std::chrono::steady_clock::time_point last_valid_frame_;
   bool emit_calibration_frames_{false};
@@ -255,7 +316,9 @@ void PrintUsage(const char* program)
       << " <network_interface> [duration_sec] [print_rate_hz]\n"
       << "  " << program
       << " <network_interface> --gate --timeout-sec SEC"
-      << " --required-frames COUNT --max-frame-gap-ms MS\n\n"
+      << " --required-frames COUNT --max-frame-gap-ms MS"
+      << " --probe-instance-id ID --pass-evidence PATH"
+      << " [--controlled-terminal-success]\n\n"
       << "  " << program
       << " <network_interface> --calibration-stream"
       << " --max-valid-frames COUNT\n\n"
@@ -300,19 +363,14 @@ int RunCalibrationStream(
             << " monotonic_ns=" << MonotonicNanoseconds() << std::endl;
   SportStateMonitor monitor(true);
   while (g_running) {
-    int raw_frames = 0;
-    int valid_frames = 0;
-    int invalid_frames = 0;
-    int max_frame_gap_ms = 0;
-    monitor.GetStatistics(
-        raw_frames, valid_frames, invalid_frames, max_frame_gap_ms);
-    if (valid_frames >= config.max_valid_frames) {
+    const MonitorStatistics statistics = monitor.GetStatistics();
+    if (statistics.valid_frames >= config.max_valid_frames) {
       std::cout << "CALIBRATION_EVENT event=MONITOR_TARGET_REACHED"
                 << " wall_ns=" << WallNanoseconds()
                 << " monotonic_ns=" << MonotonicNanoseconds()
-                << " raw_frames=" << raw_frames
-                << " valid_frames=" << valid_frames
-                << " invalid_frames=" << invalid_frames << std::endl;
+                << " raw_frames=" << statistics.raw_frames
+                << " valid_frames=" << statistics.valid_frames
+                << " invalid_frames=" << statistics.invalid_frames << std::endl;
       return 0;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -332,6 +390,10 @@ GateConfig ParseGateArguments(int argc, char** argv)
     if (option == "--gate") {
       continue;
     }
+    if (option == "--controlled-terminal-success") {
+      config.controlled_terminal_success = true;
+      continue;
+    }
     if (index + 1 >= argc) {
       throw std::runtime_error("missing value for " + option);
     }
@@ -342,6 +404,10 @@ GateConfig ParseGateArguments(int argc, char** argv)
       config.required_frames = std::stoi(value);
     } else if (option == "--max-frame-gap-ms") {
       config.max_frame_gap_ms = std::stoi(value);
+    } else if (option == "--probe-instance-id") {
+      config.probe_instance_id = value;
+    } else if (option == "--pass-evidence") {
+      config.pass_evidence_path = value;
     } else {
       throw std::runtime_error("unknown option: " + option);
     }
@@ -352,7 +418,62 @@ GateConfig ParseGateArguments(int argc, char** argv)
         "--gate requires positive --timeout-sec, --required-frames and "
         "--max-frame-gap-ms");
   }
+  if (config.probe_instance_id.empty() || config.pass_evidence_path.empty()) {
+    throw std::runtime_error(
+        "--gate requires --probe-instance-id and --pass-evidence");
+  }
   return config;
+}
+
+bool WriteAll(int file_descriptor, const std::string& content)
+{
+  std::size_t offset = 0;
+  while (offset < content.size()) {
+    const ssize_t written = ::write(
+        file_descriptor, content.data() + offset, content.size() - offset);
+    if (written <= 0) {
+      return false;
+    }
+    offset += static_cast<std::size_t>(written);
+  }
+  return true;
+}
+
+bool WritePassEvidence(
+    const GateConfig& config, const MonitorStatistics& statistics,
+    std::string& error)
+{
+  // 使用 O_EXCL 防止旧 PASS 文件被本轮重用；完成 write/flush/fsync 后才允许
+  // controlled _Exit，使父进程能够把 RC=0 与本次实例证据严格绑定。
+  const int file_descriptor = ::open(
+      config.pass_evidence_path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (file_descriptor < 0) {
+    error = "evidence_open_errno=" + std::to_string(errno);
+    return false;
+  }
+  std::ostringstream payload;
+  payload << "{\n"
+          << "  \"probe_instance_id\":\"" << config.probe_instance_id << "\",\n"
+          << "  \"classification\":\"CONTROL_PLANE_OBSERVATION_PASS\",\n"
+          << "  \"total_frames\":" << statistics.raw_frames << ",\n"
+          << "  \"valid_frames\":" << statistics.valid_frames << ",\n"
+          << "  \"invalid_frames\":" << statistics.invalid_frames << ",\n"
+          << "  \"max_gap_ms\":" << statistics.max_frame_gap_ms << ",\n"
+          << "  \"first_monotonic_ns\":" << statistics.first_valid_monotonic_ns << ",\n"
+          << "  \"last_monotonic_ns\":" << statistics.last_valid_monotonic_ns << ",\n"
+          << "  \"pass_monotonic_ns\":" << MonotonicNanoseconds() << ",\n"
+          << "  \"motion_calls\":0,\n"
+          << "  \"mutating_calls\":0\n"
+          << "}\n";
+  const std::string content = payload.str();
+  const bool written = WriteAll(file_descriptor, content);
+  const bool synced = written && ::fsync(file_descriptor) == 0;
+  const int close_result = ::close(file_descriptor);
+  if (!synced || close_result != 0) {
+    error = "evidence_write_or_fsync_failed";
+    return false;
+  }
+  return true;
 }
 
 int RunGate(const std::string& network_interface, const GateConfig& config)
@@ -368,48 +489,69 @@ int RunGate(const std::string& network_interface, const GateConfig& config)
   bool first_dds_state_logged = false;
   while (std::chrono::steady_clock::now() - start_time <
          std::chrono::duration<double>(config.timeout_sec)) {
-    int raw_frames = 0;
-    int valid_frames = 0;
-    int invalid_frames = 0;
-    int max_frame_gap_ms = 0;
-    monitor.GetStatistics(
-        raw_frames, valid_frames, invalid_frames, max_frame_gap_ms);
-    if (raw_frames > 0 && !first_dds_state_logged) {
+    const MonitorStatistics statistics = monitor.GetStatistics();
+    if (statistics.raw_frames > 0 && !first_dds_state_logged) {
       std::cout << "CONTROL_PLANE_DIAG event=FIRST_DDS_STATE"
                 << " monotonic_sec=" << MonotonicSeconds()
-                << " raw_frames=" << raw_frames << std::endl;
+                << " raw_frames=" << statistics.raw_frames << std::endl;
       first_dds_state_logged = true;
     }
-    if (valid_frames >= config.required_frames && invalid_frames == 0 &&
-        max_frame_gap_ms <= config.max_frame_gap_ms) {
+    if (statistics.valid_frames >= config.required_frames &&
+        statistics.invalid_frames == 0 &&
+        statistics.max_frame_gap_ms <= config.max_frame_gap_ms) {
       std::cout << "CONTROL_PLANE_DIAG event=FIRST_STABLE_DDS_STATE"
                 << " monotonic_sec=" << MonotonicSeconds()
-                << " valid_frames=" << valid_frames << std::endl;
+                << " valid_frames=" << statistics.valid_frames << std::endl;
       std::cout << "CONTROL_PLANE_DIAG classification=SUCCESS"
-                << " raw_frames=" << raw_frames
-                << " valid_frames=" << valid_frames
-                << " max_frame_gap_ms=" << max_frame_gap_ms << std::endl;
+                << " raw_frames=" << statistics.raw_frames
+                << " valid_frames=" << statistics.valid_frames
+                << " max_frame_gap_ms=" << statistics.max_frame_gap_ms << std::endl;
+      std::string evidence_error;
+      if (!WritePassEvidence(config, statistics, evidence_error)) {
+        std::cerr << "CONTROL_PLANE_DIAG classification=EVIDENCE_WRITE_FAILED"
+                  << " detail=" << evidence_error << std::endl;
+        return 1;
+      }
+      std::cout << "CONTROL_PLANE_DIAG event=PASS_EVIDENCE_FSYNCED"
+                << " probe_instance_id=" << config.probe_instance_id
+                << " path=" << config.pass_evidence_path << std::endl;
+      if (config.controlled_terminal_success) {
+        // 仅独立只读 probe 的成功路径允许绕过已证实不稳定的 SDK/DDS 静态
+        // 析构。它已 fsync 本次证据，且没有 SportClient 或任何 mutation。
+        std::cout << "CONTROL_PLANE_DIAG event=CONTROLLED_TERMINAL_SUCCESS"
+                  << std::endl;
+        std::cout.flush();
+        std::_Exit(0);
+      }
+      // 优先正常关闭：reader 先断开并等待 callback，再释放 factory。若底层
+      // 仍 abort，父门禁会看到非零 RC，即使 observation evidence 已存在也拒绝。
+      if (!monitor.Shutdown()) {
+        std::cerr << "CONTROL_PLANE_DIAG classification=TEARDOWN_CALLBACK_TIMEOUT"
+                  << std::endl;
+        return 1;
+      }
+      unitree::robot::ChannelFactory::Instance()->Release();
+      std::cout << "CONTROL_PLANE_DIAG event=NORMAL_TEARDOWN_COMPLETE"
+                << std::endl;
       return 0;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
-  int raw_frames = 0;
-  int valid_frames = 0;
-  int invalid_frames = 0;
-  int max_frame_gap_ms = 0;
-  monitor.GetStatistics(raw_frames, valid_frames, invalid_frames, max_frame_gap_ms);
+  const MonitorStatistics statistics = monitor.GetStatistics();
   std::string classification = "ROBOT_STATE_STREAM_NOT_FRESH";
-  if (raw_frames == 0) {
+  if (statistics.raw_frames == 0) {
     classification = "ROBOT_DDS_NOT_DISCOVERED";
-  } else if (invalid_frames > 0) {
+  } else if (statistics.invalid_frames > 0) {
     classification = "ROBOT_STATE_STREAM_FORMAT_INVALID";
   }
   std::cerr << "CONTROL_PLANE_DIAG classification=" << classification
-            << " raw_frames=" << raw_frames
-            << " valid_frames=" << valid_frames
-            << " invalid_frames=" << invalid_frames
-            << " max_frame_gap_ms=" << max_frame_gap_ms << std::endl;
+            << " raw_frames=" << statistics.raw_frames
+            << " valid_frames=" << statistics.valid_frames
+            << " invalid_frames=" << statistics.invalid_frames
+            << " max_frame_gap_ms=" << statistics.max_frame_gap_ms << std::endl;
+  monitor.Shutdown();
+  unitree::robot::ChannelFactory::Instance()->Release();
   return 1;
 }
 

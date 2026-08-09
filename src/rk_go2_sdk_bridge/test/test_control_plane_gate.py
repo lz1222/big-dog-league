@@ -1,6 +1,7 @@
 """冷启动控制面门禁的纯软件测试，不需要网卡、DDS 或实体机器人。"""
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -49,7 +50,26 @@ def test_stable_ping_rejects_single_success_then_loss(monkeypatch):
     assert not gate.stable_ping('eth0', '192.168.123.161', 2, 1.0, 0.1)
 
 
-def test_run_probe_uses_only_read_only_monitor(monkeypatch):
+def _pass_evidence(instance_id, **overrides):
+    """构造完整观测 PASS，测试 parent 不会只信任子进程返回码。"""
+    evidence = {
+        'probe_instance_id': instance_id,
+        'classification': 'CONTROL_PLANE_OBSERVATION_PASS',
+        'total_frames': 201,
+        'valid_frames': 201,
+        'invalid_frames': 0,
+        'max_gap_ms': 7,
+        'first_monotonic_ns': 100,
+        'last_monotonic_ns': 200,
+        'pass_monotonic_ns': 300,
+        'motion_calls': 0,
+        'mutating_calls': 0,
+    }
+    evidence.update(overrides)
+    return evidence
+
+
+def test_run_probe_uses_only_read_only_monitor(monkeypatch, tmp_path):
     """门禁只 exec monitor 的 --gate 参数，命令行没有任何 Sport 动作。"""
     gate = _load_gate_module()
     captured = {}
@@ -59,19 +79,105 @@ def test_run_probe_uses_only_read_only_monitor(monkeypatch):
         return type('Result', (), {'returncode': 0})()
 
     monkeypatch.setattr(gate.subprocess, 'run', fake_run)
-    assert gate.run_probe('/runtime', '/monitor', 'eth0', 10, 5, 200) == 0
+    assert gate.run_probe(
+        '/runtime', '/monitor', 'eth0', 10, 5, 200, 'probe-id',
+        tmp_path / 'evidence.json', 'controlled',
+    ) == 0
     command = captured['command']
     assert command[:4] == ['/runtime', '/monitor', 'eth0', '--gate']
+    assert '--controlled-terminal-success' in command
     assert not any(
         action in ' '.join(command)
         for action in ('StopMove', 'Move', 'BalanceStand')
     )
 
 
+def test_pass_evidence_requires_this_instance_and_contract(tmp_path):
+    """PASS 必须同时满足实例、帧数、gap、零调用及单调时间戳合同。"""
+    gate = _load_gate_module()
+    path = tmp_path / 'pass.json'
+    path.write_text(json.dumps(_pass_evidence('current')), encoding='utf-8')
+    assert gate.validate_pass_evidence(path, 'current', 200, 20) == (
+        True, 'valid_pass_evidence',
+    )
+
+
+def test_invalid_or_stale_pass_evidence_fails_closed(tmp_path):
+    """RC=0 也不能复用旧文件、错误实例或低质量 observation。"""
+    gate = _load_gate_module()
+    cases = (
+        _pass_evidence('old'),
+        _pass_evidence('current', valid_frames=199),
+        _pass_evidence('current', max_gap_ms=21),
+        _pass_evidence('current', motion_calls=1),
+    )
+    for index, evidence in enumerate(cases):
+        path = tmp_path / '{}.json'.format(index)
+        path.write_text(json.dumps(evidence), encoding='utf-8')
+        assert gate.validate_pass_evidence(path, 'current', 200, 20)[0] is False
+
+
+def test_main_rejects_rc_zero_without_valid_pass_evidence(monkeypatch, tmp_path):
+    """子进程 RC=0、RC=-6 都不能替代同实例 PASS evidence。"""
+    gate = _load_gate_module()
+    monkeypatch.setattr(gate, 'stable_ping', lambda *args: True)
+    monkeypatch.setattr(gate, 'run_probe', lambda *args: 0)
+    arguments = [
+        '--interface', 'eth0', '--robot-ip', '192.168.123.161',
+        '--runtime-wrapper', '/wrapper', '--probe', '/probe',
+        '--network-timeout-sec', '1', '--ping-count', '1',
+        '--ping-poll-sec', '0.1', '--dds-timeout-sec', '1',
+        '--required-frames', '200', '--max-frame-gap-ms', '20',
+        '--evidence-dir', str(tmp_path),
+    ]
+    assert gate.main(arguments) == 1
+
+
+def test_main_rejects_teardown_abort_even_with_valid_evidence(
+        monkeypatch, tmp_path):
+    """旧式 SIGABRT/-6 有 evidence 也必须 fail-closed，而非 parent 伪造成功。"""
+    gate = _load_gate_module()
+    monkeypatch.setattr(gate, 'stable_ping', lambda *args: True)
+
+    def fake_probe(*args):
+        path = args[7]
+        instance_id = args[6]
+        Path(path).write_text(
+            json.dumps(_pass_evidence(instance_id)), encoding='utf-8'
+        )
+        return -6
+
+    monkeypatch.setattr(gate, 'run_probe', fake_probe)
+    arguments = [
+        '--interface', 'eth0', '--robot-ip', '192.168.123.161',
+        '--runtime-wrapper', '/wrapper', '--probe', '/probe',
+        '--network-timeout-sec', '1', '--ping-count', '1',
+        '--ping-poll-sec', '0.1', '--dds-timeout-sec', '1',
+        '--required-frames', '200', '--max-frame-gap-ms', '20',
+        '--evidence-dir', str(tmp_path),
+    ]
+    assert gate.main(arguments) == -6
+
+
 def test_gate_source_has_no_sport_action_names():
     """代码级回归保护：冷启动门禁禁止引入任何控制接口调用。"""
     source = GATE_PATH.read_text(encoding='utf-8')
     for forbidden in ('.StopMove(', '.Move(', '.BalanceStand('):
+        assert forbidden not in source
+
+
+def test_probe_source_limits_controlled_exit_to_read_only_gate():
+    """受控退出只能位于观测 PASS evidence 已落盘后的独立只读 probe。"""
+    source = (PACKAGE_ROOT / 'src' / 'go2_sdk_sport_state_monitor.cpp').read_text(
+        encoding='utf-8'
+    )
+    assert 'subscriber_->CloseChannel()' in source
+    assert 'ChannelFactory::Instance()->Release()' in source
+    assert 'WritePassEvidence(config, statistics' in source
+    assert 'std::_Exit(0)' in source
+    assert 'if (config.controlled_terminal_success)' in source
+    for forbidden in (
+            'sport/sport_client.hpp', '.StopMove(', '.BalanceStand(', '.Move('):
         assert forbidden not in source
 
 
