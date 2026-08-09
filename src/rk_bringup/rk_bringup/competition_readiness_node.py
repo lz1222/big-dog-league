@@ -56,6 +56,10 @@ class CompetitionReadinessNode(Node):
         self._read_parameters()
         self._last_messages = {}
         self._last_payload = {}
+        # SDK status 是调用完成后的事件流而非心跳。当前实例的 STARTUP_STOP
+        # 成功后保持启动资格；同实例 SDK_ERROR 则永久撤销资格直到新实例启动。
+        self._sdk_startup_status = None
+        self._sdk_error_status = None
 
         self.status_publisher = self.create_publisher(
             String, '/competition/readiness_status', 10
@@ -190,12 +194,14 @@ class CompetitionReadinessNode(Node):
             'sdk_action_executable': '',
             'sdk_motion_status_topic': '/go2/sdk_motion_status',
             'sdk_server_instance_id': '',
+            'sdk_command_port': 15001,
+            'sdk_status_port': 15002,
             'cleanup_guard_path': (
                 '~/.rk_non_arm_competition/front_jump_cleanup_guard.json'
             ),
             'freshness_timeout_sec': 2.0,
-            # SDK 状态不是心跳；30 秒仅覆盖有界 formal graph 冷启动窗口，
-            # 跨轮次安全仍由精确 server_instance_id 和进程检查保证。
+            # 兼容既有参数名；SDK status 已明确为 event stream，readiness
+            # 不再按该 elapsed 值把当前实例的 STARTUP_STOP 判 stale。
             'sdk_status_freshness_timeout_sec': 30.0,
             'status_publish_rate_hz': 2.0,
         }
@@ -242,6 +248,8 @@ class CompetitionReadinessNode(Node):
         self.sdk_status_freshness_timeout_sec = self._positive_float_parameter(
             'sdk_status_freshness_timeout_sec'
         )
+        self.sdk_command_port = self._port_parameter('sdk_command_port')
+        self.sdk_status_port = self._port_parameter('sdk_status_port')
         self.status_publish_rate_hz = self._positive_float_parameter(
             'status_publish_rate_hz'
         )
@@ -260,6 +268,15 @@ class CompetitionReadinessNode(Node):
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError('{} must be finite and positive'.format(name))
         return value
+
+    def _port_parameter(self, name):
+        """读取 UDP 端口；readiness 仅检查端点，不创建或修改 socket。"""
+        value = self.get_parameter(name).value
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError('{} must be an integer UDP port'.format(name))
+        if value < 1 or value > 65535:
+            raise ValueError('{} must be within 1..65535'.format(name))
+        return int(value)
 
     def _remember(self, name, value):
         self._last_messages[name] = (time.monotonic(), value)
@@ -311,8 +328,22 @@ class CompetitionReadinessNode(Node):
         self._remember('sign_camera_image', str(msg.header.frame_id))
 
     def _on_sdk_motion_status(self, msg):
-        """保留 forwarder 的机器可读 ACK；检查阶段再绑定本次实例和 age。"""
-        self._remember('sdk_motion_status', json_object(msg.data))
+        """绑定当前实例 SDK 事件，禁止用 idle 时间伪造 backend 故障。"""
+        status = json_object(msg.data)
+        self._remember('sdk_motion_status', status)
+        if not isinstance(status, dict):
+            return
+        if status.get('server_instance_id') != self.sdk_server_instance_id:
+            return
+        if status.get('event') == 'SDK_ERROR':
+            self._sdk_error_status = status
+            return
+        if (
+            status.get('event') == 'STARTUP_STOP'
+            and status.get('ret') == 0
+            and self._valid_sdk_status_identity(status)
+        ):
+            self._sdk_startup_status = status
 
     def _fresh_value(self, name):
         record = self._last_messages.get(name)
@@ -455,6 +486,25 @@ class CompetitionReadinessNode(Node):
             if token in raw.decode('utf-8', errors='ignore'):
                 return True
         return False
+
+    @staticmethod
+    def _udp_listener_count(port):
+        """读取 Linux UDP 表确认正式端点仍在，不能把 ROS node 名当 socket 存活。"""
+        try:
+            with open('/proc/net/udp', 'r', encoding='utf-8') as stream:
+                rows = stream.readlines()[1:]
+        except OSError:
+            return 0
+        expected_port = '{:04X}'.format(int(port))
+        count = 0
+        for row in rows:
+            columns = row.split()
+            if len(columns) < 2 or ':' not in columns[1]:
+                continue
+            _address, local_port = columns[1].rsplit(':', 1)
+            if local_port.upper() == expected_port:
+                count += 1
+        return count
 
     def _file_is_executable(self, path):
         """检查可执行文件：绝对路径直接用 os.access；相对命令名用 shutil.which。"""
@@ -757,23 +807,31 @@ class CompetitionReadinessNode(Node):
                 name.endswith('/cmd_vel_udp_forwarder')
                 for name in node_names
             )
+            command_listener_count = self._udp_listener_count(
+                self.sdk_command_port
+            )
+            status_listener_count = self._udp_listener_count(
+                self.sdk_status_port
+            )
             checks.append(ReadinessCheck(
                 'hardware_sdk_server_ready',
-                server_ok and server_running,
-                'path_ok={}, process_running={}'.format(
-                    server_ok, server_running
+                server_ok and server_running and command_listener_count == 1,
+                'path_ok={}, process_running={}, command_port={} '
+                'listener_count={}'.format(
+                    server_ok, server_running, self.sdk_command_port,
+                    command_listener_count,
                 ),
             ))
             checks.append(ReadinessCheck(
                 'hardware_udp_forwarder_started',
-                forwarder_running,
-                'node_present={}'.format(forwarder_running),
+                forwarder_running and status_listener_count == 1,
+                'node_present={}, status_port={} listener_count={}'.format(
+                    forwarder_running, self.sdk_status_port,
+                    status_listener_count,
+                ),
             ))
-            sdk_status, sdk_local_age = self._fresh_value(
-                'sdk_motion_status'
-            )
             sdk_status_ok, sdk_status_detail = self._sdk_status_ready(
-                sdk_status, sdk_local_age
+                self._sdk_startup_status, None
             )
             checks.append(ReadinessCheck(
                 'SDK_MOTION_BACKEND_READY',
@@ -788,37 +846,47 @@ class CompetitionReadinessNode(Node):
             ))
         return checks
 
-    def _sdk_status_ready(self, status, local_age):
-        """只接受当前 server 实例最近的成功停车 ACK，拒绝 latched 残留。"""
-        if not self.sdk_server_instance_id:
-            return False, 'expected_server_instance_id_empty'
-        if not isinstance(status, dict):
-            return False, 'missing_or_invalid_status'
+    def _valid_sdk_status_identity(self, status):
+        """验证启动资格的不可伪造 identity 字段，不依据接收时间延长寿命。"""
         receive_ns = status.get('receive_monotonic_ns')
         sequence = status.get('sequence')
+        return (
+            isinstance(sequence, int)
+            and not isinstance(sequence, bool)
+            and sequence >= 1
+            and isinstance(receive_ns, int)
+            and not isinstance(receive_ns, bool)
+            and receive_ns >= 1
+        )
+
+    def _sdk_status_ready(self, status, _local_age):
+        """当前实例 STARTUP_STOP 是资格事件，长期 idle 不得被误判为 stale。"""
+        if not self.sdk_server_instance_id:
+            return False, 'expected_server_instance_id_empty'
+        sdk_error = getattr(self, '_sdk_error_status', None)
+        if (
+            isinstance(sdk_error, dict)
+            and sdk_error.get('server_instance_id')
+            == self.sdk_server_instance_id
+        ):
+            return False, 'current_instance_sdk_error_sequence={}'.format(
+                sdk_error.get('sequence', 'unknown')
+            )
+        if not isinstance(status, dict):
+            return False, 'missing_or_invalid_status'
         if (
             status.get('server_instance_id') != self.sdk_server_instance_id
-            or status.get('event') not in ('STARTUP_STOP', 'STOP_MOVE')
+            or status.get('event') != 'STARTUP_STOP'
             or status.get('ret') != 0
-            or not isinstance(sequence, int)
-            or isinstance(sequence, bool)
-            or sequence < 1
-            or not isinstance(receive_ns, int)
-            or isinstance(receive_ns, bool)
-            or receive_ns < 1
+            or not self._valid_sdk_status_identity(status)
         ):
             return False, 'instance_event_ret_or_sequence_mismatch'
-        embedded_age = max(0.0, (time.monotonic_ns() - receive_ns) / 1e9)
-        if embedded_age > self.sdk_status_freshness_timeout_sec:
-            return False, 'embedded_status_stale_{:.3f}s'.format(embedded_age)
         return True, (
-            'instance={} event={} ret=0 sequence={} embedded_age={:.3f}s '
-            'local_age={}'.format(
+            'instance={} startup_qualified event={} ret=0 sequence={} '
+            'idle_event_age_not_a_liveness_failure'.format(
                 self.sdk_server_instance_id,
                 status['event'],
-                sequence,
-                embedded_age,
-                'missing' if local_age is None else '{:.3f}s'.format(local_age),
+                status['sequence'],
             )
         )
 

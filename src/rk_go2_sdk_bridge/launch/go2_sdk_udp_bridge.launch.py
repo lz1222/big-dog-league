@@ -11,15 +11,6 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackagePrefix
 
 
-FORWARDER_ENV = {
-    'ROS_DOMAIN_ID': '10',
-    'LD_LIBRARY_PATH': (
-        '/opt/ros/foxy/lib/aarch64-linux-gnu:'
-        '/opt/ros/foxy/lib'
-    ),
-}
-
-
 def generate_launch_description():
     start_sdk_server = LaunchConfiguration('start_sdk_server')
     sdk_server = LaunchConfiguration('sdk_server')
@@ -33,6 +24,19 @@ def generate_launch_description():
     max_yaw = LaunchConfiguration('max_yaw')
     deadband = LaunchConfiguration('deadband')
     timeout_sec = LaunchConfiguration('timeout_sec')
+    # ROS 转发器与迷宫控制器必须继承同一个 ROS_DOMAIN_ID。这里刻意不设定
+    # ROS_DOMAIN_ID，避免 launch 把控制命令切到与 LiDAR 不同的 DDS 域。
+    # 安装树中的 runtime 目录含配套 libddsc/libddscxx；将其置于 ROS 库之前，
+    # 防止 Foxy 或系统 CycloneDDS 与 Unitree SDK 的 ABI 混用。
+    sdk_runtime_dir = PathJoinSubstitution([
+        FindPackagePrefix('rk_go2_sdk_bridge'),
+        'lib',
+        'rk_go2_sdk_bridge',
+        'unitree_sdk_runtime',
+    ])
+    ros_forwarder_env = {
+        'LD_LIBRARY_PATH': sdk_runtime_dir,
+    }
     # SDK服务端必须加载与本包一起安装的CycloneDDS，避免误用/usr/local
     # 中的不同ABI版本并在ChannelFactory初始化阶段崩溃。
     sdk_server_env = {
@@ -134,7 +138,7 @@ def generate_launch_description():
             executable='cmd_vel_udp_forwarder.py',
             name='cmd_vel_udp_forwarder',
             output='screen',
-            additional_env=FORWARDER_ENV,
+            additional_env=ros_forwarder_env,
             parameters=[{
                 'cmd_vel_topic': cmd_vel_topic,
                 'udp_host': udp_host,

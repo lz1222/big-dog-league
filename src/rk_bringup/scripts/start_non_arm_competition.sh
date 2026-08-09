@@ -23,6 +23,9 @@ LINE_CAMERA_DEVICE="${RK_COMPETITION_LINE_CAMERA_DEVICE:-/dev/v4l/by-id/usb-Soni
 LINE_CAMERA_WIDTH="${RK_COMPETITION_LINE_CAMERA_WIDTH:-424}"
 LINE_CAMERA_HEIGHT="${RK_COMPETITION_LINE_CAMERA_HEIGHT:-240}"
 LINE_CAMERA_FPS="${RK_COMPETITION_LINE_CAMERA_FPS:-15.0}"
+# 默认仍是正式比赛唯一入口；dynamic preflight 才显式覆盖为私有 topic，
+# 且该参数只传给 launch 内的 line_follower_node。
+LINE_FOLLOWER_START_TOPIC="${RK_COMPETITION_LINE_FOLLOWER_START_TOPIC:-/mission/start}"
 SDK_SERVER="${RK_COMPETITION_SDK_SERVER:-}"
 SDK_UDP_HOST="${RK_COMPETITION_SDK_UDP_HOST:-127.0.0.1}"
 SDK_UDP_PORT="${RK_COMPETITION_SDK_UDP_PORT:-15001}"
@@ -45,6 +48,12 @@ CONTROL_PLANE_REQUIRED_FRAMES="${RK_COMPETITION_CONTROL_PLANE_REQUIRED_FRAMES:-}
 CONTROL_PLANE_MAX_FRAME_GAP_MS="${RK_COMPETITION_CONTROL_PLANE_MAX_FRAME_GAP_MS:-}"
 SDK_LISTEN_TIMEOUT_SEC="${RK_COMPETITION_SDK_LISTEN_TIMEOUT_SEC:-10}"
 STATUS_GATE_TIMEOUT_SEC="${RK_COMPETITION_STATUS_GATE_TIMEOUT_SEC:-12}"
+# 默认不允许改变机器人控制权；仅在机器人已静止并由正式启动入口显式授权时，
+# prearm 才可执行一次 ReleaseMode / sport_mode OFF→ON 恢复。
+ENABLE_MOTION_CONTROL_RECOVERY="${RK_COMPETITION_ENABLE_MOTION_CONTROL_RECOVERY:-false}"
+# 控制面 DDS 样本连续并不等于 Sport RPC 已完成服务切换。默认 0 保持正式
+# 启动行为不变；零运动验收可显式给出稳定窗口，期间不创建 SDK client、更不发命令。
+SDK_STARTUP_SETTLE_SEC="${RK_COMPETITION_SDK_STARTUP_SETTLE_SEC:-0}"
 
 resolve_workspace_dir() {
     local candidate
@@ -323,6 +332,7 @@ SDK_RUNTIME_WRAPPER="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_server_r
 CONTROL_PLANE_GATE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_control_plane_gate.py"
 CONTROL_PLANE_PROBE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_sport_state_monitor"
 SDK_STATUS_GATE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/sdk_motion_status_gate.py"
+MOTION_CONTROL_PREARM="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_motion_control_prearm"
 UDP_FORWARDER="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/cmd_vel_udp_forwarder.py"
 if [ -n "${SDK_SERVER}" ]; then
     SDK_SERVER_BINARY="${SDK_SERVER}"
@@ -331,7 +341,8 @@ else
 fi
 
 for required_file in "$SDK_RUNTIME_WRAPPER" "$CONTROL_PLANE_GATE" \
-    "$CONTROL_PLANE_PROBE" "$SDK_STATUS_GATE" "$UDP_FORWARDER" \
+    "$CONTROL_PLANE_PROBE" "$SDK_STATUS_GATE" "$MOTION_CONTROL_PREARM" \
+    "$UDP_FORWARDER" \
     "$SDK_SERVER_BINARY"; do
     if [ ! -x "$required_file" ]; then
         echo "ERROR: required staged-start executable is missing: ${required_file}" >&2
@@ -341,6 +352,17 @@ done
 
 if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ] \
         && [ "$START_SDK_SERVER" = "true" ]; then
+    case "$ENABLE_MOTION_CONTROL_RECOVERY" in
+        true|false|1|0) ;;
+        *)
+            echo "ERROR: RK_COMPETITION_ENABLE_MOTION_CONTROL_RECOVERY must be true or false." >&2
+            exit 1
+            ;;
+    esac
+    if ! [[ "$SDK_STARTUP_SETTLE_SEC" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: RK_COMPETITION_SDK_STARTUP_SETTLE_SEC must be a non-negative integer." >&2
+        exit 1
+    fi
     for measured_value in \
         "$CONTROL_PLANE_NETWORK_TIMEOUT_SEC" "$CONTROL_PLANE_PING_COUNT" \
         "$CONTROL_PLANE_PING_POLL_SEC" "$CONTROL_PLANE_DDS_TIMEOUT_SEC" \
@@ -389,6 +411,7 @@ LAUNCH_ARGS=(
     "line_camera_width:=${LINE_CAMERA_WIDTH}"
     "line_camera_height:=${LINE_CAMERA_HEIGHT}"
     "line_camera_fps:=${LINE_CAMERA_FPS}"
+    "line_follower_start_topic:=${LINE_FOLLOWER_START_TOPIC}"
     "sdk_udp_host:=${SDK_UDP_HOST}"
     "sdk_udp_port:=${SDK_UDP_PORT}"
     "sdk_status_ip:=${SDK_STATUS_IP}"
@@ -422,6 +445,24 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
             | tee "${LOG_DIR}/control_plane_gate.log"; then
         cleanup_failed_start
         exit 1
+    fi
+    # 正式 SDK server 之前的唯一控制状态门。默认只读；显式 recovery=true
+    # 只可在机器人静止、且本次 backend 尚未 READY 时使用一次性恢复步骤。
+    echo "MOTION_CONTROL_PREARM recovery_enabled=${ENABLE_MOTION_CONTROL_RECOVERY}"
+    if ! "$SDK_RUNTIME_WRAPPER" "$MOTION_CONTROL_PREARM" \
+            --interface "$SDK_NETWORK_INTERFACE" \
+            --enable-recovery "$ENABLE_MOTION_CONTROL_RECOVERY" \
+            --version-timeout-sec 3 \
+            --recovery-timeout-sec 10 2>&1 \
+            | tee "${LOG_DIR}/motion_control_prearm.log"; then
+        cleanup_failed_start
+        exit 1
+    fi
+    if [ "$SDK_STARTUP_SETTLE_SEC" -gt 0 ]; then
+        # 只被 dynamic preflight 显式启用的被动等待，避免 DDS state stream
+        # 刚稳定时立即创建 SportClient 所造成的启动 RPC 瞬态失败。
+        echo "CONTROL_PLANE_DIAG event=POST_DDS_PASSIVE_SETTLE seconds=${SDK_STARTUP_SETTLE_SEC}"
+        sleep "$SDK_STARTUP_SETTLE_SEC"
     fi
 
     FORWARDER_ARGS=(

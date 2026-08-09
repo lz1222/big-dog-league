@@ -173,11 +173,8 @@ if ! ros2 node list 2>/dev/null | grep -Eq '(^|/)command_mux_node$'; then
     exit 0
 fi
 
-WHITE_OK=0
-INSPECTION_OK=0
-wait_for_action_terminal /mission/white_bar_action_status "white-bar Action" || WHITE_OK=1
-wait_for_action_terminal /mission/inspection_action_status "inspection Action" || INSPECTION_OK=1
-
+# 急停和最终零速必须先于 action status 观测。ROS 图正在衰退时，等待一个
+# 已经停止发布的 IDLE 状态不能延迟真正的停车，也不能把安全资源归零误判失败。
 if ! rk_call_mux_estop mission_stop_primary; then
     echo "ERROR: normal stop could not enable command_mux estop." >&2
     exit 1
@@ -185,9 +182,13 @@ fi
 if ! wait_for_continuous_mux_zero; then
     exit 1
 fi
-if [ "$WHITE_OK" -ne 0 ] || [ "$INSPECTION_OK" -ne 0 ]; then
-    exit 1
-fi
 
-echo "Mission stopped: actions canceled/terminal, mux estop enabled, final command zero."
+# action 状态只用于诊断。mission/estop 已送达且 mux 已连续归零时，图关闭
+# 造成的末条 IDLE 缺失不能逆转停车成功；stop_line_system 会继续验证进程/端口。
+wait_for_action_terminal /mission/white_bar_action_status "white-bar Action" \
+    || echo "WARN: white-bar Action terminal proof unavailable after safe stop." >&2
+wait_for_action_terminal /mission/inspection_action_status "inspection Action" \
+    || echo "WARN: inspection Action terminal proof unavailable after safe stop." >&2
+
+echo "Mission stopped: mux estop enabled and final command zero."
 exit 0

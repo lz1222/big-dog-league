@@ -16,6 +16,7 @@ from launch.substitutions import PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
+from nav2_common.launch import RewrittenYaml
 
 from rk_bringup.non_arm_competition_contract import DEFAULT_IMAGE_TOPIC
 from rk_bringup.inspection_helper_path import select_sdk_action_helper
@@ -140,6 +141,9 @@ def generate_launch_description():
     line_camera_width = LaunchConfiguration('line_camera_width')
     line_camera_height = LaunchConfiguration('line_camera_height')
     line_camera_fps = LaunchConfiguration('line_camera_fps')
+    line_follower_start_topic = LaunchConfiguration(
+        'line_follower_start_topic'
+    )
     fake_sdk_action_executable = LaunchConfiguration(
         'fake_sdk_action_executable'
     )
@@ -155,6 +159,16 @@ def generate_launch_description():
         'config',
         'non_arm_competition_params.yaml',
     ])
+    # 验收需要把 private start topic 仅注入 follower。直接叠加字典在
+    # Foxy 中会被 params-file 同名值覆盖，因此为该 Node 单独重写 YAML，
+    # 绝不把 validation topic 传给 mission/action 节点。
+    follower_config = RewrittenYaml(
+        source_file=formal_config,
+        param_rewrites={
+            'mission_start_topic': line_follower_start_topic,
+        },
+        convert_types=True,
+    )
     gait_config = PathJoinSubstitution([
         FindPackageShare('rk_locomotion'), 'config', 'gait_params.yaml',
     ])
@@ -264,6 +278,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'line_camera_fps', default_value='15.0',
             description='Requested USB line-camera frame rate.',
+        ),
+        DeclareLaunchArgument(
+            'line_follower_start_topic', default_value='/mission/start',
+            description=(
+                'Start topic subscribed only by line_follower_node. The '
+                'production default remains /mission/start; dynamic '
+                'preflight may inject a private validation topic.'
+            ),
         ),
         DeclareLaunchArgument(
             'sign_image_topic', default_value='/go2/front_camera/image_raw',
@@ -435,7 +457,9 @@ def generate_launch_description():
             executable='line_follower_node',
             name='line_follower_node',
             output='log',
-            parameters=[formal_config],
+            # 验收只覆盖巡线节点的 start 输入；mission/action 节点继续使用
+            # 参数文件中的 /mission/start，避免 validation topic 进入比赛业务链。
+            parameters=[follower_config],
         ),
         Node(
             package='rk_mission',
@@ -595,6 +619,12 @@ def generate_launch_description():
                     'go2_sdk_udp_server',
                 ]),
                 'sdk_server_instance_id': sdk_server_instance_id,
+                'sdk_command_port': ParameterValue(
+                    sdk_udp_port, value_type=int
+                ),
+                'sdk_status_port': ParameterValue(
+                    sdk_status_port, value_type=int
+                ),
                 # readiness 与实际执行器必须看到同一 helper：smoke 时只能是
                 # 带测试标识的 fake helper，生产时才解析安装树绝对路径。
                 'sdk_action_executable': ParameterValue(

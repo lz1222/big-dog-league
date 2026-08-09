@@ -24,24 +24,12 @@ void TestFirstAttemptSuccess()
   Expect(decision.success && !decision.retry, "first success must finish");
 }
 
-void TestSecondAttemptSuccess()
+void TestFirstFailureExhaustsWithoutRetry()
 {
   rk_go2_sdk_bridge::StartupStopRetryCore core;
   const auto first = core.RecordResult(-1);
-  const auto second = core.RecordResult(0);
-  Expect(first.retry && first.backoff_ms == 100, "first failure has bounded backoff");
-  Expect(second.attempt == 2 && second.success, "second success must finish");
-}
-
-void TestThreeFailuresExhaustWithoutFourthRetry()
-{
-  rk_go2_sdk_bridge::StartupStopRetryCore core;
-  core.RecordResult(-1);
-  const auto second = core.RecordResult(-1);
-  const auto third = core.RecordResult(-1);
-  Expect(second.retry && second.backoff_ms == 250, "second failure has final backoff");
-  Expect(third.attempt == 3 && !third.success && !third.retry,
-         "third failure must exhaust; a fourth StopMove is forbidden");
+  Expect(first.attempt == 1 && !first.success && !first.retry,
+         "first failure must exhaust; a second StopMove is forbidden");
 }
 
 }  // namespace
@@ -49,7 +37,6 @@ void TestThreeFailuresExhaustWithoutFourthRetry()
 int main()
 {
   TestFirstAttemptSuccess();
-  TestSecondAttemptSuccess();
-  TestThreeFailuresExhaustWithoutFourthRetry();
+  TestFirstFailureExhaustsWithoutRetry();
   return g_failures == 0 ? 0 : 1;
 }

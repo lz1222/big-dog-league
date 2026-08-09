@@ -11,6 +11,8 @@ COMPETITION_SESSION="${RK_COMPETITION_TMUX_SESSION:-rk_non_arm_competition}"
 ESTOP_SERVICE="${RK_COMPETITION_ESTOP_SERVICE:-/safety/estop}"
 source "${SCRIPT_DIR}/stop_safety_common.sh"
 FALLBACK_USED=0
+FINAL_STOP_ACK_PRESENT=0
+SDK_SERVER_MANAGED=0
 
 managed_pid_file_has_live_process() {
     local pid_file="$1"
@@ -165,6 +167,56 @@ stop_pid_file() {
     rm -f "$pid_file"
 }
 
+udp_listener_count() {
+    local port="$1"
+    ss -H -lun | awk -v port="$port" \
+        '$4 ~ (":" port "$") {count += 1} END {print count + 0}'
+}
+
+sdk_server_process_count() {
+    pgrep -fc '^/[^ ]*/go2_sdk_udp_server( |$)' 2>/dev/null || true
+}
+
+udp_forwarder_process_count() {
+    pgrep -fc '^([^ ]*/)?python3 [^ ]*/cmd_vel_udp_forwarder[.]py( |$)' \
+        2>/dev/null || true
+}
+
+residual_control_process_count() {
+    # 仅匹配真实解释器/可执行入口，不能把 tmux 保存的启动命令误算为残留。
+    ps -eo args= | awk '
+        $1 ~ /python3?$/ && $2 ~ /\/(line_course_mission_node|white_bar_action_executor|white_bar_stage_command_publisher|gait_control_node|inspection_action_executor|command_mux_node)(\.py)?$/ {count += 1}
+        END {print count + 0}
+    '
+}
+
+record_final_stop_ack() {
+    local pid_file="$1"
+    local name
+    local pid
+    local log_file
+    [ -f "$pid_file" ] || return 0
+    while IFS='|' read -r name pid log_file; do
+        if [ "$name" = "sdk_server" ]; then
+            SDK_SERVER_MANAGED=1
+            if [ -r "$log_file" ] \
+                    && grep -Eq 'StopMove reason=(signal_exit|zero_command).*ret=0|SDK_STARTUP_DIAG.*ret=0' "$log_file"; then
+                FINAL_STOP_ACK_PRESENT=1
+            fi
+        fi
+    done < "$pid_file"
+}
+
+cleanup_resources_clear() {
+    [ "$(sdk_server_process_count)" -eq 0 ] \
+        && [ "$(udp_forwarder_process_count)" -eq 0 ] \
+        && [ "$(udp_listener_count 15001)" -eq 0 ] \
+        && [ "$(udp_listener_count 15002)" -eq 0 ] \
+        && [ "$(residual_control_process_count)" -eq 0 ] \
+        && ! tmux has-session -t "$COMPETITION_SESSION" 2>/dev/null \
+        && ! tmux has-session -t "$LINE_SESSION" 2>/dev/null
+}
+
 ENV_SCRIPT="$(resolve_env_script)"
 if [ -n "$ENV_SCRIPT" ]; then
     source "$ENV_SCRIPT" || echo "WARN: ROS environment source failed." >&2
@@ -192,6 +244,7 @@ if ! rk_call_mux_estop stop_line_system_retry || ! wait_for_mux_zero; then
 fi
 
 # 仅在最终命令已由 mux 归零（或明确标记 emergency fallback）后终止进程。
+record_final_stop_ack "${COMPETITION_RUNTIME_DIR}/pids"
 stop_pid_file "${COMPETITION_RUNTIME_DIR}/pids"
 stop_pid_file "${LINE_RUNTIME_DIR}/pids"
 
@@ -199,9 +252,18 @@ stop_pid_file "${LINE_RUNTIME_DIR}/pids"
 tmux kill-session -t "$COMPETITION_SESSION" 2>/dev/null || true
 tmux kill-session -t "$LINE_SESSION" 2>/dev/null || true
 
-if [ "$FALLBACK_USED" -ne 0 ]; then
-    echo "RK system stopped via emergency fallback; acceptance remains FAILED." >&2
+for _ in 1 2 3 4 5; do
+    cleanup_resources_clear && break
+    sleep 1
+done
+
+if ! cleanup_resources_clear; then
+    echo "ERROR: cleanup left SDK, port, tmux, mission, or control resources." >&2
     exit 1
 fi
-echo "RK line/non-arm competition system stopped through normal mux ownership."
+if [ "$FALLBACK_USED" -ne 0 ]; then
+    echo "CLEANUP_FINAL classification=PASS_DEGRADED fallback=zero_only resources=0 stopmove_ack=${FINAL_STOP_ACK_PRESENT}"
+else
+    echo "CLEANUP_FINAL classification=PASS resources=0 stopmove_ack=${FINAL_STOP_ACK_PRESENT}"
+fi
 exit 0

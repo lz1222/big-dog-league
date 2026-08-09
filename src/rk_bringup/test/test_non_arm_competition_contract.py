@@ -1013,33 +1013,38 @@ def test_gid_gate_no_publishers_fail():
     assert 'raw_count=0' in detail, detail
 
 
-def test_sdk_hardware_ready_requires_exact_fresh_successful_stop_ack():
+def test_sdk_hardware_ready_keeps_current_startup_ack_during_idle():
     from rk_bringup.competition_readiness_node import (
         CompetitionReadinessNode,
     )
     node = object.__new__(CompetitionReadinessNode)
     node.sdk_server_instance_id = 'current-instance'
     node.sdk_status_freshness_timeout_sec = 30.0
+    node._sdk_error_status = None
     status = {
         'server_instance_id': 'current-instance',
-        'sequence': 2,
-        'event': 'STOP_MOVE',
+        'sequence': 1,
+        'event': 'STARTUP_STOP',
         'ret': 0,
-        'receive_monotonic_ns': time.monotonic_ns(),
+        # 35 秒前的真实 receive timestamp 仍是本实例 startup 资格；SDK
+        # status 是 event stream，长期 idle 不能被当作 backend death。
+        'receive_monotonic_ns': time.monotonic_ns() - 35_000_000_000,
     }
-    ok, detail = node._sdk_status_ready(status, 0.01)
+    ok, detail = node._sdk_status_ready(status, 35.0)
     assert ok, detail
+    assert 'idle_event_age_not_a_liveness_failure' in detail
     status['server_instance_id'] = 'previous-instance'
-    assert node._sdk_status_ready(status, 0.01)[0] is False
+    assert node._sdk_status_ready(status, 35.0)[0] is False
 
 
-def test_sdk_hardware_ready_rejects_move_or_error_ack():
+def test_sdk_hardware_ready_rejects_nonstartup_or_current_instance_error():
     from rk_bringup.competition_readiness_node import (
         CompetitionReadinessNode,
     )
     node = object.__new__(CompetitionReadinessNode)
     node.sdk_server_instance_id = 'current-instance'
     node.sdk_status_freshness_timeout_sec = 30.0
+    node._sdk_error_status = None
     status = {
         'server_instance_id': 'current-instance',
         'sequence': 3,
@@ -1048,9 +1053,39 @@ def test_sdk_hardware_ready_rejects_move_or_error_ack():
         'receive_monotonic_ns': time.monotonic_ns(),
     }
     assert node._sdk_status_ready(status, 0.01)[0] is False
-    status['event'] = 'STOP_MOVE'
-    status['ret'] = -1
+    status['event'] = 'STARTUP_STOP'
+    status['ret'] = 0
+    node._sdk_error_status = {
+        'server_instance_id': 'current-instance',
+        'sequence': 4,
+        'event': 'SDK_ERROR',
+    }
     assert node._sdk_status_ready(status, 0.01)[0] is False
+
+
+def test_validation_start_override_is_scoped_to_follower_only():
+    """正式默认不变，validation topic 只能注入 line_follower_node。"""
+    config = read_formal_config()
+    launch_source = FORMAL_LAUNCH.read_text(encoding='utf-8')
+    start_source = FORMAL_START_SCRIPT.read_text(encoding='utf-8')
+
+    assert (
+        config['line_follower_node']['ros__parameters']['mission_start_topic']
+        == '/mission/start'
+    )
+    assert "'line_follower_start_topic', default_value='/mission/start'" in (
+        launch_source
+    )
+    assert 'RK_COMPETITION_LINE_FOLLOWER_START_TOPIC:-/mission/start' in (
+        start_source
+    )
+    follower_section = launch_source.split(
+        "executable='line_follower_node'", 1
+    )[1].split("executable='line_course_mission_node'", 1)[0]
+    assert 'follower_config = RewrittenYaml(' in launch_source
+    assert "'mission_start_topic': line_follower_start_topic" in launch_source
+    assert 'parameters=[follower_config]' in follower_section
+    assert launch_source.count('line_follower_start_topic') == 4
 
 
 def test_mission_start_uses_reliable_volatile_dual_ack_delivery():

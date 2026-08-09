@@ -81,6 +81,16 @@ exit 2
         encoding='utf-8',
     )
     fake_ros2.chmod(0o700)
+    fake_ss = fake_bin / 'ss'
+    fake_ss.write_text(
+        '''#!/bin/bash
+if [ "${FAKE_SS_RESIDUAL:-0}" = 1 ]; then
+    printf '%s\\n' 'UNCONN 0 0 127.0.0.1:15001 0.0.0.0:*'
+fi
+''',
+        encoding='utf-8',
+    )
+    fake_ss.chmod(0o700)
     fake_observer = fake_bin / 'fake_topic_observer.py'
     fake_observer.write_text(
         '''#!/usr/bin/env python3
@@ -261,12 +271,25 @@ def test_two_estop_failures_trigger_logged_fallback_only_in_fake_cli(tmp_path):
         tmp_path, FAKE_ESTOP_MODE='fail_twice'
     )
 
-    assert result.returncode == 1
+    # 资源已清空的 fallback 是零速安全停车，不应因图已退场而成为 false FAIL。
+    assert result.returncode == 0
     assert result.stdout.count('classification=CLI_ERROR') == 2
     assert 'EMERGENCY FALLBACK' in result.stderr
     calls = Path(environment['FAKE_ROS2_CALL_LOG']).read_text(encoding='utf-8')
     assert '/navigation/cmd_vel geometry_msgs/msg/Twist' in calls
     assert 'go2_sdk' not in calls
+
+
+def test_cleanup_rejects_real_udp_residual_even_after_zero_fallback(tmp_path):
+    """最终端口残留是硬失败，不能被 action/estop 诊断放宽。"""
+    result, _environment = _run_stop_line(
+        tmp_path, FAKE_ESTOP_MODE='fail_twice', FAKE_SS_RESIDUAL='1'
+    )
+
+    assert result.returncode == 1
+    assert 'cleanup left SDK, port, tmux, mission, or control resources' in (
+        result.stderr
+    )
 
 
 def test_primary_success_with_incomplete_actions_keeps_estop_and_retry(

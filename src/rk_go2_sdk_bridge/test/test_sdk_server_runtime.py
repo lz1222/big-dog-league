@@ -111,6 +111,17 @@ def test_wrapper_does_not_map_ros_domain_to_unitree_channel_domain():
     assert 'ChannelFactory::Instance()->Init(\n      0, config.network_interface)' in server_source
 
 
+def test_standalone_bridge_inherits_ros_domain_and_uses_sdk_runtime():
+    """独立桥接 launch 不得把 LiDAR 与转发器拆到两个 ROS 域。"""
+    launch_source = (
+        PACKAGE_ROOT / 'launch' / 'go2_sdk_udp_bridge.launch.py'
+    ).read_text(encoding='utf-8')
+
+    assert "'ROS_DOMAIN_ID': '10'" not in launch_source
+    assert "'unitree_sdk_runtime'" in launch_source
+    assert "additional_env=ros_forwarder_env" in launch_source
+
+
 def test_all_sdk_targets_use_origin_relative_rpath_and_runtime_wrapper():
     """server、motion 和前向相机 helper 共享安装树运行时策略。"""
     cmake_source = (PACKAGE_ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')

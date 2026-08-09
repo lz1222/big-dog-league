@@ -197,6 +197,11 @@ if(unitree_sdk2_FOUND)
     src/go2_sdk_sport_state_monitor.cpp
   )
   rk_configure_unitree_sdk_target(go2_sdk_sport_state_monitor)
+  # 正式启动前唯一的 motion ownership / sport responder 恢复门。
+  add_executable(go2_motion_control_prearm
+    src/go2_motion_control_prearm.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_motion_control_prearm)
   add_executable(fake_sdk_motion_helper
     src/fake_sdk_motion_helper.cpp
   )
@@ -208,6 +213,7 @@ if(unitree_sdk2_FOUND)
     go2_sdk_motion_action
     go2_sdk_velocity_action
     go2_sdk_sport_state_monitor
+    go2_motion_control_prearm
     go2_front_camera_stream_helper
     fake_sdk_motion_helper
     DESTINATION lib/${PROJECT_NAME}

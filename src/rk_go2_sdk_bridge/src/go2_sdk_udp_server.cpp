@@ -520,7 +520,9 @@ int RunServer(const ServerConfig& config)
   unitree::robot::ChannelFactory::Instance()->Init(
       0, config.network_interface);
 
-  unitree::robot::go2::SportClient client;
+  // 正式控制链不申请 SDK motion lease；prearm 与已验收的 1003 路径均使用
+  // false，避免默认构造语义随 SDK 版本变化而改变控制平面行为。
+  unitree::robot::go2::SportClient client(false);
   client.SetTimeout(10.0F);
   const double init_started = WallTimeSeconds();
   client.Init();
