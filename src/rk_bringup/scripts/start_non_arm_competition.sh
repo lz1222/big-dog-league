@@ -26,6 +26,8 @@ LINE_CAMERA_FPS="${RK_COMPETITION_LINE_CAMERA_FPS:-15.0}"
 SDK_SERVER="${RK_COMPETITION_SDK_SERVER:-}"
 SDK_UDP_HOST="${RK_COMPETITION_SDK_UDP_HOST:-127.0.0.1}"
 SDK_UDP_PORT="${RK_COMPETITION_SDK_UDP_PORT:-15001}"
+SDK_STATUS_IP="${RK_COMPETITION_SDK_STATUS_IP:-127.0.0.1}"
+SDK_STATUS_PORT="${RK_COMPETITION_SDK_STATUS_PORT:-15002}"
 # 正式速度合同由这组三个变量统一注入阶段 B 的 SDK server 和阶段 C 的
 # launch/forwarder；禁止其中任一端回退到 SDK 二进制自身的保守默认值。
 MOTION_MAX_VX="${RK_COMPETITION_MOTION_MAX_VX:-0.30}"
@@ -42,6 +44,7 @@ CONTROL_PLANE_DDS_TIMEOUT_SEC="${RK_COMPETITION_CONTROL_PLANE_DDS_TIMEOUT_SEC:-}
 CONTROL_PLANE_REQUIRED_FRAMES="${RK_COMPETITION_CONTROL_PLANE_REQUIRED_FRAMES:-}"
 CONTROL_PLANE_MAX_FRAME_GAP_MS="${RK_COMPETITION_CONTROL_PLANE_MAX_FRAME_GAP_MS:-}"
 SDK_LISTEN_TIMEOUT_SEC="${RK_COMPETITION_SDK_LISTEN_TIMEOUT_SEC:-10}"
+STATUS_GATE_TIMEOUT_SEC="${RK_COMPETITION_STATUS_GATE_TIMEOUT_SEC:-12}"
 
 resolve_workspace_dir() {
     local candidate
@@ -97,12 +100,24 @@ link_node_log() {
 
     # SDK server 在阶段 B 由本脚本直接监管，不是 ros2 launch 子进程；
     # 保留它的原始诊断日志，不能用一个空 ROS 日志链接覆盖。
-    if [ "$label" = "sdk_server" ] && [ -f "${LOG_DIR}/sdk_server.log" ]; then
+    if { [ "$label" = "sdk_server" ] || [ "$label" = "udp_forwarder" ]; } \
+            && [ -f "${LOG_DIR}/${label}.log" ]; then
         return 0
     fi
 
     candidate="$(find "${LOG_DIR}/ros" -type f -name "*${pattern}*.log" \
         -print 2>/dev/null | head -n 1 || true)"
+    if [ -z "$candidate" ]; then
+        # Foxy launch 的 Python 节点日志常命名为 python3_PID_timestamp.log；
+        # 此时按结构化 logger 名匹配内容，不能生成一个空 alias 掩盖证据。
+        while IFS= read -r ros_log; do
+            if grep -Fqm1 "[${pattern}]" "$ros_log"; then
+                candidate="$ros_log"
+                break
+            fi
+        done < <(find "${LOG_DIR}/ros" -type f -name '*.log' -print \
+            2>/dev/null | sort)
+    fi
     if [ -n "$candidate" ]; then
         ln -sfn "$candidate" "${LOG_DIR}/${label}.log"
     else
@@ -197,6 +212,89 @@ validate_sdk_network_interface() {
     echo "Go2 network readiness passed: ${SDK_NETWORK_INTERFACE} ${SDK_NETWORK_ADDRESS_CIDR} (LOWER_UP, carrier=yes)"
 }
 
+validate_clean_ros_environment() {
+    # 正式父进程必须使用 Foxy/Domain10，且不继承 Unitree DDS 选择。
+    local graph_output
+    local forbidden_path
+
+    if [ "${ROS_DISTRO:-}" != "foxy" ] || [ "${ROS_DOMAIN_ID:-}" != "10" ]; then
+        echo "ERROR: formal ROS environment must be Foxy / Domain 10." >&2
+        return 1
+    fi
+    for variable_name in RMW_IMPLEMENTATION CYCLONEDDS_URI CYCLONEDDS_HOME; do
+        if [ -n "${!variable_name+x}" ]; then
+            echo "ERROR: ${variable_name} must be unset in normal ROS environment." >&2
+            return 1
+        fi
+    done
+    for forbidden_path in \
+        /usr/local/cyclonedds/lib \
+        /home/unitree/cyclonedds_ws/install/cyclonedds/lib; do
+        case ":${LD_LIBRARY_PATH:-}:" in
+            *:"${forbidden_path}":*)
+                echo "ERROR: forbidden ROS DDS path remains: ${forbidden_path}" >&2
+                return 1
+                ;;
+        esac
+    done
+    if ! graph_output="$(timeout 8s ros2 node list 2>&1)"; then
+        printf '%s\n' "$graph_output" >&2
+        return 1
+    fi
+    if printf '%s\n' "$graph_output" | grep -Fq 'std::bad_alloc'; then
+        printf '%s\n' "$graph_output" >&2
+        return 1
+    fi
+    echo "ROS environment gate passed: Foxy Domain10, graph query healthy."
+}
+
+udp_listener_count() {
+    local port="$1"
+    # `ss -lun` 的本地监听地址位于第 4 列；第 5 列是 peer 地址。若检查
+    # peer 列，会把已经 bind 的 receiver 误判为未就绪并提前清理。
+    ss -H -lun | awk -v port="$port" '$4 ~ (":" port "$") {count += 1} END {print count + 0}'
+}
+
+wait_for_udp_listener_count() {
+    local port="$1"
+    local expected="$2"
+    local timeout_sec="$3"
+    local deadline=$(( $(date +%s) + timeout_sec ))
+
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        if [ "$(udp_listener_count "$port")" -eq "$expected" ]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "ERROR: UDP port ${port} listener count is $(udp_listener_count "$port"), expected ${expected}." >&2
+    return 1
+}
+
+record_tmux_pane() {
+    local label="$1"
+    local target="$2"
+    local log_file="$3"
+    local pane_pid
+    pane_pid="$(tmux display-message -p -t "$target" '#{pane_pid}')"
+    printf '%s|%s|%s\n' "$label" "$pane_pid" "$log_file" \
+        >> "${RUNTIME_DIR}/pids"
+}
+
+cleanup_failed_start() {
+    # 优先向每个受管 pane 发送 SIGINT，使 server 的 signal_exit StopMove 和
+    # forwarder 的全零 shutdown 路径有机会正常完成；随后再收走 tmux session。
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+        local window
+        for window in ros_graph sdk_status sdk_server; do
+            tmux send-keys -t "${SESSION}:${window}" C-c 2>/dev/null || true
+        done
+        sleep 2
+        tmux kill-session -t "$SESSION" 2>/dev/null || true
+    fi
+    rm -f "${RUNTIME_DIR}/pids"
+}
+
 if ! command -v tmux >/dev/null 2>&1; then
     echo "ERROR: tmux is required for the formal competition session." >&2
     exit 1
@@ -208,7 +306,10 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
 fi
 
 ENV_SCRIPT="$(resolve_env_script)"
+# 正式入口不依赖调用者 shell；软件 smoke 请使用独立 acceptance 的隔离域。
+export RK_ROS_DOMAIN_ID=10
 source "$ENV_SCRIPT"
+validate_clean_ros_environment || exit 1
 if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
     validate_sdk_network_interface || exit 1
 fi
@@ -221,6 +322,8 @@ SDK_BRIDGE_PREFIX="$(ros2 pkg prefix rk_go2_sdk_bridge)"
 SDK_RUNTIME_WRAPPER="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_server_runtime.py"
 CONTROL_PLANE_GATE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_control_plane_gate.py"
 CONTROL_PLANE_PROBE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_sport_state_monitor"
+SDK_STATUS_GATE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/sdk_motion_status_gate.py"
+UDP_FORWARDER="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/cmd_vel_udp_forwarder.py"
 if [ -n "${SDK_SERVER}" ]; then
     SDK_SERVER_BINARY="${SDK_SERVER}"
 else
@@ -228,7 +331,8 @@ else
 fi
 
 for required_file in "$SDK_RUNTIME_WRAPPER" "$CONTROL_PLANE_GATE" \
-    "$CONTROL_PLANE_PROBE" "$SDK_SERVER_BINARY"; do
+    "$CONTROL_PLANE_PROBE" "$SDK_STATUS_GATE" "$UDP_FORWARDER" \
+    "$SDK_SERVER_BINARY"; do
     if [ ! -x "$required_file" ]; then
         echo "ERROR: required staged-start executable is missing: ${required_file}" >&2
         exit 1
@@ -249,17 +353,35 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ] \
     done
 fi
 
+if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
+    if [ "$START_SDK_SERVER" != "true" ] || [ "$START_UDP_FORWARDER" != "true" ]; then
+        echo "ERROR: formal hardware mode requires one staged SDK server and forwarder." >&2
+        exit 1
+    fi
+    if [ "$(udp_listener_count "$SDK_UDP_PORT")" -ne 0 ] \
+            || [ "$(udp_listener_count "$SDK_STATUS_PORT")" -ne 0 ]; then
+        echo "ERROR: stale command/status UDP listener exists; run cleanup first." >&2
+        exit 1
+    fi
+fi
+
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR/ros"
 rm -f "${RUNTIME_DIR}/pids"
 touch "${RUNTIME_DIR}/pids"
+
+SERVER_INSTANCE_ID="software-smoke"
+if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
+    SERVER_INSTANCE_ID="$(tr -d '\r\n' < /proc/sys/kernel/random/uuid)"
+fi
+printf '%s\n' "$SERVER_INSTANCE_ID" > "${RUNTIME_DIR}/server_instance_id"
 
 LAUNCH_ARGS=(
     "hardware_mode:=${HARDWARE_MODE}"
     "software_smoke_mode:=${SOFTWARE_SMOKE_MODE}"
     "start_line_camera:=${START_LINE_CAMERA}"
-    # SDK server 由阶段 B 单独启动并确认 UDP listening；launch 仅负责阶段 C。
+    # 阶段 C 严禁重复创建阶段 B0/B1 已监管的进程。
     "start_sdk_server:=false"
-    "start_udp_forwarder:=${START_UDP_FORWARDER}"
+    "start_udp_forwarder:=false"
     "enable_debug_image:=${ENABLE_DEBUG_IMAGE}"
     "sdk_network_interface:=${SDK_NETWORK_INTERFACE}"
     "line_image_topic:=${LINE_IMAGE_TOPIC}"
@@ -269,48 +391,145 @@ LAUNCH_ARGS=(
     "line_camera_fps:=${LINE_CAMERA_FPS}"
     "sdk_udp_host:=${SDK_UDP_HOST}"
     "sdk_udp_port:=${SDK_UDP_PORT}"
+    "sdk_status_ip:=${SDK_STATUS_IP}"
+    "sdk_status_port:=${SDK_STATUS_PORT}"
+    "sdk_server_instance_id:=${SERVER_INSTANCE_ID}"
     "motion_max_vx:=${MOTION_MAX_VX}"
     "motion_max_vy:=${MOTION_MAX_VY}"
     "motion_max_yaw:=${MOTION_MAX_YAW}"
 )
-# sdk_server 仅在显式指定时覆盖 launch 文件中 FindPackagePrefix 默认值。
 if [ -n "${SDK_SERVER}" ]; then
     LAUNCH_ARGS+=("sdk_server:=${SDK_SERVER}")
 fi
 QUOTED_ARGS="$(printf ' %q' "${LAUNCH_ARGS[@]}")"
-LAUNCH_COMMAND="source $(printf '%q' "$ENV_SCRIPT") && export ROS_LOG_DIR=$(printf '%q' "${LOG_DIR}/ros") && exec ros2 launch rk_bringup competition_non_arm.launch.py${QUOTED_ARGS}"
+LAUNCH_COMMAND="source $(printf '%q' "$ENV_SCRIPT") && export RK_ROS_DOMAIN_ID=10 ROS_LOG_DIR=$(printf '%q' "${LOG_DIR}/ros") && exec ros2 launch rk_bringup competition_non_arm.launch.py${QUOTED_ARGS}"
 
-if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ] \
-        && [ "$START_SDK_SERVER" = "true" ]; then
-    GATE_COMMAND="$(printf '%q ' "$CONTROL_PLANE_GATE" \
-        --interface "$SDK_NETWORK_INTERFACE" --robot-ip "$ROBOT_IP" \
-        --runtime-wrapper "$SDK_RUNTIME_WRAPPER" --probe "$CONTROL_PLANE_PROBE" \
-        --network-timeout-sec "$CONTROL_PLANE_NETWORK_TIMEOUT_SEC" \
-        --ping-count "$CONTROL_PLANE_PING_COUNT" \
-        --ping-poll-sec "$CONTROL_PLANE_PING_POLL_SEC" \
-        --dds-timeout-sec "$CONTROL_PLANE_DDS_TIMEOUT_SEC" \
-        --required-frames "$CONTROL_PLANE_REQUIRED_FRAMES" \
-        --max-frame-gap-ms "$CONTROL_PLANE_MAX_FRAME_GAP_MS")"
-    SERVER_COMMAND="$(printf '%q ' "$SDK_RUNTIME_WRAPPER" "$SDK_SERVER_BINARY" \
-        --interface "$SDK_NETWORK_INTERFACE" --listen-ip "$SDK_UDP_HOST" \
-        --port "$SDK_UDP_PORT" --max-vx "$MOTION_MAX_VX" \
-        --max-vy "$MOTION_MAX_VY" --max-yaw "$MOTION_MAX_YAW")"
-    # 阶段 A 成功后才启动阶段 B；以 server 的明确 listening 日志作为阶段 C
-    # 放行条件。轮询只是观察状态，绝非用固定 sleep 猜测 DDS 是否完成发现。
-    LAUNCH_COMMAND="source $(printf '%q' "$ENV_SCRIPT"); set -e; ${GATE_COMMAND}; ${SERVER_COMMAND} > $(printf '%q' "${LOG_DIR}/sdk_server.log") 2>&1 & sdk_pid=\$!; deadline=\$(( \$(date +%s) + $(printf '%q' "$SDK_LISTEN_TIMEOUT_SEC") )); while [ \$(date +%s) -lt \$deadline ]; do if grep -Fq 'UDP server listening on' $(printf '%q' "${LOG_DIR}/sdk_server.log"); then break; fi; if ! kill -0 \$sdk_pid 2>/dev/null; then echo 'SDK_STARTUP_DIAG classification=SDK_RUNTIME_LIBRARY_ERROR'; cat $(printf '%q' "${LOG_DIR}/sdk_server.log"); exit 1; fi; sleep 0.1; done; if ! grep -Fq 'UDP server listening on' $(printf '%q' "${LOG_DIR}/sdk_server.log"); then echo 'SDK_STARTUP_DIAG classification=ROBOT_CONTROL_PLANE_NOT_READY'; kill \$sdk_pid 2>/dev/null || true; exit 1; fi; echo 'CONTROL_PLANE_DIAG event=SDK_UDP_LISTENING'; ${LAUNCH_COMMAND}"
+if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
+    CONTROL_GATE_COMMAND=(
+        "$CONTROL_PLANE_GATE"
+        --interface "$SDK_NETWORK_INTERFACE"
+        --robot-ip "$ROBOT_IP"
+        --runtime-wrapper "$SDK_RUNTIME_WRAPPER"
+        --probe "$CONTROL_PLANE_PROBE"
+        --network-timeout-sec "$CONTROL_PLANE_NETWORK_TIMEOUT_SEC"
+        --ping-count "$CONTROL_PLANE_PING_COUNT"
+        --ping-poll-sec "$CONTROL_PLANE_PING_POLL_SEC"
+        --dds-timeout-sec "$CONTROL_PLANE_DDS_TIMEOUT_SEC"
+        --required-frames "$CONTROL_PLANE_REQUIRED_FRAMES"
+        --max-frame-gap-ms "$CONTROL_PLANE_MAX_FRAME_GAP_MS"
+    )
+    if ! "${CONTROL_GATE_COMMAND[@]}" 2>&1 \
+            | tee "${LOG_DIR}/control_plane_gate.log"; then
+        cleanup_failed_start
+        exit 1
+    fi
+
+    FORWARDER_ARGS=(
+        "$UDP_FORWARDER" --ros-args
+        -p "cmd_vel_topic:=/navigation/cmd_vel"
+        -p "udp_host:=${SDK_UDP_HOST}"
+        -p "udp_port:=${SDK_UDP_PORT}"
+        -p "status_ip:=${SDK_STATUS_IP}"
+        -p "status_port:=${SDK_STATUS_PORT}"
+        -p "expected_server_instance_id:=${SERVER_INSTANCE_ID}"
+        -p "max_vx:=${MOTION_MAX_VX}"
+        -p "max_vy:=${MOTION_MAX_VY}"
+        -p "max_yaw:=${MOTION_MAX_YAW}"
+    )
+    FORWARDER_COMMAND="source $(printf '%q' "$ENV_SCRIPT") && export RK_ROS_DOMAIN_ID=10 && exec $(printf '%q ' "${FORWARDER_ARGS[@]}")"
+    if ! tmux new-session -d -s "$SESSION" -n sdk_status \
+            "bash -lc $(printf '%q' "$FORWARDER_COMMAND")"; then
+        cleanup_failed_start
+        exit 1
+    fi
+    tmux pipe-pane -o -t "${SESSION}:sdk_status" \
+        "cat >> $(printf '%q' "${LOG_DIR}/udp_forwarder.log")"
+    record_tmux_pane udp_forwarder "${SESSION}:sdk_status" \
+        "${LOG_DIR}/udp_forwarder.log"
+
+    if ! "$SDK_STATUS_GATE" --mode receiver \
+            --expected-server-instance-id "$SERVER_INSTANCE_ID" \
+            --status-ip "$SDK_STATUS_IP" --status-port "$SDK_STATUS_PORT" \
+            --timeout-sec "$STATUS_GATE_TIMEOUT_SEC" 2>&1 \
+            | tee "${LOG_DIR}/status_receiver_gate.log"; then
+        cleanup_failed_start
+        exit 1
+    fi
+    if ! wait_for_udp_listener_count \
+            "$SDK_STATUS_PORT" 1 "$STATUS_GATE_TIMEOUT_SEC"; then
+        cleanup_failed_start
+        exit 1
+    fi
+
+    STATUS_MIN_RECEIVE_NS="$(python3 -c 'import time; print(time.monotonic_ns())')"
+    SERVER_ARGS=(
+        "$SDK_RUNTIME_WRAPPER" "$SDK_SERVER_BINARY"
+        --interface "$SDK_NETWORK_INTERFACE"
+        --listen-ip "$SDK_UDP_HOST"
+        --port "$SDK_UDP_PORT"
+        --status-ip "$SDK_STATUS_IP"
+        --status-port "$SDK_STATUS_PORT"
+        --server-instance-id "$SERVER_INSTANCE_ID"
+        --max-vx "$MOTION_MAX_VX"
+        --max-vy "$MOTION_MAX_VY"
+        --max-yaw "$MOTION_MAX_YAW"
+    )
+    SERVER_COMMAND="exec $(printf '%q ' "${SERVER_ARGS[@]}")"
+    if ! tmux new-window -d -t "$SESSION" -n sdk_server \
+            "bash -lc $(printf '%q' "$SERVER_COMMAND")"; then
+        cleanup_failed_start
+        exit 1
+    fi
+    tmux pipe-pane -o -t "${SESSION}:sdk_server" \
+        "cat >> $(printf '%q' "${LOG_DIR}/sdk_server.log")"
+    record_tmux_pane sdk_server "${SESSION}:sdk_server" \
+        "${LOG_DIR}/sdk_server.log"
+
+    if ! "$SDK_STATUS_GATE" --mode status --event STARTUP_STOP \
+            --required-ret 0 --reject-move \
+            --expected-server-instance-id "$SERVER_INSTANCE_ID" \
+            --min-receive-monotonic-ns "$STATUS_MIN_RECEIVE_NS" \
+            --status-ip "$SDK_STATUS_IP" --status-port "$SDK_STATUS_PORT" \
+            --timeout-sec "$STATUS_GATE_TIMEOUT_SEC" 2>&1 \
+            | tee "${LOG_DIR}/startup_status_gate.log"; then
+        cleanup_failed_start
+        exit 1
+    fi
+    if ! wait_for_udp_listener_count \
+            "$SDK_UDP_PORT" 1 "$SDK_LISTEN_TIMEOUT_SEC"; then
+        cleanup_failed_start
+        exit 1
+    fi
+    if [ "$(tmux display-message -p -t "${SESSION}:sdk_server" '#{pane_dead}')" != "0" ]; then
+        echo "ERROR: SDK server exited after startup ACK." >&2
+        cleanup_failed_start
+        exit 1
+    fi
+
+    if ! tmux new-window -d -t "$SESSION" -n ros_graph \
+            "bash -lc $(printf '%q' "$LAUNCH_COMMAND")"; then
+        cleanup_failed_start
+        exit 1
+    fi
+else
+    if ! tmux new-session -d -s "$SESSION" -n ros_graph \
+            "bash -lc $(printf '%q' "$LAUNCH_COMMAND")"; then
+        cleanup_failed_start
+        exit 1
+    fi
 fi
 
-tmux new-session -d -s "$SESSION" "bash -lc $(printf '%q' "$LAUNCH_COMMAND")"
-tmux pipe-pane -o -t "$SESSION" "cat >> $(printf '%q' "${LOG_DIR}/launch.log")"
-PANE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
-printf 'competition_launch|%s|%s\n' "$PANE_PID" "${LOG_DIR}/launch.log" \
-    >> "${RUNTIME_DIR}/pids"
+tmux pipe-pane -o -t "${SESSION}:ros_graph" \
+    "cat >> $(printf '%q' "${LOG_DIR}/launch.log")"
+record_tmux_pane competition_launch "${SESSION}:ros_graph" \
+    "${LOG_DIR}/launch.log"
 
 deadline=$(( $(date +%s) + STARTUP_TIMEOUT_SEC ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
     # readiness 成功后仍要核对 ROS 图中的最终速度所有者，不能只凭服务
-    # 返回值宣布可起跑。
-    if readonly_graph_check >/dev/null 2>&1; then
+    # 返回值宣布可起跑。每轮覆盖保存完整只读证据，超时时不能只留下
+    # 一个笼统错误而丢失实际未通过的 readiness 条目。
+    if readonly_graph_check > "${LOG_DIR}/readiness_gate.log" 2>&1; then
         create_log_aliases
         echo "Formal non-arm competition chain is ready in tmux session: ${SESSION}"
         echo "Logs: ${LOG_DIR}"
@@ -323,7 +542,8 @@ done
 
 create_log_aliases
 echo "ERROR: read-only ROS graph/readiness check failed; no mission start was sent." >&2
-tmux send-keys -t "$SESSION" C-c 2>/dev/null || true
-sleep 1
-tmux kill-session -t "$SESSION" 2>/dev/null || true
+if [ -s "${LOG_DIR}/readiness_gate.log" ]; then
+    sed -n '1,240p' "${LOG_DIR}/readiness_gate.log" >&2
+fi
+cleanup_failed_start
 exit 1

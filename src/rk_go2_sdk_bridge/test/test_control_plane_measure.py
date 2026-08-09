@@ -26,11 +26,24 @@ def test_calibration_parser_does_not_accept_production_thresholds(tmp_path):
         '--monitor', '/monitor', '--branch', 'test', '--commit', 'abc',
     ])
     assert arguments.interface == 'eth0'
-    source = MEASURE_PATH.read_text(encoding='utf-8')
-    for production_name in (
-            'network_timeout_sec', 'ping_count', 'dds_timeout_sec',
-            'required_frames', 'max_frame_gap_ms'):
-        assert production_name not in source
+    # 统计结果可以合法包含同名字段，但 CLI 绝不能接收 production 阈值。
+    for production_option in (
+            '--network-timeout-sec', '--ping-count', '--dds-timeout-sec',
+            '--required-frames', '--max-frame-gap-ms'):
+        try:
+            measure.parse_args([
+                '--run-root', str(tmp_path), '--runtime-wrapper', '/wrapper',
+                '--monitor', '/monitor', '--branch', 'test', '--commit', 'abc',
+                production_option, '1',
+            ])
+        except SystemExit as error:
+            assert error.code != 0
+        else:
+            raise AssertionError(
+                '{} must not be a calibration CLI option'.format(
+                    production_option
+                )
+            )
 
 
 def test_production_gate_remains_fail_closed_without_thresholds():

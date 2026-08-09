@@ -4,6 +4,7 @@ import ast
 import importlib
 from pathlib import Path
 import sys
+import time
 
 import pytest
 import yaml
@@ -596,8 +597,101 @@ def test_formal_start_network_gate_fails_closed_before_sdk_processes():
     assert 'LOWER_UP' in source
     assert '/sys/class/net/${SDK_NETWORK_INTERFACE}/carrier' in source
     assert source.index('validate_sdk_network_interface || exit 1') < source.index(
-        'GATE_COMMAND='
+        'CONTROL_GATE_COMMAND='
     )
+
+
+def test_formal_start_is_receiver_first_and_uses_current_instance_ack():
+    """B0 listener、实例 ACK 和端口门禁必须全部早于 formal ROS graph。"""
+    source = (
+        PACKAGE_ROOT / 'scripts' / 'start_non_arm_competition.sh'
+    ).read_text(encoding='utf-8')
+
+    assert '"start_udp_forwarder:=false"' in source
+    assert '--server-instance-id "$SERVER_INSTANCE_ID"' in source
+    assert source.index('FORWARDER_ARGS=') < source.index(
+        '--mode receiver'
+    ) < source.index('SERVER_ARGS=') < source.index(
+        '--mode status'
+    ) < source.index('-n ros_graph')
+    assert 'SDK_MOTION_BACKEND_READY' in (
+        PACKAGE_ROOT / 'rk_bringup' / 'competition_readiness_node.py'
+    ).read_text(encoding='utf-8')
+    assert 'readiness_gate.log' in source
+    assert 'readonly_graph_check >/dev/null' not in source
+    assert 'grep -Fqm1 "[${pattern}]" "$ros_log"' in source
+
+    readiness_source = (
+        PACKAGE_ROOT / 'rk_bringup' / 'competition_readiness_node.py'
+    ).read_text(encoding='utf-8')
+    assert 'qos_profile_sensor_data' in readiness_source
+    assert 'self.line_image_subscription = self.create_subscription(' in (
+        readiness_source
+    )
+    assert 'self.sdk_motion_status_subscription = self.create_subscription(' in (
+        readiness_source
+    )
+
+
+def test_formal_udp_listener_checks_local_ss_endpoint_column():
+    """端口门禁必须检查 ss 的 local 第 4 列，不能把 peer 第 5 列当监听端。"""
+    for script_name in (
+            'start_non_arm_competition.sh',
+            'accept_non_arm_zero_motion.sh'):
+        source = (
+            PACKAGE_ROOT / 'scripts' / script_name
+        ).read_text(encoding='utf-8')
+        assert "'$4 ~ (\":\" port \"$\")" in source
+        assert "'$5 ~ (\":\" port \"$\")" not in source
+
+
+def test_zero_motion_hardware_acceptance_is_bounded_and_fail_closed():
+    """正式真机验收重复启动/ACK/清理，但自身绝不发布运动或 mission start。"""
+    source = (
+        PACKAGE_ROOT / 'scripts' / 'accept_non_arm_zero_motion.sh'
+    ).read_text(encoding='utf-8')
+
+    assert 'RK_ZERO_ACCEPT_CYCLES:-3' in source
+    assert 'start_non_arm_competition.sh' in source
+    assert 'stop_line_system.sh' in source
+    assert 'sdk_motion_status_audit.py' in source
+    assert 'SDK_MOTION_BACKEND_READY' in source
+    assert 'move_count' in source
+    assert 'cleanup_is_complete' in source
+    assert 'sdk_server_process_count' in source
+    assert 'udp_forwarder_process_count' in source
+    assert 'consecutive-zero-count 1' in source
+    assert '--rate-type "$rate_type"' in source
+    assert 'stdbuf -oL ros2 topic hz' not in source
+    assert "actual=[0-9]+([.][0-9]+)?x[0-9]+([.][0-9]+)?@" in source
+    assert 'RK_ZERO_ACCEPT_STOP_TIMEOUT_SEC:-90' in source
+    assert '/line_camera/image_raw' in source
+    assert '/perception/line_track' in source
+    assert '/perception/white_bar_detection' in source
+    assert 'ros2 topic pub' not in source
+    assert 'mission_start.sh' not in source
+    for forbidden in (
+            'ReleaseMode', 'SelectMode', 'ServiceSwitch', 'BalanceStand',
+            'FrontJump', '.Move('):
+        assert forbidden not in source
+
+
+def test_formal_stop_uses_native_persistent_observer_before_pid_cleanup():
+    """停机状态与连续零速证明不能依赖反复启动 ros2 topic echo。"""
+    mission_stop = (
+        PACKAGE_ROOT / 'scripts' / 'mission_stop.sh'
+    ).read_text(encoding='utf-8')
+    stop_line = (
+        PACKAGE_ROOT / 'scripts' / 'stop_line_system.sh'
+    ).read_text(encoding='utf-8')
+
+    assert 'non_arm_smoke_observer.py' in mission_stop
+    assert '--once --dump' in mission_stop
+    assert '--consecutive-zero-count 3' in mission_stop
+    assert 'ros2 topic echo --once' not in mission_stop
+    assert 'non_arm_smoke_observer.py' in stop_line
+    assert '--consecutive-zero-count 3' in stop_line
+    assert 'ros2 topic echo --once' not in stop_line
 
 
 def test_launch_helper_selection_uses_checked_production_install_path():
@@ -917,6 +1011,46 @@ def test_gid_gate_no_publishers_fail():
     )
     assert not ok, 'no publishers must fail'
     assert 'raw_count=0' in detail, detail
+
+
+def test_sdk_hardware_ready_requires_exact_fresh_successful_stop_ack():
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    node = object.__new__(CompetitionReadinessNode)
+    node.sdk_server_instance_id = 'current-instance'
+    node.sdk_status_freshness_timeout_sec = 30.0
+    status = {
+        'server_instance_id': 'current-instance',
+        'sequence': 2,
+        'event': 'STOP_MOVE',
+        'ret': 0,
+        'receive_monotonic_ns': time.monotonic_ns(),
+    }
+    ok, detail = node._sdk_status_ready(status, 0.01)
+    assert ok, detail
+    status['server_instance_id'] = 'previous-instance'
+    assert node._sdk_status_ready(status, 0.01)[0] is False
+
+
+def test_sdk_hardware_ready_rejects_move_or_error_ack():
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    node = object.__new__(CompetitionReadinessNode)
+    node.sdk_server_instance_id = 'current-instance'
+    node.sdk_status_freshness_timeout_sec = 30.0
+    status = {
+        'server_instance_id': 'current-instance',
+        'sequence': 3,
+        'event': 'MOVE',
+        'ret': 0,
+        'receive_monotonic_ns': time.monotonic_ns(),
+    }
+    assert node._sdk_status_ready(status, 0.01)[0] is False
+    status['event'] = 'STOP_MOVE'
+    status['ret'] = -1
+    assert node._sdk_status_ready(status, 0.01)[0] is False
 
 
 def test_mission_start_uses_reliable_volatile_dual_ack_delivery():

@@ -16,14 +16,18 @@ Publisher、Service 或 Action。
 
 import argparse
 import json
+import math
 import sys
 import time
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import Image
 from std_msgs.msg import String
+from rk_interfaces.msg import LineTrack, SpecialTargetDetection
 
 _OBSERVER_PREAMBLE = '__NON_ARM_SMOKE_OBSERVER_READY__'
 
@@ -163,6 +167,82 @@ class StreamTwistObserver(Node):
         sys.stdout.flush()
 
 
+def twist_is_zero(msg):
+    """只接受六个有限且严格为零的 Twist 字段。"""
+    values = (
+        msg.linear.x, msg.linear.y, msg.linear.z,
+        msg.angular.x, msg.angular.y, msg.angular.z,
+    )
+    return all(math.isfinite(value) and value == 0.0 for value in values)
+
+
+class ConsecutiveZeroTwistObserver(StreamTwistObserver):
+    """用单一长期订阅确认连续全零，避免反复 CLI 发现竞态。"""
+
+    def __init__(self, topic_name, required_count, timeout_sec):
+        self._zero_count = 0
+        self._required_count = required_count
+        self._deadline = time.monotonic() + timeout_sec
+        self._done = False
+        super().__init__(topic_name)
+
+    def _on_twist(self, msg):
+        super()._on_twist(msg)
+        if twist_is_zero(msg):
+            self._zero_count += 1
+        else:
+            self._zero_count = 0
+        self._done = self._zero_count >= self._required_count
+
+    def timed_out(self):
+        return time.monotonic() >= self._deadline
+
+
+def compute_rate_result(timestamps, minimum_rate_hz, required_span_sec):
+    """用首末样本计算平均频率，并要求足够时间跨度排除短突发。"""
+    gaps = [
+        current - previous
+        for previous, current in zip(timestamps, timestamps[1:])
+    ]
+    span_sec = timestamps[-1] - timestamps[0] if gaps else 0.0
+    rate_hz = (len(timestamps) - 1) / span_sec if span_sec > 0.0 else 0.0
+    max_gap_sec = max(gaps) if gaps else None
+    return {
+        'success': (
+            len(timestamps) >= 2
+            and span_sec >= required_span_sec
+            and rate_hz >= minimum_rate_hz
+        ),
+        'samples': len(timestamps),
+        'span_sec': span_sec,
+        'rate_hz': rate_hz,
+        'max_gap_sec': max_gap_sec,
+        'minimum_rate_hz': minimum_rate_hz,
+        'required_span_sec': required_span_sec,
+    }
+
+
+class RateObserver(Node):
+    """在完整有界窗口内统计指定正式感知 Topic 的实际到达频率。"""
+
+    MESSAGE_TYPES = {
+        'image': Image,
+        'line_track': LineTrack,
+        'special_target': SpecialTargetDetection,
+    }
+
+    def __init__(self, topic_name, rate_type):
+        super().__init__('smoke_rate_' + _unique_suffix())
+        self._timestamps = []
+        qos = qos_profile_sensor_data if rate_type == 'image' else 10
+        self.subscription = self.create_subscription(
+            self.MESSAGE_TYPES[rate_type], topic_name, self._on_message, qos
+        )
+
+    def _on_message(self, _msg):
+        self._timestamps.append(time.monotonic())
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Foxy-compatible read-only String topic observer'
@@ -179,6 +259,16 @@ def main():
         '--twist', action='store_true',
         help='Observe geometry_msgs/Twist and emit compatible YAML samples',
     )
+    parser.add_argument(
+        '--consecutive-zero-count', type=int, default=0,
+        help='With --twist, exit 0 only after this many consecutive zero samples',
+    )
+    parser.add_argument(
+        '--rate-type', choices=tuple(RateObserver.MESSAGE_TYPES),
+        help='Measure arrival rate for a supported formal perception type',
+    )
+    parser.add_argument('--minimum-rate-hz', type=float, default=0.0)
+    parser.add_argument('--required-span-sec', type=float, default=2.0)
     args = parser.parse_args()
 
     if args.once and not args.dump and not args.match_key and not args.value_key:
@@ -189,11 +279,31 @@ def main():
     if args.twist and (args.once or args.dump or args.match_key or args.value_key):
         sys.stderr.write('--twist only supports stream mode\n')
         sys.exit(2)
+    if args.consecutive_zero_count < 0:
+        sys.stderr.write('--consecutive-zero-count must be nonnegative\n')
+        sys.exit(2)
+    if args.consecutive_zero_count and not args.twist:
+        sys.stderr.write('--consecutive-zero-count requires --twist\n')
+        sys.exit(2)
+    if args.rate_type and (args.twist or args.once):
+        sys.stderr.write('--rate-type cannot be combined with --twist/--once\n')
+        sys.exit(2)
+    if args.rate_type and (
+        not math.isfinite(args.minimum_rate_hz)
+        or args.minimum_rate_hz <= 0.0
+        or not math.isfinite(args.required_span_sec)
+        or args.required_span_sec <= 0.0
+        or args.required_span_sec >= args.timeout_sec
+    ):
+        sys.stderr.write('rate thresholds must be positive and span < timeout\n')
+        sys.exit(2)
 
     rclpy.init(args=[])
     node = None
     try:
-        if args.once and args.dump:
+        if args.rate_type:
+            node = RateObserver(args.topic_name, args.rate_type)
+        elif args.once and args.dump:
             node = DumpOnceObserver(
                 args.topic_name, args.timeout_sec,
             )
@@ -205,6 +315,10 @@ def main():
         elif args.once and args.value_key:
             node = OnceValueObserver(
                 args.topic_name, args.value_key, args.timeout_sec,
+            )
+        elif args.twist and args.consecutive_zero_count:
+            node = ConsecutiveZeroTwistObserver(
+                args.topic_name, args.consecutive_zero_count, args.timeout_sec,
             )
         elif args.twist:
             node = StreamTwistObserver(args.topic_name)
@@ -235,6 +349,24 @@ def main():
                 sys.stdout.write(str(node._value) + '\n')
                 sys.exit(0)
             sys.exit(1)
+
+        if isinstance(node, ConsecutiveZeroTwistObserver):
+            while rclpy.ok() and not node._done and not node.timed_out():
+                rclpy.spin_once(node, timeout_sec=0.1)
+            sys.exit(0 if node._done else 1)
+
+        if isinstance(node, RateObserver):
+            while rclpy.ok() and time.monotonic() < deadline:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            result = compute_rate_result(
+                node._timestamps,
+                args.minimum_rate_hz,
+                args.required_span_sec,
+            )
+            sys.stdout.write(json.dumps(
+                result, separators=(',', ':'), allow_nan=False
+            ) + '\n')
+            sys.exit(0 if result['success'] else 1)
 
         # Stream mode
         while rclpy.ok() and time.monotonic() < deadline:

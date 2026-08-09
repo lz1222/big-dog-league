@@ -121,6 +121,9 @@ endfunction()
 
 install(PROGRAMS
   scripts/cmd_vel_udp_forwarder.py
+  scripts/sdk_motion_status.py
+  scripts/sdk_motion_status_gate.py
+  scripts/sdk_motion_status_audit.py
   scripts/warning_sign_image_classifier.py
   scripts/go2_warning_sign_sdk_loop.sh
   scripts/go2_front_camera_bridge.py
@@ -236,6 +239,15 @@ if(BUILD_TESTING)
     NAME test_udp_motion_core
     COMMAND test_udp_motion_core
   )
+  add_executable(test_motion_status_protocol
+    test/test_motion_status_protocol.cpp
+  )
+  target_include_directories(test_motion_status_protocol PRIVATE include)
+  target_link_libraries(test_motion_status_protocol rk_udp_motion_core)
+  add_test(
+    NAME test_motion_status_protocol
+    COMMAND test_motion_status_protocol
+  )
   add_executable(test_startup_stop_retry_core
     test/test_startup_stop_retry_core.cpp
   )
@@ -255,6 +267,27 @@ if(BUILD_TESTING)
     NAME test_sdk_server_runtime
     COMMAND python3 -m pytest
       "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sdk_server_runtime.py"
+      -v --tb=short
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  add_test(
+    NAME test_sdk_motion_status
+    COMMAND python3 -m pytest
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sdk_motion_status.py"
+      -v --tb=short
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  add_test(
+    NAME test_sdk_motion_status_gate
+    COMMAND python3 -m pytest
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sdk_motion_status_gate.py"
+      -v --tb=short
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  add_test(
+    NAME test_sdk_motion_status_audit
+    COMMAND python3 -m pytest
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sdk_motion_status_audit.py"
       -v --tb=short
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   )

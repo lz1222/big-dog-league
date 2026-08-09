@@ -5,9 +5,6 @@ from pathlib import Path
 import stat
 import subprocess
 
-import pytest
-
-
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = WORKSPACE_ROOT / 'scripts' / 'accept_non_arm_competition.sh'
 

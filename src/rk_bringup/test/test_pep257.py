@@ -19,5 +19,11 @@ import pytest
 @pytest.mark.linter
 @pytest.mark.pep257
 def test_pep257():
-    rc = main(argv=['.', 'test'])
+    # 仓库约定使用中文文档字符串；中文句号与首行摘要不应被英文标点/
+    # 摘要位置规则误报，其余 PEP257 类别继续执行。
+    ignored = [
+        'D100', 'D101', 'D102', 'D103', 'D104', 'D105', 'D106', 'D107',
+        'D203', 'D212', 'D213', 'D400', 'D403', 'D404',
+    ]
+    rc = main(argv=['.', 'test', '--ignore'] + ignored)
     assert rc == 0, 'Found code style errors / warnings'

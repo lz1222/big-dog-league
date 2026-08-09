@@ -90,9 +90,15 @@ def test_formal_start_scripts_keep_probe_sdk_ros_ordering():
         line_source.index('start_background "sdk_server"')
     ) < line_source.index('start_background "realsense_camera"')
     assert '"start_sdk_server:=false"' in competition_source
-    assert competition_source.index('GATE_COMMAND=') < (
-        competition_source.index('SERVER_COMMAND=')
-    ) < competition_source.index("'UDP server listening on'")
+    assert '"start_udp_forwarder:=false"' in competition_source
+    assert competition_source.index('CONTROL_GATE_COMMAND=') < (
+        competition_source.index('FORWARDER_ARGS=')
+    ) < competition_source.index('--mode receiver') < (
+        competition_source.index('SERVER_ARGS=')
+    ) < competition_source.index('--mode status') < (
+        competition_source.index('-n ros_graph')
+    )
+    assert "grep -Fq 'UDP server listening on'" not in competition_source
 
 
 def test_retry_exhaustion_precedes_udp_bind_and_has_no_extra_guard_stop():
@@ -100,7 +106,7 @@ def test_retry_exhaustion_precedes_udp_bind_and_has_no_extra_guard_stop():
     source = (PACKAGE_ROOT / 'src' / 'go2_sdk_udp_server.cpp').read_text(
         encoding='utf-8'
     )
-    assert source.index('SendStartupStopWithRetry(client)') < source.index(
+    assert source.index('SendStartupStopWithRetry(client, status)') < source.index(
         'CreateUdpSocket(config)'
     )
     assert 'bool armed_{false};' in source

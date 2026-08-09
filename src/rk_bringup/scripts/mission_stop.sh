@@ -35,6 +35,11 @@ resolve_workspace_dir() {
 
 WORKSPACE_DIR="$(resolve_workspace_dir)" || exit 1
 export RK_INSPECTION_WS="$WORKSPACE_DIR"
+TOPIC_OBSERVER="${RK_COMPETITION_TOPIC_OBSERVER:-${WORKSPACE_DIR}/src/rk_bringup/scripts/non_arm_smoke_observer.py}"
+if [ ! -x "$TOPIC_OBSERVER" ]; then
+    echo "ERROR: native read-only topic observer is unavailable: ${TOPIC_OBSERVER}" >&2
+    exit 1
+fi
 
 resolve_env_script() {
     local colocated_script="${SCRIPT_DIR}/ros_clean_env.sh"
@@ -101,8 +106,9 @@ wait_for_action_terminal() {
     local state_result
 
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        sample="$(timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" ros2 topic echo --once "$topic_name" \
-            --field data 2>/dev/null || true)"
+        sample="$(timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" python3 "$TOPIC_OBSERVER" \
+            "$topic_name" --once --dump \
+            --timeout-sec "$TOPIC_SAMPLE_TIMEOUT_SEC" 2>/dev/null || true)"
         if [ -z "$sample" ]; then
             # mux 仍运行时，状态缺失不能证明没有底层 Action；继续等待直到
             # 取消总超时并让正常停止路径失败，而不是过早停止进程。
@@ -142,24 +148,13 @@ is_zero_twist_sample() {
 }
 
 wait_for_continuous_mux_zero() {
-    local zero_samples=0
-    local attempts=0
-    local sample
-
-    while [ "$attempts" -lt 12 ]; do
-        attempts=$((attempts + 1))
-        sample="$(timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" ros2 topic echo --once /navigation/cmd_vel \
-            2>/dev/null || true)"
-        if [ -n "$sample" ] && printf '%s\n' "$sample" | is_zero_twist_sample; then
-            zero_samples=$((zero_samples + 1))
-            if [ "$zero_samples" -ge 3 ]; then
-                echo "Verified three consecutive command_mux zero outputs."
-                return 0
-            fi
-        else
-            zero_samples=0
-        fi
-    done
+    # 单一 rclpy 订阅跨越三个样本，避免每次启动 ros2 CLI 都重新等待发现。
+    if timeout "${TOPIC_SAMPLE_TIMEOUT_SEC}s" python3 "$TOPIC_OBSERVER" \
+            /navigation/cmd_vel --twist --consecutive-zero-count 3 \
+            --timeout-sec "$TOPIC_SAMPLE_TIMEOUT_SEC" >/dev/null 2>&1; then
+        echo "Verified three consecutive command_mux zero outputs."
+        return 0
+    fi
     echo "ERROR: command_mux zero output was not continuously observed." >&2
     return 1
 }

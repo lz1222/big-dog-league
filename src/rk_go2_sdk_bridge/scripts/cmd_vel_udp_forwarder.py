@@ -2,13 +2,20 @@
 
 """将ROS Twist命令通过本机UDP安全转发到隔离的Unitree SDK进程。"""
 
+import json
 import math
 import socket
 import time
+import uuid
 
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
+from rclpy.qos import ReliabilityPolicy
+from std_msgs.msg import String
+
+from sdk_motion_status import SdkMotionStatusReplayBuffer, SdkMotionStatusTracker
 
 
 class CmdVelUdpForwarder(Node):
@@ -22,6 +29,10 @@ class CmdVelUdpForwarder(Node):
     DEFAULT_MAX_YAW = 0.60
     DEFAULT_DEADBAND = 0.01
     DEFAULT_TIMEOUT_SEC = 0.30
+    DEFAULT_STATUS_IP = '127.0.0.1'
+    DEFAULT_STATUS_PORT = 15002
+    DEFAULT_STATUS_TOPIC = '/go2/sdk_motion_status'
+    DEFAULT_STATUS_READY_TOPIC = '/go2/sdk_motion_status_receiver_ready'
 
     def __init__(self):
         super().__init__('cmd_vel_udp_forwarder')
@@ -58,11 +69,42 @@ class CmdVelUdpForwarder(Node):
             'timeout_sec',
             self.DEFAULT_TIMEOUT_SEC
         ).value)
+        self.status_ip = self.declare_parameter(
+            'status_ip', self.DEFAULT_STATUS_IP
+        ).value
+        self.status_port = int(self.declare_parameter(
+            'status_port', self.DEFAULT_STATUS_PORT
+        ).value)
+        self.status_topic = self.declare_parameter(
+            'status_topic', self.DEFAULT_STATUS_TOPIC
+        ).value
+        self.status_ready_topic = self.declare_parameter(
+            'status_ready_topic', self.DEFAULT_STATUS_READY_TOPIC
+        ).value
+        self.expected_server_instance_id = str(self.declare_parameter(
+            'expected_server_instance_id', ''
+        ).value).strip()
 
         self.validate_parameters()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.status_socket = self.create_status_socket()
+        self.status_tracker = SdkMotionStatusTracker(
+            self.expected_server_instance_id
+        )
+        self.status_replay_buffer = SdkMotionStatusReplayBuffer(capacity=100)
+        self.last_status_publish_time = None
+        self.receiver_instance_id = str(uuid.uuid4())
         self.last_cmd_time = None
         self.has_sent_stop = False
+
+        # transient-local 保存本实例最近 ACK/ready，晚启动的 readiness 节点仍可
+        # 读取，但还必须用 instance id 和接收单调时钟拒绝上一轮残留。
+        status_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=100,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
 
         self.subscription = self.create_subscription(
             Twist,
@@ -70,8 +112,15 @@ class CmdVelUdpForwarder(Node):
             self.on_cmd_vel,
             10
         )
+        self.status_publisher = self.create_publisher(
+            String, self.status_topic, status_qos
+        )
+        self.status_ready_publisher = self.create_publisher(
+            String, self.status_ready_topic, status_qos
+        )
         # 50ms检查周期使0.30s超时的检测抖动不超过一个SDK输出周期。
         self.timer = self.create_timer(0.05, self.on_timer)
+        self.publish_receiver_ready()
 
         self.get_logger().info(
             'cmd_vel_udp_forwarder started: '
@@ -82,6 +131,7 @@ class CmdVelUdpForwarder(Node):
             f'max_yaw={self.max_yaw:.3f}, '
             f'deadband={self.deadband:.3f}, '
             f'timeout={self.timeout_sec:.3f}'
+            f', status={self.status_ip}:{self.status_port}->{self.status_topic}'
         )
 
     def validate_parameters(self):
@@ -91,6 +141,12 @@ class CmdVelUdpForwarder(Node):
             raise ValueError('udp_port must be in range 1..65535')
         if not self.cmd_vel_topic:
             raise ValueError('cmd_vel_topic must not be empty')
+        if not self.status_ip or not self.status_topic or not self.status_ready_topic:
+            raise ValueError(
+                'status_ip, status_topic and status_ready_topic must not be empty'
+            )
+        if self.status_port <= 0 or self.status_port > 65535:
+            raise ValueError('status_port must be in range 1..65535')
 
         positive_limits = {
             'max_vx': self.max_vx,
@@ -104,6 +160,36 @@ class CmdVelUdpForwarder(Node):
 
         if not math.isfinite(self.deadband) or self.deadband < 0.0:
             raise ValueError('deadband must be a nonnegative finite number')
+
+    def create_status_socket(self):
+        """独占建立 status listener；失败即拒绝正式启动。"""
+        status_socket = None
+        try:
+            status_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            status_socket.bind((self.status_ip, self.status_port))
+            status_socket.setblocking(False)
+            return status_socket
+        except OSError as error:
+            if status_socket is not None:
+                status_socket.close()
+            self.get_logger().error(
+                'SDK status listener unavailable at '
+                f'{self.status_ip}:{self.status_port}: {error}'
+            )
+            raise RuntimeError('SDK status listener bind failed') from error
+
+    def publish_receiver_ready(self):
+        """仅在 UDP bind、ROS publisher 和订阅全部建立后发布 readiness。"""
+        message = String()
+        message.data = json.dumps({
+            'ready': True,
+            'receiver_instance_id': self.receiver_instance_id,
+            'expected_server_instance_id': self.expected_server_instance_id,
+            'status_ip': self.status_ip,
+            'status_port': self.status_port,
+            'ready_monotonic_ns': time.monotonic_ns(),
+        }, separators=(',', ':'), allow_nan=False)
+        self.status_ready_publisher.publish(message)
 
     def on_cmd_vel(self, msg):
         self.last_cmd_time = time.monotonic()
@@ -142,11 +228,54 @@ class CmdVelUdpForwarder(Node):
         self.has_sent_stop = False
 
     def on_timer(self):
+        self.drain_status_datagrams()
+        # Fast DDS 的 late-joiner transient history 在现场启动窗口内并不总能
+        # 及时交付；周期重放同一实例的原始序号/接收时刻，不伪造 freshness。
+        if (
+            self.last_status_publish_time is not None
+            and time.monotonic() - self.last_status_publish_time >= 0.5
+        ):
+            self.republish_status_history()
         if self.last_cmd_time is None:
             return
 
         if time.monotonic() - self.last_cmd_time >= self.timeout_sec:
             self.send_stop_once(reason='forwarder_watchdog')
+
+    def drain_status_datagrams(self):
+        """转发真实 SDK 回执；非法/旧包仅诊断，绝不影响速度命令。"""
+        while True:
+            try:
+                payload, _ = self.status_socket.recvfrom(4096)
+            except BlockingIOError:
+                return
+            except OSError as error:
+                self.get_logger().error(f'SDK status receive failed: {error}')
+                return
+            status = self.status_tracker.observe(payload, time.monotonic_ns())
+            if status is None:
+                self.get_logger().warning('Rejected malformed or stale SDK status')
+                continue
+            # 原始 server 时间和本机接收时间同时发布，后续 watchdog 可独立算 age。
+            payload = self.status_replay_buffer.remember(status)
+            self.publish_status_payload(payload)
+
+    def publish_status_payload(self, payload):
+        """发布已规范化状态，并记录重放周期但不改变其时间字段。"""
+        message = String()
+        message.data = payload
+        self.status_publisher.publish(message)
+        self.last_status_publish_time = time.monotonic()
+
+    def republish_status_history(self):
+        """按严格递增到达顺序重放有界历史，帮助 late joiner 完整验收。"""
+        payloads = self.status_replay_buffer.payloads()
+        for payload in payloads:
+            message = String()
+            message.data = payload
+            self.status_publisher.publish(message)
+        if payloads:
+            self.last_status_publish_time = time.monotonic()
 
     def send_stop(self):
         self.send_stop_once(force=True, reason='explicit_stop')
@@ -170,6 +299,8 @@ class CmdVelUdpForwarder(Node):
     def destroy_node(self):
         try:
             self.sock.close()
+            if self.status_socket is not None:
+                self.status_socket.close()
         finally:
             return super().destroy_node()
 

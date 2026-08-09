@@ -81,6 +81,24 @@ exit 2
         encoding='utf-8',
     )
     fake_ros2.chmod(0o700)
+    fake_observer = fake_bin / 'fake_topic_observer.py'
+    fake_observer.write_text(
+        '''#!/usr/bin/env python3
+import os
+import sys
+
+if '--twist' in sys.argv:
+    print('linear:\\n  x: 0.0\\n  y: 0.0\\n  z: 0.0')
+    print('angular:\\n  x: 0.0\\n  y: 0.0\\n  z: 0.0')
+    raise SystemExit(0)
+if os.environ.get('FAKE_ACTION_STATUS_MODE', 'terminal') == 'terminal':
+    print('{"state":"IDLE"}')
+    raise SystemExit(0)
+raise SystemExit(1)
+''',
+        encoding='utf-8',
+    )
+    fake_observer.chmod(0o700)
     return fake_bin
 
 
@@ -104,6 +122,9 @@ def _fake_environment(tmp_path, fake_bin, **overrides):
             'RK_LINE_RUNTIME_DIR': str(tmp_path / 'line_runtime'),
             'RK_COMPETITION_TMUX_SESSION': 'rk_fake_stop_test',
             'RK_LINE_TMUX_SESSION': 'rk_fake_line_test',
+            'RK_COMPETITION_TOPIC_OBSERVER': str(
+                fake_bin / 'fake_topic_observer.py'
+            ),
         }
     )
     environment.update(overrides)

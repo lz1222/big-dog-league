@@ -1,5 +1,6 @@
 #include "rk_go2_sdk_bridge/udp_motion_core.hpp"
 #include "rk_go2_sdk_bridge/startup_stop_retry_core.hpp"
+#include "rk_go2_sdk_bridge/motion_status_protocol.hpp"
 
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/go2/sport/sport_client.hpp>
@@ -37,6 +38,9 @@ struct ServerConfig
   std::string network_interface{"eth1"};
   std::string listen_ip{"127.0.0.1"};
   int port{15001};
+  std::string status_ip{"127.0.0.1"};
+  int status_port{15002};
+  std::string server_instance_id;
   double rate_hz{20.0};
   double watchdog_sec{0.30};
   MotionLimits limits{};
@@ -84,6 +88,9 @@ void PrintUsage(const char* program)
       << "  --interface NAME       SDK network interface (default: eth1)\n"
       << "  --listen-ip ADDRESS    UDP listen address (default: 127.0.0.1)\n"
       << "  --port PORT            UDP port (default: 15001)\n"
+      << "  --status-ip ADDRESS    Status UDP destination (default: 127.0.0.1)\n"
+      << "  --status-port PORT     Status UDP destination port (default: 15002)\n"
+      << "  --server-instance-id ID  Startup nonce copied to every status event\n"
       << "  --rate-hz HZ           SDK Move output rate (default: 20)\n"
       << "  --watchdog-sec SEC     Stop timeout (default: 0.30)\n"
       << "  --max-vx VALUE         Maximum |vx| (default: 0.25)\n"
@@ -112,6 +119,12 @@ ServerConfig ParseArguments(int argc, char** argv)
       config.listen_ip = value;
     } else if (option == "--port") {
       config.port = ParsePort(value);
+    } else if (option == "--status-ip") {
+      config.status_ip = value;
+    } else if (option == "--status-port") {
+      config.status_port = ParsePort(value);
+    } else if (option == "--server-instance-id") {
+      config.server_instance_id = value;
     } else if (option == "--rate-hz") {
       config.rate_hz = ParsePositiveDouble(value, "rate_hz");
     } else if (option == "--watchdog-sec") {
@@ -132,8 +145,12 @@ ServerConfig ParseArguments(int argc, char** argv)
     }
   }
 
-  if (config.network_interface.empty() || config.listen_ip.empty()) {
-    throw std::runtime_error("interface and listen-ip must not be empty");
+  if (config.network_interface.empty() || config.listen_ip.empty() ||
+      config.status_ip.empty()) {
+    throw std::runtime_error("interface, listen-ip and status-ip must not be empty");
+  }
+  if (config.server_instance_id.size() > 128U) {
+    throw std::runtime_error("server-instance-id must not exceed 128 bytes");
   }
   return config;
 }
@@ -210,10 +227,110 @@ void LogDecision(const std::string& prefix, const MotionDecision& decision)
             << " yaw=" << decision.command.yaw << std::endl;
 }
 
+class MotionStatusPublisher
+{
+public:
+  explicit MotionStatusPublisher(const ServerConfig& config)
+  : server_instance_id_(ResolveServerInstanceId(config.server_instance_id))
+  {
+    // status socket 只读观测失败必须可见，但不得改变 SDK 调用或停车分支。
+    socket_fd_ = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socket_fd_ < 0) {
+      LogUnavailable("socket", errno);
+      return;
+    }
+    destination_.sin_family = AF_INET;
+    destination_.sin_port = htons(static_cast<uint16_t>(config.status_port));
+    if (inet_pton(
+        AF_INET, config.status_ip.c_str(), &destination_.sin_addr) != 1) {
+      std::cerr << "[SDK_STATUS] disabled invalid_status_ip="
+                << config.status_ip << std::endl;
+      close(socket_fd_);
+      socket_fd_ = -1;
+    }
+  }
+
+  ~MotionStatusPublisher()
+  {
+    if (socket_fd_ >= 0) {
+      close(socket_fd_);
+    }
+  }
+
+  MotionStatusPublisher(const MotionStatusPublisher&) = delete;
+  MotionStatusPublisher& operator=(const MotionStatusPublisher&) = delete;
+
+  const std::string& ServerInstanceId() const
+  {
+    return server_instance_id_;
+  }
+
+  void Publish(
+      const std::string& event, int32_t ret, const std::string& reason,
+      double vx, double vy, double yaw)
+  {
+    // sequence 在发送尝试前递增，接收端可识别发送失败后的状态缺口。
+    const rk_go2_sdk_bridge::MotionStatusEvent status{
+        server_instance_id_, ++sequence_, event, ret, reason, vx, vy, yaw,
+        MonotonicNanoseconds()};
+    const std::string payload = rk_go2_sdk_bridge::EncodeMotionStatusJson(status);
+    if (payload.empty()) {
+      std::cerr << "[SDK_STATUS] encode_failed sequence=" << status.sequence
+                << " event=" << event << std::endl;
+      return;
+    }
+    if (socket_fd_ < 0) {
+      std::cerr << "[SDK_STATUS] send_skipped disabled sequence="
+                << status.sequence << " event=" << event << std::endl;
+      return;
+    }
+    const ssize_t sent = sendto(
+        socket_fd_, payload.data(), payload.size(), 0,
+        reinterpret_cast<const sockaddr*>(&destination_), sizeof(destination_));
+    if (sent != static_cast<ssize_t>(payload.size())) {
+      LogUnavailable("sendto", errno);
+    }
+  }
+
+private:
+  static std::string ResolveServerInstanceId(const std::string& configured)
+  {
+    if (!configured.empty()) {
+      return configured;
+    }
+    // 非正式直接启动也必须拥有实例身份；正式入口会传入更强的 UUID nonce。
+    return "auto-" + std::to_string(getpid()) + "-" +
+           std::to_string(MonotonicNanoseconds());
+  }
+
+  static int64_t MonotonicNanoseconds()
+  {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+
+  static void LogUnavailable(const char* operation, int error_number)
+  {
+    std::cerr << "[SDK_STATUS] " << operation << " failed: "
+              << std::strerror(error_number) << std::endl;
+  }
+
+  int socket_fd_{-1};
+  sockaddr_in destination_{};
+  const std::string server_instance_id_;
+  uint64_t sequence_{0};
+};
+
 int32_t SendStop(
-    unitree::robot::go2::SportClient& client, const std::string& reason)
+    unitree::robot::go2::SportClient& client, MotionStatusPublisher& status,
+    const std::string& reason)
 {
   const int32_t result = client.StopMove();
+  // 状态必须在真实 StopMove 返回后发送，不能把调用前的意图伪装成成功。
+  status.Publish("STOP_MOVE", result, reason, 0.0, 0.0, 0.0);
+  if (result != 0) {
+    status.Publish("SDK_ERROR", result, "stop_move_error", 0.0, 0.0, 0.0);
+  }
   std::cout << std::fixed << std::setprecision(6)
             << "[SDK] time=" << WallTimeSeconds()
             << " StopMove reason=" << reason
@@ -226,15 +343,17 @@ int32_t SendStop(
 class EmergencyStopGuard
 {
 public:
-  explicit EmergencyStopGuard(unitree::robot::go2::SportClient& client)
-  : client_(client)
+  EmergencyStopGuard(
+      unitree::robot::go2::SportClient& client,
+      MotionStatusPublisher& status)
+  : client_(client), status_(status)
   {
   }
 
   ~EmergencyStopGuard()
   {
     if (armed_) {
-      SendStop(client_, "exception_or_unexpected_exit");
+      SendStop(client_, status_, "exception_or_unexpected_exit");
     }
   }
 
@@ -250,10 +369,12 @@ public:
 
 private:
   unitree::robot::go2::SportClient& client_;
+  MotionStatusPublisher& status_;
   bool armed_{false};
 };
 
-int32_t SendStartupStopWithRetry(unitree::robot::go2::SportClient& client)
+int32_t SendStartupStopWithRetry(
+    unitree::robot::go2::SportClient& client, MotionStatusPublisher& status)
 {
   // 这只是控制面已经就绪后的第二层保护，不能替代只读 DDS 门禁。
   rk_go2_sdk_bridge::StartupStopRetryCore retry_core;
@@ -266,6 +387,10 @@ int32_t SendStartupStopWithRetry(unitree::robot::go2::SportClient& client)
     }
     const auto started = std::chrono::steady_clock::now();
     result = client.StopMove();
+    status.Publish("STARTUP_STOP", result, "startup_stop", 0.0, 0.0, 0.0);
+    if (result != 0) {
+      status.Publish("SDK_ERROR", result, "startup_stop_error", 0.0, 0.0, 0.0);
+    }
     const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - started).count();
     const auto decision = retry_core.RecordResult(result);
@@ -312,6 +437,7 @@ private:
 
 void ExecuteDecision(
     unitree::robot::go2::SportClient& client,
+    MotionStatusPublisher& status,
     UdpMotionCore& core,
     const MotionDecision& decision)
 {
@@ -320,7 +446,7 @@ void ExecuteDecision(
   }
 
   if (decision.action == MotionAction::kStop) {
-    const int32_t result = SendStop(client, decision.reason);
+    const int32_t result = SendStop(client, status, decision.reason);
     if (result != 0) {
       throw std::runtime_error(
           "StopMove failed with code " + std::to_string(result));
@@ -332,6 +458,9 @@ void ExecuteDecision(
       static_cast<float>(decision.command.vx),
       static_cast<float>(decision.command.vy),
       static_cast<float>(decision.command.yaw));
+  status.Publish(
+      "MOVE", result, decision.reason, decision.command.vx,
+      decision.command.vy, decision.command.yaw);
   std::cout << std::fixed << std::setprecision(6)
             << "[SDK] time=" << WallTimeSeconds()
             << " Move vx=" << decision.command.vx
@@ -339,8 +468,11 @@ void ExecuteDecision(
             << " yaw=" << decision.command.yaw
             << " ret=" << result << std::endl;
   if (result != 0) {
+    status.Publish(
+        "SDK_ERROR", result, "sdk_move_error", decision.command.vx,
+        decision.command.vy, decision.command.yaw);
     const MotionDecision stop = core.ForceStop("sdk_move_error");
-    SendStop(client, stop.reason);
+    SendStop(client, status, stop.reason);
     throw std::runtime_error(
         "Move failed with code " + std::to_string(result));
   }
@@ -396,11 +528,12 @@ int RunServer(const ServerConfig& config)
             << "[SDK] time=" << WallTimeSeconds()
             << " SportClient::Init elapsed_sec="
             << (WallTimeSeconds() - init_started) << std::endl;
-  EmergencyStopGuard stop_guard(client);
+  MotionStatusPublisher status(config);
+  EmergencyStopGuard stop_guard(client, status);
 
   // 启动时只清除残留运动，不调用 BalanceStand，避免擅自改变当前步态。
   // UDP socket 必须在此成功之后才可 bind，失败路径没有任何运动输入出口。
-  if (SendStartupStopWithRetry(client) != 0) {
+  if (SendStartupStopWithRetry(client, status) != 0) {
     throw std::runtime_error("STARTUP_STOPMOVE_RETRY_EXHAUSTED");
   }
   stop_guard.Arm();
@@ -418,6 +551,8 @@ int RunServer(const ServerConfig& config)
             << " max_vy=" << config.limits.max_vy
             << " max_yaw=" << config.limits.max_yaw
             << " deadband=" << config.limits.deadband
+            << " status=" << config.status_ip << ":" << config.status_port
+            << " server_instance_id=" << status.ServerInstanceId()
             << std::endl;
 
   const auto start_time = std::chrono::steady_clock::now();
@@ -448,7 +583,7 @@ int RunServer(const ServerConfig& config)
         continue;
       }
       const MotionDecision stop = core.ForceStop("select_error");
-      ExecuteDecision(client, core, stop);
+      ExecuteDecision(client, status, core, stop);
       throw std::runtime_error(
           "select failed: " + std::string(std::strerror(errno)));
     }
@@ -460,7 +595,7 @@ int RunServer(const ServerConfig& config)
           nullptr, nullptr);
       if (received < 0) {
         const MotionDecision stop = core.ForceStop("recv_error");
-        ExecuteDecision(client, core, stop);
+        ExecuteDecision(client, status, core, stop);
         throw std::runtime_error(
             "recvfrom failed: " + std::string(std::strerror(errno)));
       }
@@ -477,21 +612,21 @@ int RunServer(const ServerConfig& config)
       }
 
       LogDecision("RX payload=\"" + payload + "\"", decision);
-      ExecuteDecision(client, core, decision);
+      ExecuteDecision(client, status, core, decision);
     }
 
     const auto now = std::chrono::steady_clock::now();
     if (now >= next_tick) {
       const MotionDecision decision =
           core.Tick(MonotonicSeconds(start_time));
-      ExecuteDecision(client, core, decision);
+      ExecuteDecision(client, status, core, decision);
 
       // 不补发已经错过的周期，避免调度抖动导致 SDK 突发调用。
       next_tick = now + period;
     }
   }
 
-  if (SendStop(client, "signal_exit") != 0) {
+  if (SendStop(client, status, "signal_exit") != 0) {
     throw std::runtime_error("signal exit StopMove failed");
   }
   stop_guard.Disarm();

@@ -119,23 +119,13 @@ is_zero_twist_sample() {
 }
 
 wait_for_mux_zero() {
-    local count=0
-    local sample
-    local attempt
-
-    for attempt in 1 2 3 4 5 6 7 8 9; do
-        sample="$(timeout 2s ros2 topic echo --once /navigation/cmd_vel \
-            2>/dev/null)"
-        if [ -n "$sample" ] && printf '%s\n' "$sample" | is_zero_twist_sample; then
-            count=$((count + 1))
-            if [ "$count" -ge 3 ]; then
-                echo "Verified three consecutive command_mux zero outputs."
-                return 0
-            fi
-        else
-            count=0
-        fi
-    done
+    # 停机复核同样使用单一长期订阅，不能因 CLI 重建发现而误触发 direct zero。
+    if timeout 8s python3 "$TOPIC_OBSERVER" /navigation/cmd_vel \
+            --twist --consecutive-zero-count 3 --timeout-sec 8 \
+            >/dev/null 2>&1; then
+        echo "Verified three consecutive command_mux zero outputs."
+        return 0
+    fi
     return 1
 }
 
@@ -180,6 +170,11 @@ if [ -n "$ENV_SCRIPT" ]; then
     source "$ENV_SCRIPT" || echo "WARN: ROS environment source failed." >&2
 else
     echo "WARN: ROS environment script is unavailable." >&2
+fi
+TOPIC_OBSERVER="${RK_COMPETITION_TOPIC_OBSERVER:-$(resolve_companion_script non_arm_smoke_observer.py || true)}"
+if [ ! -x "$TOPIC_OBSERVER" ]; then
+    echo "ERROR: native read-only topic observer is unavailable: ${TOPIC_OBSERVER}" >&2
+    exit 1
 fi
 
 # 顺序要求 1--3：mission_stop 内部先发 stop，再等待白横线/检查动作终止。

@@ -20,6 +20,8 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
+from rclpy.qos import ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
@@ -68,8 +70,11 @@ class CompetitionReadinessNode(Node):
         self.create_subscription(
             Bool, self.estop_state_topic, self._on_estop_state, 10
         )
-        self.create_subscription(
-            Image, self.line_image_topic, self._on_image, 10
+        # USB 图像发布者使用 sensor-data/best-effort；readiness 必须使用兼容
+        # QoS，否则 tracker 正常工作时本节点仍会误报 LINE_CAMERA_READY=false。
+        self.line_image_subscription = self.create_subscription(
+            Image, self.line_image_topic, self._on_image,
+            qos_profile_sensor_data,
         )
         self.create_subscription(
             LineTrack, self.line_track_topic, self._on_line_track, 10
@@ -118,6 +123,20 @@ class CompetitionReadinessNode(Node):
             self.sign_image_topic,
             self._on_sign_camera_image,
             10,
+        )
+        sdk_status_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=100,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        # 显式保留订阅句柄；结合 forwarder 的有界原样重放，晚于 startup ACK
+        # 启动的 readiness 也能绑定当前 server_instance_id。
+        self.sdk_motion_status_subscription = self.create_subscription(
+            String,
+            self.sdk_motion_status_topic,
+            self._on_sdk_motion_status,
+            sdk_status_qos,
         )
 
         self.timer = self.create_timer(
@@ -169,10 +188,15 @@ class CompetitionReadinessNode(Node):
             # 此默认值仅保证 launch 未覆盖时不无声回退到其他编译目录。
             'sdk_server': 'rk_go2_sdk_bridge',
             'sdk_action_executable': '',
+            'sdk_motion_status_topic': '/go2/sdk_motion_status',
+            'sdk_server_instance_id': '',
             'cleanup_guard_path': (
                 '~/.rk_non_arm_competition/front_jump_cleanup_guard.json'
             ),
             'freshness_timeout_sec': 2.0,
+            # SDK 状态不是心跳；30 秒仅覆盖有界 formal graph 冷启动窗口，
+            # 跨轮次安全仍由精确 server_instance_id 和进程检查保证。
+            'sdk_status_freshness_timeout_sec': 30.0,
             'status_publish_rate_hz': 2.0,
         }
         for name, value in defaults.items():
@@ -206,12 +230,17 @@ class CompetitionReadinessNode(Node):
             'cmd_mux_status_topic',
             'sdk_server',
             'sdk_action_executable',
+            'sdk_motion_status_topic',
+            'sdk_server_instance_id',
             'cleanup_guard_path',
         ):
             setattr(self, name, str(self.get_parameter(name).value).strip())
         self.require_arm_camera = self._bool_parameter('require_arm_camera')
         self.freshness_timeout_sec = self._positive_float_parameter(
             'freshness_timeout_sec'
+        )
+        self.sdk_status_freshness_timeout_sec = self._positive_float_parameter(
+            'sdk_status_freshness_timeout_sec'
         )
         self.status_publish_rate_hz = self._positive_float_parameter(
             'status_publish_rate_hz'
@@ -280,6 +309,10 @@ class CompetitionReadinessNode(Node):
 
     def _on_sign_camera_image(self, msg):
         self._remember('sign_camera_image', str(msg.header.frame_id))
+
+    def _on_sdk_motion_status(self, msg):
+        """保留 forwarder 的机器可读 ACK；检查阶段再绑定本次实例和 age。"""
+        self._remember('sdk_motion_status', json_object(msg.data))
 
     def _fresh_value(self, name):
         record = self._last_messages.get(name)
@@ -736,6 +769,17 @@ class CompetitionReadinessNode(Node):
                 forwarder_running,
                 'node_present={}'.format(forwarder_running),
             ))
+            sdk_status, sdk_local_age = self._fresh_value(
+                'sdk_motion_status'
+            )
+            sdk_status_ok, sdk_status_detail = self._sdk_status_ready(
+                sdk_status, sdk_local_age
+            )
+            checks.append(ReadinessCheck(
+                'SDK_MOTION_BACKEND_READY',
+                sdk_status_ok,
+                sdk_status_detail,
+            ))
         else:
             checks.append(ReadinessCheck(
                 'mode_configuration',
@@ -743,6 +787,40 @@ class CompetitionReadinessNode(Node):
                 'hardware_mode=false requires software_smoke_mode=true',
             ))
         return checks
+
+    def _sdk_status_ready(self, status, local_age):
+        """只接受当前 server 实例最近的成功停车 ACK，拒绝 latched 残留。"""
+        if not self.sdk_server_instance_id:
+            return False, 'expected_server_instance_id_empty'
+        if not isinstance(status, dict):
+            return False, 'missing_or_invalid_status'
+        receive_ns = status.get('receive_monotonic_ns')
+        sequence = status.get('sequence')
+        if (
+            status.get('server_instance_id') != self.sdk_server_instance_id
+            or status.get('event') not in ('STARTUP_STOP', 'STOP_MOVE')
+            or status.get('ret') != 0
+            or not isinstance(sequence, int)
+            or isinstance(sequence, bool)
+            or sequence < 1
+            or not isinstance(receive_ns, int)
+            or isinstance(receive_ns, bool)
+            or receive_ns < 1
+        ):
+            return False, 'instance_event_ret_or_sequence_mismatch'
+        embedded_age = max(0.0, (time.monotonic_ns() - receive_ns) / 1e9)
+        if embedded_age > self.sdk_status_freshness_timeout_sec:
+            return False, 'embedded_status_stale_{:.3f}s'.format(embedded_age)
+        return True, (
+            'instance={} event={} ret=0 sequence={} embedded_age={:.3f}s '
+            'local_age={}'.format(
+                self.sdk_server_instance_id,
+                status['event'],
+                sequence,
+                embedded_age,
+                'missing' if local_age is None else '{:.3f}s'.format(local_age),
+            )
+        )
 
     def _make_payload(self):
         checks = self.evaluate()

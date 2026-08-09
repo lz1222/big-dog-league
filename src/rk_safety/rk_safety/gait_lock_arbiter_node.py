@@ -236,7 +236,20 @@ class GaitLockArbiterNode(Node):
         with self._state_lock:
             self._shutting_down = True
         try:
-            self._publish_lock(True)
+            # 重复三次仍是幂等布尔锁，不会触发运动；它提高 Foxy 进程销毁前
+            # 最终样本进入可靠 writer queue 的确定性。
+            for _ in range(3):
+                self._publish_lock(True)
+            # Foxy publisher 没有 wait_for_all_acked；若立刻销毁 DataWriter，最终
+            # fail-closed 样本可能尚未离开进程。节点仍挂在 executor 时执行一个
+            # 有界交付窗；_shutting_down 已确保期间定时器也只能发布 true。
+            executor = self.executor
+            if executor is not None:
+                deadline = time.monotonic() + 0.10
+                while time.monotonic() < deadline:
+                    executor.spin_once(timeout_sec=0.01)
+            else:
+                time.sleep(0.10)
         except Exception:
             pass
         super().destroy_node()

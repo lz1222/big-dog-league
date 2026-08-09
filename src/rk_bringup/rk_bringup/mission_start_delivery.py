@@ -12,7 +12,7 @@ import argparse
 import json
 import os
 import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 
 ROUTE_NODE_NAME = 'line_course_mission_node'
@@ -273,7 +273,9 @@ class MissionStartDeliveryState:
             'transport_publish_count': self.transport_publish_count,
             'discovered_subscriber_count': self.discovered_subscriber_count,
             'required_route_subscriber_discovered': self.required_route_subscriber_discovered,
-            'required_follower_subscriber_discovered': self.required_follower_subscriber_discovered,
+            'required_follower_subscriber_discovered': (
+                self.required_follower_subscriber_discovered
+            ),
             'discovered_start_subscriber_nodes': self.discovered_start_subscriber_nodes,
             'discovered_start_subscriber_gids': self.discovered_start_subscriber_gids,
             'start_endpoint_discovery_completed': self.start_endpoint_discovery_completed,

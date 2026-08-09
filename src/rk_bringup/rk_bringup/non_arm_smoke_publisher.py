@@ -190,8 +190,11 @@ class NonArmSmokePublisher(Node):
         return message
 
     def _publish_image(self):
-        """发布极小 RGB 帧到两路独立 Topic，确保 tracker 和 sign detector
-        各自获得独立的新鲜度证据，不共享单一相机 Topic。"""
+        """发布极小 RGB 帧到两路独立 Topic。
+
+        tracker 和 sign detector 各自获得独立的新鲜度证据，不共享单一相机
+        Topic。
+        """
         msg = self._stamp_header(Image())
         msg.height = 2
         msg.width = 2

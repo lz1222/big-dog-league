@@ -130,6 +130,9 @@ def generate_launch_description():
     sdk_server = LaunchConfiguration('sdk_server')
     sdk_udp_host = LaunchConfiguration('sdk_udp_host')
     sdk_udp_port = LaunchConfiguration('sdk_udp_port')
+    sdk_status_ip = LaunchConfiguration('sdk_status_ip')
+    sdk_status_port = LaunchConfiguration('sdk_status_port')
+    sdk_server_instance_id = LaunchConfiguration('sdk_server_instance_id')
     motion_max_vx = LaunchConfiguration('motion_max_vx')
     motion_max_vy = LaunchConfiguration('motion_max_vy')
     motion_max_yaw = LaunchConfiguration('motion_max_yaw')
@@ -304,6 +307,20 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'sdk_udp_port', default_value='15001',
             description='Production SDK UDP port.',
+        ),
+        DeclareLaunchArgument(
+            'sdk_status_ip', default_value='127.0.0.1',
+            description='SDK status UDP receiver address.',
+        ),
+        DeclareLaunchArgument(
+            'sdk_status_port', default_value='15002',
+            description='SDK status UDP receiver port.',
+        ),
+        DeclareLaunchArgument(
+            'sdk_server_instance_id', default_value='',
+            description=(
+                'Formal startup nonce used to reject previous server status.'
+            ),
         ),
         # 正式比赛速度上限必须同时约束 ROS 转发器和 SDK server，避免任一端
         # 回退到二进制默认值后产生“上游放行、下游停车”的合同断裂。
@@ -577,6 +594,7 @@ def generate_launch_description():
                     'rk_go2_sdk_bridge',
                     'go2_sdk_udp_server',
                 ]),
+                'sdk_server_instance_id': sdk_server_instance_id,
                 # readiness 与实际执行器必须看到同一 helper：smoke 时只能是
                 # 带测试标识的 fake helper，生产时才解析安装树绝对路径。
                 'sdk_action_executable': ParameterValue(
@@ -597,6 +615,9 @@ def generate_launch_description():
                 '--interface', sdk_network_interface,
                 '--listen-ip', sdk_udp_host,
                 '--port', sdk_udp_port,
+                '--status-ip', sdk_status_ip,
+                '--status-port', sdk_status_port,
+                '--server-instance-id', sdk_server_instance_id,
                 '--max-vx', motion_max_vx,
                 '--max-vy', motion_max_vy,
                 '--max-yaw', motion_max_yaw,
@@ -613,6 +634,11 @@ def generate_launch_description():
                 'cmd_vel_topic': '/navigation/cmd_vel',
                 'udp_host': sdk_udp_host,
                 'udp_port': ParameterValue(sdk_udp_port, value_type=int),
+                'status_ip': sdk_status_ip,
+                'status_port': ParameterValue(
+                    sdk_status_port, value_type=int
+                ),
+                'expected_server_instance_id': sdk_server_instance_id,
                 'max_vx': ParameterValue(motion_max_vx, value_type=float),
                 'max_vy': ParameterValue(motion_max_vy, value_type=float),
                 'max_yaw': ParameterValue(motion_max_yaw, value_type=float),

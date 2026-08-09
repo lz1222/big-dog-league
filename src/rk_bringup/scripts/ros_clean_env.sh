@@ -45,26 +45,12 @@ WORKSPACE_DIR="$(resolve_workspace_dir)" || exit 1
 export RK_INSPECTION_WS="$WORKSPACE_DIR"
 
 select_ros_setup() {
-    local distro
-
-    if [ -n "${ROS_DISTRO:-}" ]; then
-        local active_setup="/opt/ros/${ROS_DISTRO}/setup.bash"
-        if [ -f "$active_setup" ]; then
-            printf "%s\n" "$active_setup"
-            return 0
-        fi
+    local setup_file="/opt/ros/foxy/setup.bash"
+    if [ -f "$setup_file" ]; then
+        printf "%s\n" "$setup_file"
+        return 0
     fi
-
-    for distro in foxy humble; do
-        local setup_file="/opt/ros/${distro}/setup.bash"
-        if [ -f "$setup_file" ]; then
-            printf "%s\n" "$setup_file"
-            return 0
-        fi
-    done
-
-    echo "ERROR: no supported ROS2 setup.bash found under /opt/ros." >&2
-    echo "Checked active ROS_DISTRO, then foxy, then humble." >&2
+    echo "ERROR: formal ROS2 Foxy setup is missing: ${setup_file}" >&2
     return 1
 }
 
@@ -91,6 +77,10 @@ remove_ld_path_entry() {
 
 cd "$WORKSPACE_DIR"
 ROS_SETUP="$(select_ros_setup)"
+# 普通 ROS 进程不得继承 Unitree SDK/CycloneDDS 选择；先清理再 source，避免
+# setup 脚本根据父 shell 的 distro/RMW 状态走到错误分支。
+unset ROS_DISTRO ROS_VERSION ROS_PYTHON_VERSION
+unset RMW_IMPLEMENTATION CYCLONEDDS_URI CYCLONEDDS_HOME
 source "$ROS_SETUP"
 if [ -f "$WORKSPACE_DIR/install/setup.bash" ]; then
     source "$WORKSPACE_DIR/install/setup.bash"
@@ -124,7 +114,10 @@ fi
 unset _RK_SDK_BIN_DIR
 
 remove_ld_path_entry "/usr/local/lib"
+remove_ld_path_entry "/usr/local/cyclonedds/lib"
 remove_ld_path_entry "/home/unitree/cyclonedds_ws/install/cyclonedds/lib"
+# overlay 可能带回父环境设置；正式普通 ROS 环境在返回调用者前再次明确清理。
+unset RMW_IMPLEMENTATION CYCLONEDDS_URI CYCLONEDDS_HOME
 
 if [ "$_RK_CLEAN_ENV_ERREXIT_SET" -eq 0 ]; then
     set +e
