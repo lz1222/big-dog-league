@@ -46,6 +46,8 @@ setup(
             'rk_perception.route_marker_detector_node:main',
             'color_object_detector_node = '
             'rk_perception.color_object_detector_node:main',
+            'pickup_board_anchor_detector = '
+            'rk_perception.pickup_board_anchor_detector:main',
         ],
     },
 )

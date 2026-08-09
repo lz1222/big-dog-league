@@ -238,6 +238,120 @@ line_course_mission_node:
     reacquire_min_confidence: 0.30
     reacquire_stable_frames: 3
 
+# Task-platform positioning is intentionally not launched into the production mux
+# in this round.  These entries are the sole future competition calibration input;
+# zero values are CALIBRATION_REQUIRED and explicit validity flags remain false.
+task_platform_positioning_node:
+  ros__parameters:
+    # ROBOT_TRANSLATION_MOTION = NONE: standalone candidate topic is not mux input.
+    allow_motion_execution: false
+    route_state_topic: /mission/line_course_state
+    corner_candidate_topic: /perception/corner_candidate
+    line_track_topic: /perception/line_track
+    white_bar_topic: /perception/white_bar_detection
+    pickup_board_topic: /perception/pickup_board_anchor
+    final_cmd_topic: /navigation/cmd_vel
+    odom_topic: /utlidar/robot_odom
+    recognition_result_topic: /mission/pickup_recognition_result
+    platform_event_topic: /mission/task_platform_event
+    status_topic: /mission/task_platform_positioning_status
+    gait_lock_request_topic: /gait/control_lock_req/platform_positioning
+    candidate_topic: /control/task_platform_positioning_candidate
+    control_rate_hz: 10.0
+    active_motion_direction_epsilon: 0.001
+
+    # Transfer platform calibration
+    transfer_platform_calibrated: false
+    transfer_anchor_signature_valid: false
+    transfer_anchor_confirm_frames: 3
+    transfer_anchor_min_confidence: 0.0  # CALIBRATION_REQUIRED
+    transfer_anchor_target_heading_error: 0.0  # CALIBRATION_REQUIRED
+    transfer_anchor_heading_tolerance: 0.0  # CALIBRATION_REQUIRED
+    transfer_anchor_target_lateral_error: 0.0  # CALIBRATION_REQUIRED
+    transfer_anchor_lateral_tolerance: 0.0  # CALIBRATION_REQUIRED
+    transfer_offset_required: true
+    transfer_offset_direction: forward
+    transfer_offset_speed_mps: 0.0
+    transfer_offset_duration_sec: 0.0  # TRANSFER_OFFSET_NOT_CALIBRATED
+    transfer_zero_confirm_samples: 3
+    transfer_zero_epsilon: 0.001
+
+    # Pickup board visual docking
+    pickup_platform_calibrated: false
+    pickup_board_signature_valid: false
+    pickup_board_confirm_frames: 3
+    pickup_position_confirm_frames: 3
+    pickup_zero_confirm_samples: 3
+    pickup_zero_epsilon: 0.001
+    pickup_target_area_ratio: 0.0  # CALIBRATION_REQUIRED; signature flag is false.
+    pickup_area_tolerance: 0.0
+    pickup_target_bottom_y_ratio: 0.0
+    pickup_bottom_y_tolerance: 0.0
+    pickup_target_center_x_ratio: 0.0
+    pickup_center_x_tolerance: 0.0
+    pickup_target_width_ratio: 0.0
+    pickup_width_tolerance: 0.0
+    pickup_visual_approach_speed_mps: 0.0
+    pickup_visual_slow_trigger_ratio: 0.0
+    pickup_turn_left_angle_deg: 90.0
+    pickup_turn_right_angle_deg: 90.0
+    pickup_turn_speed_radps: 0.0  # CALIBRATION_REQUIRED; yaw closure never uses time.
+    pickup_yaw_tolerance_deg: 0.0
+    pickup_yaw_timeout_sec: 8.0
+
+    # Pickup timed fine positioning
+    pickup_timing_calibrated: false
+    pickup_view_reverse_required: true
+    pickup_view_reverse_speed_mps: 0.0
+    pickup_view_reverse_duration_sec: 0.0  # PICKUP_REVERSE_NOT_CALIBRATED
+    pickup_side_forward_required: true
+    pickup_side_forward_speed_mps: 0.0
+    pickup_side_forward_duration_sec: 0.0  # PICKUP_FORWARD_NOT_CALIBRATED
+
+    # Placement white-bar docking
+    place_platform_calibrated: false
+    place_white_bar_signature_valid: false
+    place_white_bar_confirm_frames: 3
+    place_zero_confirm_samples: 3
+    place_zero_epsilon: 0.001
+    place_white_bar_target_y_ratio: 0.0  # CALIBRATION_REQUIRED; signature flag is false.
+    place_white_bar_y_tolerance: 0.0
+    place_white_bar_target_span_ratio: 0.0
+    place_white_bar_span_tolerance: 0.0
+    place_white_bar_slow_y_ratio: 0.0
+    place_visual_approach_speed_mps: 0.0
+    place_line_max_lateral_error: 0.0
+    place_line_max_heading_error: 0.0
+    place_final_offset_enabled: false
+    place_final_offset_direction: forward
+    place_final_offset_speed_mps: 0.0
+    place_final_offset_duration_sec: 0.0
+
+pickup_board_anchor_detector:
+  ros__parameters:
+    image_topic: /go2/front_camera/image_raw
+    output_topic: /perception/pickup_board_anchor
+    metrics_topic: /perception/pickup_board_anchor_metrics
+    route_state_topic: /mission/line_course_state
+    calibration_mode: false
+    pickup_board_roi_left_fraction: 0.0
+    pickup_board_roi_right_fraction: 1.0
+    pickup_board_roi_top_fraction: 0.0
+    pickup_board_roi_bottom_fraction: 1.0
+    # Detector scaffold: disabled by impossible area interval until image calibration.
+    pickup_board_threshold: 0
+    pickup_board_hsv_h_min: 0
+    pickup_board_hsv_h_max: 180
+    pickup_board_hsv_s_min: 0
+    pickup_board_hsv_s_max: 255
+    pickup_board_hsv_v_min: 0
+    pickup_board_hsv_v_max: 255
+    pickup_board_min_area_ratio: 1.0
+    pickup_board_max_area_ratio: 0.0
+    pickup_board_min_aspect_ratio: 1.0
+    pickup_board_max_aspect_ratio: 0.0
+    pickup_board_confirm_frames: 3
+
 white_bar_action_executor:
   ros__parameters:
     request_topic: /mission/white_bar_action_request

@@ -35,6 +35,8 @@ setup(
             'inspection_action_executor = '
             'rk_mission.inspection_action_executor_node:main',
             'national_mission_node = rk_mission.national_mission_node:main',
+            'task_platform_positioning_node = '
+            'rk_mission.task_platform_positioning_node:main',
         ],
     },
 )
