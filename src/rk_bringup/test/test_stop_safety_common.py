@@ -199,10 +199,21 @@ def test_estop_diagnostic_distinguishes_service_type_failures(
     assert 'operation=service_call' not in result.stdout
 
 
-def _run_stop_line(tmp_path, live_process=True, **overrides):
+def _run_stop_line(
+    tmp_path, live_process=True, isolated_contract=False, **overrides,
+):
     fake_bin = _write_fake_ros2(tmp_path)
     environment = _fake_environment(tmp_path, fake_bin, **overrides)
     process = _add_live_managed_process(environment) if live_process else None
+    if isolated_contract:
+        runtime_dir = Path(environment['RK_COMPETITION_RUNTIME_DIR'])
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        (runtime_dir / 'readiness_profile').write_text(
+            'isolated_line_validation\n', encoding='utf-8',
+        )
+        (runtime_dir / 'start_mission_nodes').write_text(
+            'false\n', encoding='utf-8',
+        )
     result = subprocess.run(
         ['bash', str(STOP_LINE_SCRIPT)],
         check=False,
@@ -314,6 +325,26 @@ def test_primary_success_with_incomplete_actions_keeps_estop_and_retry(
     calls = Path(environment['FAKE_ROS2_CALL_LOG']).read_text(encoding='utf-8')
     assert '/safety/estop std_srvs/srv/SetBool {data: true}' in calls
     assert 'go2_sdk' not in calls
+
+
+def test_isolated_cleanup_skips_only_disabled_action_statuses(tmp_path):
+    """isolated 清理不得等待不存在的 action，也不得触发 direct-zero fallback。"""
+    result, environment = _run_stop_line(
+        tmp_path,
+        isolated_contract=True,
+        FAKE_ESTOP_MODE='success',
+        FAKE_ACTION_STATUS_MODE='missing',
+        RK_COMPETITION_ACTION_CANCEL_TIMEOUT_SEC='30',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count(
+        'SKIPPED_BY_PROFILE:isolated_line_validation'
+    ) == 2
+    assert 'did not reach a terminal state' not in result.stderr
+    assert 'EMERGENCY FALLBACK' not in result.stderr
+    calls = Path(environment['FAKE_ROS2_CALL_LOG']).read_text(encoding='utf-8')
+    assert '/navigation/cmd_vel geometry_msgs/msg/Twist' not in calls
 
 
 def test_scripts_share_single_diagnostic_implementation():

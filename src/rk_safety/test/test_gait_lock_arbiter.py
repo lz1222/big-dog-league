@@ -20,6 +20,7 @@ FAIL-CLOSED rules under test:
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
@@ -27,7 +28,8 @@ import unittest
 
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
-from std_msgs.msg import Bool
+from rclpy.parameter import Parameter
+from std_msgs.msg import Bool, String
 
 _ARBITER_RATE = 50.0
 _SOURCE_TIMEOUT = 0.5
@@ -36,7 +38,10 @@ _TOPIC_INSPECTION = '/gait/control_lock_req/inspection'
 _OUTPUT_TOPIC = '/gait/control_lock'
 
 
-def _make_params_file(input_topics, output_topic, source_timeout, arbiter_rate):
+def _make_params_file(
+    input_topics, output_topic, source_timeout, arbiter_rate,
+    readiness_profile, start_mission_nodes,
+):
     yaml_content = (
         '/**:\n'
         '  ros__parameters:\n'
@@ -44,11 +49,15 @@ def _make_params_file(input_topics, output_topic, source_timeout, arbiter_rate):
         '    output_topic: {output}\n'
         '    source_timeout_sec: {timeout}\n'
         '    arbiter_rate_hz: {rate}\n'
+        '    readiness_profile: {profile}\n'
+        '    start_mission_nodes: {start_mission_nodes}\n'
     ).format(
         topics=', '.join(repr(t) for t in input_topics),
         output=repr(output_topic),
         timeout=float(source_timeout),
         rate=float(arbiter_rate),
+        profile=repr(readiness_profile),
+        start_mission_nodes=str(bool(start_mission_nodes)).lower(),
     )
     tmp = tempfile.NamedTemporaryFile(
         mode='w', suffix='.yaml', delete=False, prefix='arbiter_test_',
@@ -72,6 +81,8 @@ def _init_with_params(**kw):
             output_topic=kw.get('output_topic', _OUTPUT_TOPIC),
             source_timeout=kw.get('source_timeout_sec', _SOURCE_TIMEOUT),
             arbiter_rate=kw.get('arbiter_rate_hz', _ARBITER_RATE),
+            readiness_profile=kw.get('readiness_profile', 'production'),
+            start_mission_nodes=kw.get('start_mission_nodes', True),
         )
         _PARAMS_FILES.append(params_path)
         _ARGS_CACHE[key] = ['--ros-args', '--params-file', params_path]
@@ -121,7 +132,7 @@ class GaitLockArbiterTest(unittest.TestCase):
             executor = SingleThreadedExecutor()
             executor.add_node(node)
 
-            gait_pub = node.create_publisher(Bool, _TOPIC_GAIT, 10)
+            node.create_publisher(Bool, _TOPIC_GAIT, 10)
             node.create_publisher(Bool, _TOPIC_INSPECTION, 10)
             received: list[bool] = []
 
@@ -608,6 +619,69 @@ class GaitLockArbiterTest(unittest.TestCase):
                 received[-1],
                 'lock must stay false under sustained fresh heartbeat',
             )
+        finally:
+            rclpy.shutdown()
+
+    def test_isolated_profile_uses_only_real_gait_heartbeat(self):
+        """节点级验证 inspection 缺席被标记 skipped，而非伪造心跳。"""
+        _init_with_params(
+            readiness_profile='isolated_line_validation',
+            start_mission_nodes=False,
+        )
+        try:
+            node = self._create_node()
+            executor = SingleThreadedExecutor()
+            executor.add_node(node)
+            gait_pub = node.create_publisher(Bool, _TOPIC_GAIT, 10)
+            locks: list[bool] = []
+            statuses: list[dict] = []
+            node.create_subscription(
+                Bool, _OUTPUT_TOPIC,
+                lambda msg: locks.append(bool(msg.data)), 10,
+            )
+            node.create_subscription(
+                String, _OUTPUT_TOPIC + '/status',
+                lambda msg: statuses.append(json.loads(msg.data)), 10,
+            )
+
+            self._publish(gait_pub, False)
+            self.assertTrue(self._spin_until(
+                executor,
+                lambda: bool(locks and not locks[-1] and statuses),
+                timeout=2.0,
+            ))
+            payload = statuses[-1]
+            inspection = next(
+                item for item in payload['sources']
+                if item['topic'] == _TOPIC_INSPECTION
+            )
+            self.assertEqual(payload['profile'], 'isolated_line_validation')
+            self.assertTrue(payload['profile_graph_consistent'])
+            self.assertFalse(inspection['required'])
+            self.assertFalse(inspection['seen'])
+            self.assertIsNone(inspection['value'])
+            self.assertEqual(
+                inspection['reason'],
+                'SKIPPED_BY_PROFILE:isolated_line_validation',
+            )
+        finally:
+            rclpy.shutdown()
+
+    def test_profile_parameters_are_startup_only(self):
+        """运行时参数写入必须被拒绝，required-set 不能动态改变。"""
+        _init_with_params()
+        try:
+            node = self._create_node()
+            results = node.set_parameters([
+                Parameter(
+                    'readiness_profile', value='isolated_line_validation',
+                ),
+                Parameter('start_mission_nodes', value=False),
+            ])
+            self.assertTrue(results)
+            self.assertTrue(all(not result.successful for result in results))
+            self.assertEqual(node.readiness_profile, 'production')
+            self.assertTrue(node.start_mission_nodes)
         finally:
             rclpy.shutdown()
 

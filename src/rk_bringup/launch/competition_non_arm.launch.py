@@ -579,7 +579,8 @@ def generate_launch_description():
             }],
         ),
         # 单一锁仲裁节点将 gait/inspection 的独立锁请求做 OR 聚合，
-        # 发布唯一权威的 /gait/control_lock，消除双发布者竞态。
+        # 发布唯一权威的 /gait/control_lock。profile 只改变与启动图一致的
+        # required-set；生产默认仍要求 gait 与 inspection 两路健康。
         Node(
             package='rk_safety',
             executable='gait_lock_arbiter_node',
@@ -593,6 +594,10 @@ def generate_launch_description():
                 'output_topic': '/gait/control_lock',
                 'source_timeout_sec': 2.0,
                 'arbiter_rate_hz': 10.0,
+                'readiness_profile': readiness_profile,
+                'start_mission_nodes': ParameterValue(
+                    start_mission_nodes, value_type=bool
+                ),
             }],
         ),
         # Go2 本体前向相机 → sensor_msgs/Image 桥接。
@@ -630,8 +635,8 @@ def generate_launch_description():
                 'software_smoke_mode': ParameterValue(
                     software_smoke_mode, value_type=bool
                 ),
-                # profile 只交给 readiness；业务节点不得因 validation 参数
-                # 改变生产状态机或动作逻辑。
+                # readiness 与锁仲裁必须使用同一启动契约；其它业务节点不得
+                # 因 validation 参数改变生产状态机或动作逻辑。
                 'readiness_profile': readiness_profile,
                 'start_mission_nodes': ParameterValue(
                     start_mission_nodes, value_type=bool

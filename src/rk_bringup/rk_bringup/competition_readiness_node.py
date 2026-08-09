@@ -124,6 +124,14 @@ class CompetitionReadinessNode(Node):
             String, self.gait_status_topic, self._on_gait_status, 10
         )
         self.create_subscription(
+            Bool, self.gait_control_lock_topic,
+            self._on_gait_control_lock, 10,
+        )
+        self.create_subscription(
+            String, self.gait_control_lock_status_topic,
+            self._on_gait_control_lock_status, 10,
+        )
+        self.create_subscription(
             String, self.cmd_mux_status_topic, self._on_mux_status, 10
         )
         self.create_subscription(
@@ -195,6 +203,8 @@ class CompetitionReadinessNode(Node):
             ),
             'sign_detections_topic': '/perception/sign_detections',
             'gait_status_topic': '/gait/status',
+            'gait_control_lock_topic': '/gait/control_lock',
+            'gait_control_lock_status_topic': '/gait/control_lock/status',
             'estop_state_topic': '/safety/estop_state',
             'estop_service_name': '/safety/estop',
             'motion_action_name': MOTION_ACTION_NAME,
@@ -247,6 +257,8 @@ class CompetitionReadinessNode(Node):
             'inspection_action_status_topic',
             'sign_detections_topic',
             'gait_status_topic',
+            'gait_control_lock_topic',
+            'gait_control_lock_status_topic',
             'estop_state_topic',
             'estop_service_name',
             'motion_action_name',
@@ -324,6 +336,14 @@ class CompetitionReadinessNode(Node):
 
     def _on_gait_status(self, msg):
         self._remember('gait_status', str(msg.data).strip())
+
+    def _on_gait_control_lock(self, msg):
+        """记录仲裁后的真实锁值，避免只检查 publisher 存在便放行。"""
+        self._remember('gait_control_lock', bool(msg.data))
+
+    def _on_gait_control_lock_status(self, msg):
+        """记录 profile/required-set 证据，不以虚构心跳代替缺失 provider。"""
+        self._remember('gait_control_lock_status', json_object(msg.data))
 
     def _on_mux_status(self, msg):
         self._remember('mux_status', json_object(msg.data))
@@ -579,6 +599,44 @@ class CompetitionReadinessNode(Node):
             critical=False,
         )
 
+    def _gait_lock_profile_status_ok(self, payload):
+        """核对 arbiter profile 和 required-set，拒绝假 seen/value 放行。"""
+        if not isinstance(payload, dict):
+            return False
+        if (
+            payload.get('profile') != self.readiness_profile
+            or payload.get('start_mission_nodes') != self.start_mission_nodes
+            or payload.get('profile_graph_consistent') is not True
+            or payload.get('global_lock') is not False
+        ):
+            return False
+        sources = {
+            item.get('topic'): item
+            for item in payload.get('sources', [])
+            if isinstance(item, dict) and item.get('topic')
+        }
+        gait = sources.get('/gait/control_lock_req/gait', {})
+        if not (
+            gait.get('required') is True
+            and gait.get('seen') is True
+            and gait.get('fresh') is True
+            and gait.get('value') is False
+        ):
+            return False
+        inspection = sources.get('/gait/control_lock_req/inspection', {})
+        if self._isolated_line_validation:
+            return (
+                inspection.get('required') is False
+                and inspection.get('reason')
+                == skipped_by_profile_detail(self.readiness_profile)
+            )
+        return (
+            inspection.get('required') is True
+            and inspection.get('seen') is True
+            and inspection.get('fresh') is True
+            and inspection.get('value') is False
+        )
+
     @property
     def _isolated_line_validation(self):
         return self.readiness_profile == ISOLATED_LINE_VALIDATION_PROFILE
@@ -616,6 +674,43 @@ class CompetitionReadinessNode(Node):
         checks.append(ReadinessCheck(
             'gait_control_lock_single_arbiter_publisher',
             lock_ok, lock_detail,
+        ))
+        gait_lock, gait_lock_age = self._fresh_value('gait_control_lock')
+        checks.append(ReadinessCheck(
+            'gait_control_lock_fresh_and_false',
+            gait_lock is False,
+            'value={}, age={}'.format(
+                gait_lock,
+                'missing' if gait_lock_age is None else '{:.3f}s'.format(
+                    gait_lock_age
+                ),
+            ),
+        ))
+        lock_status, lock_status_age = self._fresh_value(
+            'gait_control_lock_status'
+        )
+        lock_status_ok = self._gait_lock_profile_status_ok(lock_status)
+        checks.append(ReadinessCheck(
+            'gait_control_lock_profile_status',
+            lock_status_ok,
+            'profile={}, graph={}, lock={}, age={}'.format(
+                (
+                    lock_status.get('profile', 'missing')
+                    if isinstance(lock_status, dict) else 'missing'
+                ),
+                (
+                    lock_status.get('profile_graph_consistent', 'missing')
+                    if isinstance(lock_status, dict) else 'missing'
+                ),
+                (
+                    lock_status.get('global_lock', 'missing')
+                    if isinstance(lock_status, dict) else 'missing'
+                ),
+                (
+                    'missing' if lock_status_age is None
+                    else '{:.3f}s'.format(lock_status_age)
+                ),
+            ),
         ))
         if profile_skips_check(
             self.readiness_profile, 'execute_motion_action_server'

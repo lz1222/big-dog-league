@@ -1103,6 +1103,14 @@ def test_dynamic_validation_can_exclude_wait_start_mission_zero_candidates():
     )[1].split('ExecuteProcess(', 1)[0]
     assert "'readiness_profile': readiness_profile" in readiness_section
     assert "'start_mission_nodes': ParameterValue(" in readiness_section
+    arbiter_section = launch_source.split(
+        "executable='gait_lock_arbiter_node'", 1
+    )[1].split("executable='go2_front_camera_bridge.py'", 1)[0]
+    assert "'readiness_profile': readiness_profile" in arbiter_section
+    assert "'start_mission_nodes': ParameterValue(" in arbiter_section
+    assert 'validate_profile_graph_contract || exit 1' in start_source
+    assert '${RUNTIME_DIR}/readiness_profile' in start_source
+    assert '${RUNTIME_DIR}/start_mission_nodes' in start_source
 
 
 def test_mission_start_uses_reliable_volatile_dual_ack_delivery():

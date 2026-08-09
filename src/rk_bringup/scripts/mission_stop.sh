@@ -9,6 +9,31 @@ source "${SCRIPT_DIR}/stop_safety_common.sh"
 ACTION_CANCEL_TIMEOUT_SEC="${RK_COMPETITION_ACTION_CANCEL_TIMEOUT_SEC:-12}"
 # 仅用于 CLI 新订阅读取状态/最终零速度，避免慢机误把状态缺失当作安全完成。
 TOPIC_SAMPLE_TIMEOUT_SEC="${RK_COMPETITION_TOPIC_SAMPLE_TIMEOUT_SEC:-6}"
+COMPETITION_RUNTIME_DIR="${RK_COMPETITION_RUNTIME_DIR:-$HOME/rk_non_arm_competition_runtime}"
+
+load_action_status_contract() {
+    # cleanup 以 start 脚本冻结的 profile/图文件为准；缺失或非法时回退生产
+    # 严格合同，绝不能因调用者临时环境变量放宽 action terminal 证明。
+    local profile=production
+    local start_mission_nodes=true
+    if [ -r "${COMPETITION_RUNTIME_DIR}/readiness_profile" ]; then
+        profile="$(tr -d '\r\n' < "${COMPETITION_RUNTIME_DIR}/readiness_profile")"
+    fi
+    if [ -r "${COMPETITION_RUNTIME_DIR}/start_mission_nodes" ]; then
+        start_mission_nodes="$(tr -d '\r\n' < "${COMPETITION_RUNTIME_DIR}/start_mission_nodes")"
+    fi
+    if [ "$profile" = isolated_line_validation ] \
+            && [ "$start_mission_nodes" = false ]; then
+        ACTION_STATUS_REQUIRED=0
+        ACTION_STATUS_SKIP_REASON="SKIPPED_BY_PROFILE:isolated_line_validation"
+        return 0
+    fi
+    ACTION_STATUS_REQUIRED=1
+    ACTION_STATUS_SKIP_REASON=""
+    if [ "$profile" != production ] || [ "$start_mission_nodes" != true ]; then
+        echo "WARN: invalid cleanup profile contract; requiring production action proof." >&2
+    fi
+}
 
 resolve_workspace_dir() {
     local candidate
@@ -161,6 +186,7 @@ wait_for_continuous_mux_zero() {
 
 ENV_SCRIPT="$(resolve_env_script)" || exit 1
 source "$ENV_SCRIPT" || exit 1
+load_action_status_contract
 
 # stop 必须先送达所有任务状态机；即使 topic 当前无订阅者也保持幂等返回。
 timeout 4s ros2 topic pub --once /mission/stop std_msgs/msg/Bool \
@@ -185,10 +211,15 @@ fi
 
 # action 状态只用于诊断。mission/estop 已送达且 mux 已连续归零时，图关闭
 # 造成的末条 IDLE 缺失不能逆转停车成功；stop_line_system 会继续验证进程/端口。
-wait_for_action_terminal /mission/white_bar_action_status "white-bar Action" \
-    || echo "WARN: white-bar Action terminal proof unavailable after safe stop." >&2
-wait_for_action_terminal /mission/inspection_action_status "inspection Action" \
-    || echo "WARN: inspection Action terminal proof unavailable after safe stop." >&2
+if [ "$ACTION_STATUS_REQUIRED" -eq 1 ]; then
+    wait_for_action_terminal /mission/white_bar_action_status "white-bar Action" \
+        || echo "WARN: white-bar Action terminal proof unavailable after safe stop." >&2
+    wait_for_action_terminal /mission/inspection_action_status "inspection Action" \
+        || echo "WARN: inspection Action terminal proof unavailable after safe stop." >&2
+else
+    echo "INFO: white-bar Action status ${ACTION_STATUS_SKIP_REASON}."
+    echo "INFO: inspection Action status ${ACTION_STATUS_SKIP_REASON}."
+fi
 
 echo "Mission stopped: mux estop enabled and final command zero."
 exit 0

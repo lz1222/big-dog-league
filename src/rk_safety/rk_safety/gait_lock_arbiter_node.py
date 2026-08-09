@@ -33,12 +33,17 @@ import threading
 import time
 
 import rclpy
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy
 from rclpy.qos import QoSProfile
 from rclpy.qos import QoSReliabilityPolicy
 from std_msgs.msg import Bool, String
+
+from rk_safety.gait_lock_profile import evaluate_lock
+from rk_safety.gait_lock_profile import required_source_map
+from rk_safety.gait_lock_profile import validate_profile
 
 
 class GaitLockArbiterNode(Node):
@@ -48,6 +53,7 @@ class GaitLockArbiterNode(Node):
         super().__init__('gait_lock_arbiter_node')
         self._declare_parameters()
         self._read_parameters()
+        self.add_on_set_parameters_callback(self._reject_startup_parameter_change)
 
         self._state_lock = threading.RLock()
         # Per-source: {topic: {'seen': bool, 'value': bool, 'last_time': float}}
@@ -88,10 +94,17 @@ class GaitLockArbiterNode(Node):
         self._publish_lock(True)
 
         self.get_logger().info(
-            'Gait lock arbiter ready (fail-closed): output={}, inputs={}, '
+            'Gait lock arbiter ready (fail-closed): profile={}, '
+            'start_mission_nodes={}, output={}, inputs={}, required={}, '
             'timeout={:.3f}s, rate={:.1f}Hz'.format(
+                self.readiness_profile,
+                self.start_mission_nodes,
                 self.output_topic,
                 list(self.input_topics),
+                [
+                    topic for topic, required in self.required_sources.items()
+                    if required
+                ],
                 self.source_timeout_sec,
                 self.arbiter_rate_hz,
             ),
@@ -106,6 +119,8 @@ class GaitLockArbiterNode(Node):
         self.declare_parameter('output_topic', '/gait/control_lock')
         self.declare_parameter('source_timeout_sec', 2.0)
         self.declare_parameter('arbiter_rate_hz', 10.0)
+        self.declare_parameter('readiness_profile', 'production')
+        self.declare_parameter('start_mission_nodes', True)
 
     def _read_parameters(self):
         raw = self.get_parameter('input_topics').value
@@ -130,6 +145,32 @@ class GaitLockArbiterNode(Node):
         )
         if self.arbiter_rate_hz <= 0.0:
             raise ValueError('arbiter_rate_hz must be positive')
+        self.readiness_profile = validate_profile(
+            self.get_parameter('readiness_profile').value
+        )
+        start_mission_nodes = self.get_parameter('start_mission_nodes').value
+        if not isinstance(start_mission_nodes, bool):
+            raise ValueError('start_mission_nodes must be a boolean')
+        self.start_mission_nodes = start_mission_nodes
+        self.required_sources = required_source_map(
+            self.readiness_profile, self.input_topics,
+        )
+
+    def _reject_startup_parameter_change(self, parameters):
+        """拒绝运行时切换 profile/图契约，防止 required-set 突变。"""
+        startup_only = {
+            'input_topics', 'readiness_profile', 'start_mission_nodes',
+        }
+        changed = sorted(
+            parameter.name for parameter in parameters
+            if parameter.name in startup_only
+        )
+        if changed:
+            return SetParametersResult(
+                successful=False,
+                reason='startup-only parameters: {}'.format(','.join(changed)),
+            )
+        return SetParametersResult(successful=True)
 
     def _make_callback(self, topic):
         def callback(msg):
@@ -147,52 +188,18 @@ class GaitLockArbiterNode(Node):
         Must be called under _state_lock.  Fail-closed: any source that is
         unseen, stale, or reporting true forces the global lock to true.
         """
-        now = time.monotonic()
-        locked = False
-        fault_reasons = []
-        source_statuses = []
-
-        if self._shutting_down:
-            return True, ['arbiter_shutting_down'], []
-
-        for topic in self.input_topics:
-            info = self._sources.get(topic, {
-                'seen': False, 'value': False, 'last_time': 0.0,
-            })
-            seen = info['seen']
-            value = info['value']
-            age = now - info['last_time'] if seen else float('inf')
-            fresh = seen and age <= self.source_timeout_sec
-
-            status = {
-                'topic': topic,
-                'seen': seen,
-                'value': value,
-                'age_sec': round(age, 6) if seen else None,
-                'fresh': fresh,
-            }
-
-            if not seen:
-                fault_reasons.append('source_unseen:{}'.format(topic))
-                locked = True
-                status['fault'] = 'unseen'
-            elif not fresh:
-                fault_reasons.append('source_stale:{} age={:.3f}s'.format(
-                    topic, age))
-                locked = True
-                status['fault'] = 'stale'
-            elif value:
-                locked = True
-                status['fault'] = None  # valid true request
-            else:
-                status['fault'] = None  # valid false release
-
-            source_statuses.append(status)
-
-        if not locked and not fault_reasons:
-            fault_reasons.append('all_sources_fresh_false')
-
-        return locked, fault_reasons, source_statuses
+        locked, reasons, statuses, graph_ok, graph_detail = evaluate_lock(
+            profile=self.readiness_profile,
+            start_mission_nodes=self.start_mission_nodes,
+            input_topics=self.input_topics,
+            sources=self._sources,
+            now=time.monotonic(),
+            source_timeout_sec=self.source_timeout_sec,
+            shutting_down=self._shutting_down,
+        )
+        self._last_graph_ok = graph_ok
+        self._last_graph_detail = graph_detail
+        return locked, reasons, statuses
 
     def _publish_lock(self, locked: bool):
         msg = Bool()
@@ -202,6 +209,10 @@ class GaitLockArbiterNode(Node):
 
     def _publish_status(self, locked: bool, fault_reasons, source_statuses):
         payload = {
+            'profile': self.readiness_profile,
+            'start_mission_nodes': self.start_mission_nodes,
+            'profile_graph_consistent': self._last_graph_ok,
+            'profile_graph_detail': self._last_graph_detail,
             'global_lock': locked,
             'fault_reason': '; '.join(fault_reasons) if fault_reasons else '',
             'sources': source_statuses,

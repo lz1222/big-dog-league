@@ -17,6 +17,53 @@ def adapter_schedule(arm_ns, motion_ns, period_ns=20_000_000):
     return events
 
 
+def sdk_status_event_key(payload):
+    """返回 SDK 事件稳定键；forwarder 重放同一 sequence 时用于去重汇总。"""
+    if not isinstance(payload, dict):
+        return None
+    instance_id = str(payload.get('server_instance_id', '')).strip()
+    sequence = payload.get('sequence')
+    if not instance_id or isinstance(sequence, bool):
+        return None
+    try:
+        sequence = int(sequence)
+    except (TypeError, ValueError):
+        return None
+    return instance_id, sequence
+
+
+def sdk_event_monotonic_ns(payload, receive_monotonic_ns):
+    """优先采用 server monotonic；缺失时才保守回退 recorder 接收时钟。"""
+    value = payload.get('server_monotonic_ns') if isinstance(payload, dict) else None
+    if not isinstance(value, bool):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            value = 0
+    if value > 0:
+        return value
+    return int(receive_monotonic_ns)
+
+
+def legacy_line_stale_event(rows, timeout_ns=350_000_000):
+    """重放旧 receiver-age 判定，返回首个超时相邻样本及旧 stop reason。"""
+    samples = sorted(
+        (
+            int(row['monotonic_ns']) for row in rows
+            if row.get('channel') == 'line_track'
+        )
+    )
+    for previous, following in zip(samples, samples[1:]):
+        if following - previous > int(timeout_ns):
+            return {
+                'previous_ns': previous,
+                'next_ns': following,
+                'gap_ns': following - previous,
+                'stop_reason': 'LINE_TRACK_FAILURE',
+            }
+    return None
+
+
 def nearest_center_y(frames, timestamp_ns):
     """返回距指定 SDK 时间最近的可靠白横杆中心；无证据时保持 None。"""
     candidates = [row for row in frames if row['visible'] and row['confidence'] > 0.0]

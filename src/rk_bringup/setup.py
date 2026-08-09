@@ -45,8 +45,14 @@ setup(
             'competition_readiness_node = '
             'rk_bringup.competition_readiness_node:main',
             'line_camera_node = rk_bringup.line_camera_node:main',
+            'stair_line_handoff_node = '
+            'rk_bringup.stair_line_handoff_node:main',
             'non_arm_smoke_publisher = '
             'rk_bringup.non_arm_smoke_publisher:main',
+            'validation_motion_adapter = '
+            'rk_bringup.validation_motion_adapter_node:main',
+            'validation_dynamic_recorder = '
+            'rk_bringup.validation_dynamic_recorder_node:main',
         ],
     },
 )

@@ -264,6 +264,20 @@ validate_clean_ros_environment() {
     echo "ROS environment gate passed: Foxy Domain10, graph query healthy."
 }
 
+validate_profile_graph_contract() {
+    # shell 启动入口必须在任何 SDK/ROS 进程之前拒绝混搭；节点内仍保留独立
+    # fail-closed 检查，形成启动器与运行图的双重证据。
+    case "${READINESS_PROFILE}:${START_MISSION_NODES}" in
+        production:true|isolated_line_validation:false)
+            return 0
+            ;;
+        *)
+            echo "ERROR: readiness profile/start_mission_nodes mismatch: ${READINESS_PROFILE}:${START_MISSION_NODES}" >&2
+            return 1
+            ;;
+    esac
+}
+
 udp_listener_count() {
     local port="$1"
     # `ss -lun` 的本地监听地址位于第 4 列；第 5 列是 peer 地址。若检查
@@ -320,6 +334,8 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "Run stop_line_system.sh first; no second control graph was started." >&2
     exit 1
 fi
+
+validate_profile_graph_contract || exit 1
 
 ENV_SCRIPT="$(resolve_env_script)"
 # 正式入口不依赖调用者 shell；软件 smoke 请使用独立 acceptance 的隔离域。
@@ -404,6 +420,9 @@ fi
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR/ros"
 rm -f "${RUNTIME_DIR}/pids"
 touch "${RUNTIME_DIR}/pids"
+# cleanup 必须读取启动时冻结的真实图合同，不能依赖另一个 shell 的默认值。
+printf '%s\n' "$READINESS_PROFILE" > "${RUNTIME_DIR}/readiness_profile"
+printf '%s\n' "$START_MISSION_NODES" > "${RUNTIME_DIR}/start_mission_nodes"
 
 SERVER_INSTANCE_ID="software-smoke"
 if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then

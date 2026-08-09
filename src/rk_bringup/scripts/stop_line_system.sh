@@ -232,7 +232,9 @@ fi
 # 顺序要求 1--3：mission_stop 内部先发 stop，再等待白横线/检查动作终止。
 MISSION_STOP_SCRIPT="$(resolve_companion_script mission_stop.sh || true)"
 if [ -x "$MISSION_STOP_SCRIPT" ]; then
-    "$MISSION_STOP_SCRIPT" || echo "WARN: mission_stop reported incomplete cleanup." >&2
+    RK_COMPETITION_RUNTIME_DIR="$COMPETITION_RUNTIME_DIR" \
+        "$MISSION_STOP_SCRIPT" \
+        || echo "WARN: mission_stop reported incomplete cleanup." >&2
 else
     timeout 3s ros2 topic pub --once /mission/stop std_msgs/msg/Bool \
         '{data: true}' || true
