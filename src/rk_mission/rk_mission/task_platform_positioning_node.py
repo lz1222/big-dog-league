@@ -13,9 +13,11 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
 
+from rk_interfaces.action import ExecuteArmTask
 from rk_interfaces.msg import LineTrack, SpecialTargetDetection
 
 from .platform_positioning_core import (
@@ -48,6 +50,7 @@ class TaskPlatformPositioningNode(Node):
                 '/gait/control_lock_req/platform_positioning'),
             # 独立候选 topic 不接 mux；防止本轮软件框架抢占基础巡线。
             'candidate_topic': '/control/task_platform_positioning_candidate',
+            'arm_action_name': '/arm/execute_task',
         }
         for name, value in topics.items():
             self.declare_parameter(name, value)
@@ -60,6 +63,7 @@ class TaskPlatformPositioningNode(Node):
         self.declare_parameter('platform_odom_timeout_sec', 0.5)
         self.declare_parameter('platform_final_cmd_timeout_sec', 0.5)
         self.declare_parameter('platform_cmd_mux_status_timeout_sec', 0.5)
+        self.declare_parameter('place_arm_action_timeout_sec', 90.0)
         params = {name: self.get_parameter(
             name).value for name in DEFAULT_PLATFORM_PARAMETERS}
         self.core = TaskPlatformPositioningCore(params)
@@ -69,12 +73,16 @@ class TaskPlatformPositioningNode(Node):
             'route', 'line', 'corner', 'white', 'board', 'odom',
             'final_cmd', 'cmd_mux_status')}
         self._final_command_sequence = 0
+        self._place_arm_goal_pending = False
+        self._place_arm_goal_started_at = None
         self.status_pub = self.create_publisher(
             String, self._topic('status_topic'), 10)
         self.command_pub = self.create_publisher(
             Twist, self._topic('candidate_topic'), 10)
         self.gait_lock_pub = self.create_publisher(
             Bool, self._topic('gait_lock_request_topic'), 10)
+        self.arm_client = ActionClient(
+            self, ExecuteArmTask, self._topic('arm_action_name'))
         self.create_subscription(String, self._topic(
             'route_state_topic'), self._on_route_state, 10)
         self.create_subscription(
@@ -245,6 +253,7 @@ class TaskPlatformPositioningNode(Node):
             # stale route 与字段缺失等价：不得沿用上一个平台阶段。
             self.core.set_route_phase('NONE')
         command = self.core.tick(time.monotonic())
+        self._maybe_start_place_arm_handoff(now)
         output = Twist()
         output.linear.x = command.vx
         output.linear.y = command.vy
@@ -256,6 +265,58 @@ class TaskPlatformPositioningNode(Node):
         status = String()
         status.data = json.dumps(self.core.snapshot(), sort_keys=True)
         self.status_pub.publish(status)
+
+    def _maybe_start_place_arm_handoff(self, now):
+        """仅在公共停车锁定与实体总开关都满足后，交给已有 ExecuteArmTask。"""
+        if self.core.state != 'PLACE_POSITION_LOCKED':
+            return
+        # 当前默认 false；软件标定阶段绝不发送真实机械臂 goal。
+        if not bool(self.core.p['allow_motion_execution']):
+            return
+        if self._place_arm_goal_pending:
+            if now - self._place_arm_goal_started_at >= float(
+                    self.get_parameter('place_arm_action_timeout_sec').value):
+                self._place_arm_goal_pending = False
+                self.core.place_arm_result(False, 'ACTION_TIMEOUT')
+            return
+        task_name = self.core.snapshot().get('place_arm_task')
+        if not task_name:
+            self.core.place_arm_result(False, 'TARGET_INVALID')
+            return
+        if not self.arm_client.wait_for_server(timeout_sec=0.0):
+            self.core.place_arm_result(False, 'ACTION_UNAVAILABLE')
+            return
+        goal = ExecuteArmTask.Goal()
+        goal.task_name = task_name
+        # API 只使用一号/二号已有 task 名，不引入 left/right target 字符串。
+        goal.target = ''
+        self._place_arm_goal_pending = True
+        self._place_arm_goal_started_at = now
+        future = self.arm_client.send_goal_async(goal)
+        future.add_done_callback(self._on_place_arm_goal_response)
+
+    def _on_place_arm_goal_response(self, future):
+        """Action reject 直接失败关闭；接受后只信任 result.success。"""
+        try:
+            handle = future.result()
+        except Exception:  # noqa: BLE001 - ROS future 异常同样不得继续放置。
+            self._place_arm_goal_pending = False
+            self.core.place_arm_result(False, 'GOAL_SEND_FAILED')
+            return
+        if handle is None or not handle.accepted:
+            self._place_arm_goal_pending = False
+            self.core.place_arm_result(False, 'GOAL_REJECTED')
+            return
+        handle.get_result_async().add_done_callback(self._on_place_arm_result)
+
+    def _on_place_arm_result(self, future):
+        """只有既有 arm server 的 success=true 才能进入 PLACE_DONE。"""
+        self._place_arm_goal_pending = False
+        try:
+            result = future.result().result
+            self.core.place_arm_result(bool(result.success), 'RESULT_FAILED')
+        except Exception:  # noqa: BLE001 - result 异常不能被当成完成。
+            self.core.place_arm_result(False, 'RESULT_ERROR')
 
     def _is_fresh(self, name, now):
         """按每类输入独立 timeout 判定，未收到消息一律 stale。"""

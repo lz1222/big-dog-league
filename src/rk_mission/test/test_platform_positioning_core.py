@@ -394,8 +394,8 @@ def test_place_common_pose_is_identical_for_both_arm_targets():
                 'errors', 'state', 'reason'):
         assert place1[key] == place2[key]
     assert place1['state'] == 'PLACE_POSITION_LOCKED'
-    assert place1['place_arm_side'] == 'LEFT'
-    assert place2['place_arm_side'] == 'RIGHT'
+    assert place1['place_arm_task'] == 'place_platform_1'
+    assert place2['place_arm_task'] == 'place_platform_2'
 
 
 @pytest.mark.parametrize('place_target, failure', (
@@ -414,7 +414,7 @@ def test_place_target_missing_or_invalid_fails_closed_at_position_lock(
     _confirm_zero(core)
     assert core.tick(0.1) == PlatformCommand()
     assert core.snapshot()['state'] == failure
-    assert core.snapshot()['place_arm_side'] is None
+    assert core.snapshot()['place_arm_task'] is None
 
 
 def test_conflicting_pickup_target_fails_closed_without_profile_change():
@@ -430,6 +430,39 @@ def test_conflicting_pickup_target_fails_closed_without_profile_change():
     core.tick(0.1)
     assert core.snapshot()['state'] == 'PLACE_TARGET_INCONSISTENT'
     assert core.snapshot()['target_values']['white_bar_y_ratio'] == .8
+
+
+@pytest.mark.parametrize('failure_reason', (
+    'GOAL_REJECTED', 'ACTION_TIMEOUT', 'RESULT_FAILED'))
+def test_place_arm_failure_never_completes_or_rearms_finish(failure_reason):
+    failed = TaskPlatformPositioningCore(_place_params())
+    failed.set_place_target('place1')
+    failed.set_route_phase('PLACE_PLATFORM_APPROACH')
+    failed.tick(0.0)
+    for _ in range(2):
+        failed.observe_place_white_bar(
+            _bar(), line_lateral_error=0.0, line_heading_error=0.0)
+    _confirm_zero(failed)
+    failed.tick(0.1)
+    failed.place_arm_result(False, failure_reason)
+    assert failed.state == 'PLACE_ARM_{}'.format(failure_reason)
+    assert not failed.snapshot()['finish_white_bar_armed']
+
+
+def test_place_arm_result_only_completes_after_real_success():
+
+    succeeded = TaskPlatformPositioningCore(_place_params())
+    succeeded.set_place_target('place2')
+    succeeded.set_route_phase('PLACE_PLATFORM_APPROACH')
+    succeeded.tick(0.0)
+    for _ in range(2):
+        succeeded.observe_place_white_bar(
+            _bar(), line_lateral_error=0.0, line_heading_error=0.0)
+    _confirm_zero(succeeded)
+    succeeded.tick(0.1)
+    succeeded.place_arm_result(True)
+    assert succeeded.state == 'PLACE_DONE'
+    assert not succeeded.snapshot()['finish_white_bar_armed']
 
 
 def test_place_optional_offset_uses_active_motion_time():

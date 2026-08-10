@@ -17,7 +17,6 @@ from .mission_types import (
     MissionFailureCode,
     MissionState,
     MotionCommand,
-    StationSide,
     TaskResult,
 )
 from .position_gates import (
@@ -948,11 +947,14 @@ class NationalMissionFSM:
         return None
 
     def _selected_place_action(self) -> Optional[tuple]:
+        """按抓取阶段锁存的平台编号选择既有固定任务，不暴露左右 API。"""
         target = self.context.target_place_platform
         if target == 1:
-            return (str(self.params['place_platform_1_task']), StationSide.LEFT.value)
+            # 一号物理位于左侧，但 arm Action 只接收既有一号任务名。
+            return (str(self.params['place_platform_1_task']), '')
         if target == 2:
-            return (str(self.params['place_platform_2_task']), StationSide.RIGHT.value)
+            # 二号物理位于右侧；底盘定位和 Action API 均不使用方向字符串。
+            return (str(self.params['place_platform_2_task']), '')
         return None
 
     def _final_command_is_stale(self, now: float) -> bool:

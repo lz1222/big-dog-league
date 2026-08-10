@@ -93,9 +93,9 @@ def test_duplicate_action_result_is_ignored_by_token():
 
 def test_selected_place_action_uses_real_arm_handoff_and_side_only():
     """PLACE_COMMON 底盘停妥后，差异只能进入既有 ExecuteArmTask 目标侧。"""
-    for target, expected_task, expected_side in (
-            (1, 'place_platform_1', 'left'),
-            (2, 'place_platform_2', 'right')):
+    for target, expected_task in (
+            (1, 'place_platform_1'),
+            (2, 'place_platform_2')):
         adapter = Adapter()
         fsm = _fast_fsm(adapter)
         fsm.context.target_place_platform = target
@@ -103,11 +103,12 @@ def test_selected_place_action_uses_real_arm_handoff_and_side_only():
         fsm.tick(0.0)
         fsm.on_final_command(MotionCommand(), 0.05)
         fsm.tick(0.1)
+        fsm.tick(0.2)
         assert len(adapter.requests) == 1
         request = adapter.requests[0]
         assert request.adapter == 'arm'
         assert request.task_name == expected_task
-        assert request.target == expected_side
+        assert request.target == ''
 
 
 def test_missing_place_target_fails_before_any_arm_handoff():

@@ -20,6 +20,9 @@ from std_msgs.msg import Bool, String
 
 from rk_arm_control.adapters.dry_run_adapter import DryRunArmAdapter
 from rk_arm_control.adapters.sdk_bridge_adapter import SdkBridgeArmAdapter
+from rk_arm_control.fixed_platform_action_runner import (
+    FixedPlatformActionRunner,
+)
 from rk_interfaces.action import ExecuteArmTask
 from rk_interfaces.msg import ItemTagArray
 
@@ -99,6 +102,10 @@ class NewArmTaskNode(Node):
         self.gripper = self.arm_plan.get('gripper', {})
         self.timing = self.arm_plan.get('timing', {})
         self.perception = self.arm_params.get('perception', {})
+        # 固定放置程序由当前 HEAD 的 D1 executable 实现；该 runner 不持有
+        # 任何姿态数据，且默认禁用，防止软件接线阶段误动作。
+        self.fixed_platform_runner = FixedPlatformActionRunner(
+            self.arm_params.get('fixed_platform_actions', {}))
 
         topics = self.arm_params.get('topics', {})
         self.status_topic = str(topics.get('status', '/arm/status'))
@@ -446,6 +453,14 @@ class NewArmTaskNode(Node):
             )
             return self._wait_step(task_name, step_name, duration_sec, timeout_sec)
 
+        if step_type == 'fixed_platform_action':
+            result = self.fixed_platform_runner.execute(task_name)
+            if result.success:
+                return ExecutionResult(True, STATUS_RUNNING, result.message, step_name)
+            self.publish_status(
+                task_name, STATUS_FAILED, step_name, False, result.message)
+            return ExecutionResult(False, STATUS_FAILED, result.message, step_name)
+
         message = f'unknown step type: {step_type}'
         self.publish_status(task_name, STATUS_FAILED, step_name, False, message)
         return ExecutionResult(False, STATUS_FAILED, message, step_name)
@@ -704,9 +719,9 @@ class NewArmTaskNode(Node):
             'FIELD_ITEM': 'PICK_FIELD',
             'PLACE_TARGET': 'PLACE_TARGET',
             'PLACE_FIELD_ITEM': 'PLACE_TARGET',
-            'PLACE_PLATFORM': 'PLACE_TARGET',
-            'PLACE_PLATFORM_1': 'PLACE_TARGET',
-            'PLACE_PLATFORM_2': 'PLACE_TARGET',
+            # 一号/二号使用已有不同 D1 固定动作；不把 LEFT/RIGHT 作为 API。
+            'PLACE_PLATFORM_1': 'PLACE_PLATFORM_1',
+            'PLACE_PLATFORM_2': 'PLACE_PLATFORM_2',
             'HOME': 'HOME',
             'OPEN_GRIPPER': 'OPEN_GRIPPER',
             'CLOSE_GRIPPER': 'CLOSE_GRIPPER',

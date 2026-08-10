@@ -15,8 +15,9 @@ new_arm:
     PICK_FIELD_ITEM: PICK_FIELD
     FIELD_ITEM: PICK_FIELD
     PLACE_FIELD_ITEM: PLACE_TARGET
-    PLACE_PLATFORM_1: PLACE_TARGET
-    PLACE_PLATFORM_2: PLACE_TARGET
+    # 接口只保留平台编号；固定关节动作由现有 D1 executable 负责。
+    PLACE_PLATFORM_1: PLACE_PLATFORM_1
+    PLACE_PLATFORM_2: PLACE_PLATFORM_2
 
   timing:
     # 单步默认超时时间。真实机械臂动作慢就适当加大。
@@ -103,6 +104,15 @@ new_arm:
           timeout_sec: 1.0
         - type: move
           pose: HOME
+
+    # 不在 YAML 复制固定关节值；以下单步只调用已有的完整 D1 固定动作。
+    PLACE_PLATFORM_1:
+      steps:
+        - type: fixed_platform_action
+
+    PLACE_PLATFORM_2:
+      steps:
+        - type: fixed_platform_action
         - type: gripper
           action: open
         - type: move
@@ -189,4 +199,3 @@ new_arm:
       steps:
         - type: gripper
           action: close
-

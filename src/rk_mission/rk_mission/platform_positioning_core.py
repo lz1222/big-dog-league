@@ -27,9 +27,9 @@ GAIT_LOCK_STATES = frozenset((
     'PICKUP_OBJECT_RECOGNITION', 'PICKUP_ARM_HANDOFF_READY',
     'PLACE_POSITION_LOCKED', 'PLACE_DONE',
 ))
-PLACE_TARGET_ARM_SIDES = {
-    'place1': 'LEFT',
-    'place2': 'RIGHT',
+PLACE_TARGET_ARM_TASKS = {
+    'place1': 'place_platform_1',
+    'place2': 'place_platform_2',
 }
 
 
@@ -177,7 +177,7 @@ class TaskPlatformPositioningCore:
         # 路线中间阶段可以不重复携带 target；不能因此清掉已锁存目标。
         if not candidate:
             return
-        if candidate not in PLACE_TARGET_ARM_SIDES:
+        if candidate not in PLACE_TARGET_ARM_TASKS:
             self._place_target_error = 'PLACE_TARGET_INVALID'
             return
         if self.place_target and candidate != self.place_target:
@@ -361,6 +361,15 @@ class TaskPlatformPositioningCore:
             self.state = 'PLACE_DONE'
             self.reason = 'place_done_waiting_finish_rearm'
 
+    def place_arm_result(self, success: bool, reason: str = '') -> None:
+        """只接受锁定点后的真实 Action result；失败时保持零速并不 rearm FINISH。"""
+        if self.state != 'PLACE_POSITION_LOCKED':
+            return
+        if bool(success):
+            self.place_done()
+        else:
+            self._fail('PLACE_ARM_{}'.format(str(reason or 'FAILED')))
+
     def rearm_finish(self) -> None:
         """只有 PLACE_DONE 后的显式路线事件才能恢复 FINISH 白线语义。"""
         if self.state == 'PLACE_DONE' and self._place_done:
@@ -468,7 +477,7 @@ class TaskPlatformPositioningCore:
             # 旧字段仅供兼容观测；它不再选择任何底盘定位参数。
             'place_platform_id': self.place_target,
             'place_target': self.place_target,
-            'place_arm_side': PLACE_TARGET_ARM_SIDES.get(self.place_target),
+            'place_arm_task': PLACE_TARGET_ARM_TASKS.get(self.place_target),
             'state': self.state,
             'reason': self.reason,
             'calibrated': self._platform_calibrated(),
@@ -590,7 +599,7 @@ class TaskPlatformPositioningCore:
     def _place_target_ready(self) -> bool:
         """最终锁定点只接受抓取阶段保存且未冲突的有效 target。"""
         return (not self._place_target_error
-                and self.place_target in PLACE_TARGET_ARM_SIDES)
+                and self.place_target in PLACE_TARGET_ARM_TASKS)
 
     def _place_target_failure_reason(self) -> str:
         """将 target 错误显式暴露给上层，避免静默回退到默认机械臂侧。"""

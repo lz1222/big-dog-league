@@ -44,6 +44,14 @@ new_arm:
       fire_and_wait: true
       initial_seq: 1000
 
+  # 既有 d1_platform{1,2}_complete_action 的 ExecuteArmTask 接线。
+  # 默认关闭：只有单独实体审批后才允许 action server 启动真实固定动作。
+  fixed_platform_actions:
+    enabled: false
+    binary_directory: /home/unitree/rk_inspection_ws/build/unitree_d1_sdk
+    network_interface: eth1
+    timeout_sec: 90.0
+
   sdk_bridge_node:
     # 这个节点订阅 adapter.sdk_bridge.command_topic，然后调用厂家 SDK。
     # 新机械臂没到之前用 mock；真正接 SDK 时再改 real，并补代码 TODO。

@@ -162,7 +162,7 @@ def test_place_common_profile_ignores_arm_target_and_missing_target_locks_fail_c
     core.set_place_target('place2')
     core.set_route_phase('PLACE_PLATFORM_APPROACH')
     assert core.snapshot()['target_values']['white_bar_y_ratio'] == .8
-    assert core.snapshot()['place_arm_side'] == 'RIGHT'
+    assert core.snapshot()['place_arm_task'] == 'place_platform_2'
     missing = TaskPlatformPositioningCore(_place_params())
     missing.set_route_phase('PLACE_PLATFORM_APPROACH')
     assert missing.state == 'PLACE_PLATFORM_APPROACH'
