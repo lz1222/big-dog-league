@@ -88,7 +88,9 @@ class TaskPlatformPositioningCore:
         self.p = dict(DEFAULT_PLATFORM_PARAMETERS)
         if parameters:
             self.p.update(parameters)
-        self.route_phase = 'WAIT_START'
+        # 路线协议必须显式给出 NONE，初值也采用同一安全语义。
+        self.route_phase = 'NONE'
+        self.place_platform_id = ''
         self.state = 'IDLE'
         self.reason = 'platform_positioning_idle'
         self.anchor_detected = False
@@ -101,6 +103,15 @@ class TaskPlatformPositioningCore:
         self._active_elapsed = 0.0
         self._last_tick: Optional[float] = None
         self._final_command = PlatformCommand()
+        self._final_command_fresh = False
+        self._final_command_sequence = 0
+        self._last_zero_sequence = 0
+        self._mux_status = {}
+        self._mux_status_fresh = False
+        self._sensor_fresh = {
+            'line': False, 'corner': False, 'white': False,
+            'board': False, 'odom': False, 'final_cmd': False,
+        }
         self._recognition_result: Optional[bool] = None
         self._place_done = False
         self._finish_rearmed = False
@@ -153,6 +164,25 @@ class TaskPlatformPositioningCore:
                                       'PLACE_PLATFORM_APPROACH'):
             self._reset_idle('route_phase_not_platform')
 
+    def set_place_platform_id(self, platform_id: str) -> None:
+        """选择 place1/place2 独立黄金 profile，未知编号不允许借用参数。"""
+        self.place_platform_id = str(platform_id or '')
+
+    def update_sensor_freshness(self, **freshness: bool) -> None:
+        """由适配层按单调时钟刷新输入时效；未出现的数据天然 stale。"""
+        for name, value in freshness.items():
+            if name in self._sensor_fresh:
+                self._sensor_fresh[name] = bool(value)
+
+    def observe_cmd_mux_status(self, status: dict, *, fresh: bool) -> None:
+        """缓存最终 mux 仲裁结果，短距离计时只信任此权威反馈。"""
+        self._mux_status = dict(status) if isinstance(status, dict) else {}
+        self._mux_status_fresh = bool(fresh)
+
+    def set_cmd_mux_status_fresh(self, fresh: bool) -> None:
+        """仅刷新已接收 mux 快照的时效，timer 不伪造新的状态消息。"""
+        self._mux_status_fresh = bool(fresh)
+
     def observe_transfer_anchor(
             self,
             *,
@@ -161,7 +191,11 @@ class TaskPlatformPositioningCore:
             heading_error: float,
             lateral_error: float) -> None:
         """用既有 corner/line geometry 建立中转锚点，且受路线双重门控。"""
-        if self.state != 'TRANSFER_ANCHOR_WAIT':
+        self._sensor_fresh['corner'] = True
+        self._sensor_fresh['line'] = True
+        if self.state != 'TRANSFER_ANCHOR_WAIT' or not self._sensors_fresh(
+                'corner', 'line'):
+            self._counts['transfer'] = 0
             return
         self._last_transfer = {
             'confidence': confidence,
@@ -191,7 +225,10 @@ class TaskPlatformPositioningCore:
 
     def observe_pickup_board(self, observation: BoardObservation) -> None:
         """挡板仅在抓取平台接近阶段参与停车画面确认。"""
-        if self.state != 'PICKUP_VISUAL_APPROACH':
+        self._sensor_fresh['board'] = True
+        if self.state != 'PICKUP_VISUAL_APPROACH' or not self._sensors_fresh(
+                'board'):
+            self._counts['pickup_board'] = 0
             return
         self._last_board = observation
         valid = observation.detected and self._pickup_target_matches(
@@ -210,7 +247,11 @@ class TaskPlatformPositioningCore:
                                 *, line_lateral_error: float,
                                 line_heading_error: float) -> None:
         """白线决定纵向，LineTrack 同时通过才允许放置位置锁定。"""
-        if self.state != 'PLACE_WHITE_BAR_APPROACH':
+        self._sensor_fresh['white'] = True
+        self._sensor_fresh['line'] = True
+        if self.state != 'PLACE_WHITE_BAR_APPROACH' or not self._sensors_fresh(
+                'white', 'line'):
+            self._counts['place'] = 0
             return
         self._last_white = observation
         self._last_place_line = {
@@ -226,15 +267,17 @@ class TaskPlatformPositioningCore:
             observation.detected
             and all(_finite(value) is not None for value in values)
             and abs(float(observation.center_y_ratio) - float(
-                self.p['place_white_bar_target_y_ratio'])) <= float(
-                    self.p['place_white_bar_y_tolerance'])
+                self._place_profile_value(
+                    'white_bar_target_y_ratio'))) <= float(
+                        self._place_profile_value('white_bar_y_tolerance'))
             and abs(float(observation.span_ratio) - float(
-                self.p['place_white_bar_target_span_ratio'])) <= float(
-                    self.p['place_white_bar_span_tolerance'])
+                self._place_profile_value(
+                    'white_bar_target_span_ratio'))) <= float(
+                        self._place_profile_value('white_bar_span_tolerance'))
             and abs(float(line_lateral_error)) <= float(
-                self.p['place_line_max_lateral_error'])
+                self._place_profile_value('line_max_lateral_error'))
             and abs(float(line_heading_error)) <= float(
-                self.p['place_line_max_heading_error'])
+                self._place_profile_value('line_max_heading_error'))
         )
         self._counts['place'] = self._counts.get(
             'place', 0) + 1 if valid else 0
@@ -251,17 +294,29 @@ class TaskPlatformPositioningCore:
             self._active_elapsed = 0.0
             self._reset_zero_confirmation()
 
-    def observe_final_command(self, command: PlatformCommand) -> None:
+    def observe_final_command(self, command: PlatformCommand, *, fresh=True,
+                              sequence=None) -> None:
         """缓存 mux 最终命令，并仅在停车阶段累计连续零速样本。"""
         self._final_command = command
+        self._final_command_fresh = bool(fresh)
+        self._sensor_fresh['final_cmd'] = bool(fresh)
+        if sequence is None:
+            self._final_command_sequence += 1
+        else:
+            self._final_command_sequence = int(sequence)
         values = (command.vx, command.vy, command.wz)
         is_zero = all(
             _finite(value) is not None and abs(
                 float(value)) <= float(
                 self._zero_epsilon()) for value in values)
-        if self.state in ZERO_CONFIRM_STATES:
+        # 一个旧的零速 topic 样本不能在多个 timer tick 重复计数。
+        new_sample = self._final_command_sequence > self._last_zero_sequence
+        if self.state in ZERO_CONFIRM_STATES and bool(fresh) and new_sample:
             self._counts['zero'] = self._counts.get(
                 'zero', 0) + 1 if is_zero else 0
+            self._last_zero_sequence = self._final_command_sequence
+        elif self.state in ZERO_CONFIRM_STATES and not bool(fresh):
+            self._reset_zero_confirmation()
         else:
             self._counts['zero'] = 0
         required = self._zero_samples_required()
@@ -271,6 +326,7 @@ class TaskPlatformPositioningCore:
         """保存 yaw 闭环输入；从不以时间完成 90° 转向。"""
         if _finite(yaw) is not None:
             self._yaw_current = float(yaw)
+            self._sensor_fresh['odom'] = True
 
     def recognition_result(self, success: bool) -> None:
         """接收既有物资识别模块的最终结果，不重写其算法。"""
@@ -297,7 +353,12 @@ class TaskPlatformPositioningCore:
             self.reason = 'transfer_task_completed'
 
     def gait_lock_requested(self) -> bool:
-        """任务/停车阶段请求既有 arbiter 锁，接近阶段仍由巡线控制。"""
+        """只在静态识别/任务交接时请求锁；mission 移动候选绝不加锁。
+
+        command mux 的 gait_lock 只允许 locomotion source。未来把平台移动
+        纳入 ``/control/mission_cmd`` 时，路线层必须停止转发 line follower，
+        而非同时请求 gait lock。
+        """
         return self.state in GAIT_LOCK_STATES
 
     def tick(self, now: float) -> PlatformCommand:
@@ -307,6 +368,8 @@ class TaskPlatformPositioningCore:
             0.0, now - self._last_tick)
         self._last_tick = now
         self._command = PlatformCommand()
+        if self._hold_for_stale_sensor():
+            return self._command
         if self.state == 'TRANSFER_APPROACH':
             self.state = 'TRANSFER_ANCHOR_WAIT'
             self.reason = 'transfer_line_follow_released_for_anchor'
@@ -376,6 +439,7 @@ class TaskPlatformPositioningCore:
         return {
             'platform': self._platform(),
             'route_phase': self.route_phase,
+            'place_platform_id': self.place_platform_id,
             'state': self.state,
             'reason': self.reason,
             'calibrated': self._platform_calibrated(),
@@ -390,6 +454,9 @@ class TaskPlatformPositioningCore:
             'yaw_target_rad': self._yaw_target,
             'yaw_delta_rad': yaw_delta,
             'zero_confirm_count': self._counts.get('zero', 0),
+            'sensor_freshness': dict(self._sensor_fresh),
+            'cmd_mux_fresh': self._mux_status_fresh,
+            'cmd_mux_active_source': self._mux_status.get('active_source', ''),
             'failure_reason': self.failure_reason,
             'gait_lock_requested': self.gait_lock_requested(),
             'finish_white_bar_armed': (
@@ -405,6 +472,8 @@ class TaskPlatformPositioningCore:
         if (not bool(self.p['transfer_platform_calibrated'])
                 or not bool(self.p['transfer_anchor_signature_valid'])):
             self._fail('TRANSFER_PLATFORM_NOT_CALIBRATED')
+        elif not self._transfer_preflight_ready():
+            self._fail('TRANSFER_PREFLIGHT_NOT_READY')
         else:
             self.state = 'TRANSFER_APPROACH'
             self.reason = 'transfer_route_phase_armed'
@@ -413,8 +482,8 @@ class TaskPlatformPositioningCore:
         self._reset_runtime()
         if not bool(self.p['pickup_platform_calibrated']):
             self._fail('PICKUP_PLATFORM_NOT_CALIBRATED')
-        elif not self._pickup_target_configured():
-            self._fail('PICKUP_BOARD_NOT_CALIBRATED')
+        elif not self._pickup_preflight_ready():
+            self._fail('PICKUP_PREFLIGHT_NOT_READY')
         else:
             self.state = 'PICKUP_PLATFORM_APPROACH'
             self.reason = 'pickup_route_phase_armed'
@@ -423,8 +492,8 @@ class TaskPlatformPositioningCore:
         self._reset_runtime()
         if not bool(self.p['place_platform_calibrated']):
             self._fail('PLACE_PLATFORM_NOT_CALIBRATED')
-        elif not self._place_target_configured():
-            self._fail('PLACE_WHITE_BAR_NOT_CALIBRATED')
+        elif not self._place_preflight_ready():
+            self._fail('PLACE_PREFLIGHT_NOT_READY')
         else:
             self.state = 'PLACE_PLATFORM_APPROACH'
             self.reason = 'place_route_phase_armed'
@@ -439,6 +508,11 @@ class TaskPlatformPositioningCore:
         self._active_elapsed = 0.0
         self._last_tick = None
         self._final_command = PlatformCommand()
+        self._final_command_fresh = False
+        self._final_command_sequence = 0
+        self._last_zero_sequence = 0
+        self._mux_status = {}
+        self._mux_status_fresh = False
         self._yaw_target = None
         self._yaw_start = None
         self._turn_started_at = None
@@ -487,7 +561,91 @@ class TaskPlatformPositioningCore:
 
     def _place_target_configured(self) -> bool:
         """显式签名标记避免空 YAML 值被 ROS 参数系统静默转换。"""
-        return bool(self.p['place_white_bar_signature_valid'])
+        return (bool(self.p['place_white_bar_signature_valid'])
+                and self._place_profile_name() is not None)
+
+    @staticmethod
+    def _finite_positive(value) -> bool:
+        """预检只放行有限正数，避免 NaN、零速或负时长进入实体动作。"""
+        number = _finite(value)
+        return number is not None and number > 0.0
+
+    def _all_finite_nonnegative(self, names) -> bool:
+        return all(
+            _finite(self.p[name]) is not None and float(self.p[name]) >= 0.0
+            for name in names)
+
+    def _transfer_preflight_ready(self) -> bool:
+        targets_ok = self._all_finite_nonnegative((
+            'transfer_anchor_min_confidence',
+            'transfer_anchor_heading_tolerance',
+            'transfer_anchor_lateral_tolerance',
+        )) and all(_finite(self.p[name]) is not None for name in (
+            'transfer_anchor_target_heading_error',
+            'transfer_anchor_target_lateral_error',
+        ))
+        if not targets_ok:
+            return False
+        return not bool(self.p['transfer_offset_required']) or (
+            self._finite_positive(self.p['transfer_offset_speed_mps'])
+            and self._finite_positive(self.p['transfer_offset_duration_sec']))
+
+    def _pickup_preflight_ready(self) -> bool:
+        targets_ok = (
+            self._pickup_target_configured()
+            and self._all_finite_nonnegative((
+                'pickup_area_tolerance', 'pickup_bottom_y_tolerance',
+                'pickup_center_x_tolerance', 'pickup_width_tolerance',
+            )) and all(_finite(self.p[name]) is not None for name in (
+                'pickup_target_area_ratio', 'pickup_target_bottom_y_ratio',
+                'pickup_target_center_x_ratio', 'pickup_target_width_ratio',
+            )))
+        yaw_ok = all(self._finite_positive(self.p[name]) for name in (
+            'pickup_turn_speed_radps', 'pickup_yaw_tolerance_deg',
+            'pickup_yaw_timeout_sec',
+        ))
+        timed_ok = True
+        for prefix in ('pickup_view_reverse', 'pickup_side_forward'):
+            if self._motion_required(prefix):
+                timed_ok = timed_ok and bool(
+                    self.p['pickup_timing_calibrated'])
+                timed_ok = timed_ok and self._finite_positive(
+                    self.p[prefix + '_speed_mps'])
+                timed_ok = timed_ok and self._finite_positive(
+                    self.p[prefix + '_duration_sec'])
+        return targets_ok and yaw_ok and timed_ok
+
+    def _place_preflight_ready(self) -> bool:
+        if not self._place_target_configured():
+            return False
+        profile_ok = all(
+            _finite(self._place_profile_value(name)) is not None
+            and float(self._place_profile_value(name)) >= 0.0
+            for name in (
+                'white_bar_y_tolerance', 'white_bar_span_tolerance',
+                'line_max_lateral_error', 'line_max_heading_error',
+            )) and all(
+                _finite(self._place_profile_value(name)) is not None
+                for name in (
+                    'white_bar_target_y_ratio', 'white_bar_target_span_ratio',
+                ))
+        if not profile_ok:
+            return False
+        return not bool(self.p['place_final_offset_enabled']) or (
+            self._finite_positive(self.p['place_final_offset_speed_mps'])
+            and self._finite_positive(
+                self.p['place_final_offset_duration_sec']))
+
+    def _place_profile_name(self):
+        """只允许 place1/place2，防止任务编号缺失时误用另一平台标定。"""
+        return (self.place_platform_id if self.place_platform_id in (
+            'place1', 'place2') else None)
+
+    def _place_profile_value(self, suffix):
+        profile = self._place_profile_name()
+        if profile is None:
+            return float('nan')
+        return self.p[profile + '_' + suffix]
 
     def _run_timed_motion(
             self,
@@ -538,8 +696,8 @@ class TaskPlatformPositioningCore:
         return PlatformCommand(vx=speed)
 
     def _start_turn(self, *, left: bool, now: float) -> None:
-        if self._yaw_current is None:
-            self.reason = 'yaw_unavailable'
+        if not self._sensors_fresh('odom') or self._yaw_current is None:
+            self._fail('PICKUP_ODOM_STALE')
             return
         angle_key = ('pickup_turn_left_angle_deg' if left else
                      'pickup_turn_right_angle_deg')
@@ -551,6 +709,9 @@ class TaskPlatformPositioningCore:
         self.reason = 'pickup_yaw_turn_started'
 
     def _run_yaw_turn(self, now: float) -> None:
+        if not self._sensors_fresh('odom'):
+            self._fail('PICKUP_ODOM_STALE')
+            return
         if (self._turn_started_at is not None
                 and now - self._turn_started_at >= float(
                     self.p['pickup_yaw_timeout_sec'])):
@@ -604,21 +765,73 @@ class TaskPlatformPositioningCore:
         return bool(self.p.get(prefix + '_required', True))
 
     def _final_command_matches(self, prefix: str) -> bool:
-        """只有 mux 最终命令方向与当前短距离动作一致才累计时间。"""
-        epsilon = float(self.p['active_motion_direction_epsilon'])
-        command = self._final_command
-        if prefix == 'pickup_view_reverse':
-            return command.vx < -epsilon
-        if prefix == 'pickup_side_forward':
-            return command.vx > epsilon
-        direction = str(self.p.get(prefix + '_direction', 'forward'))
-        if direction == 'reverse':
-            return command.vx < -epsilon
-        if direction == 'left':
-            return command.vy > epsilon
-        if direction == 'right':
-            return command.vy < -epsilon
-        return command.vx > epsilon
+        """计时必须匹配 mission mux 来源、freshness 与完整三轴速度向量。"""
+        if (not self._final_command_fresh or not self._mux_status_fresh
+                or self._mux_status.get('active_source') != 'mission'):
+            return False
+        expected = self._timed_command(prefix)
+        status_command = PlatformCommand(
+            self._mux_status.get('final_vx'), self._mux_status.get('final_vy'),
+            self._mux_status.get('final_wz'))
+        # final_cmd 与 status 来自独立 topic；两者不一致时不能把旧 mux 状态
+        # 当作本轮实际运动的证据。
+        return (self._command_vector_matches(expected, status_command)
+                and self._command_vector_matches(
+                    expected, self._final_command))
+
+    def _command_vector_matches(self, expected, actual) -> bool:
+        """目标轴须达到标定幅值，其余轴近零，避免斜走/转弯误累计里程。"""
+        values = (actual.vx, actual.vy, actual.wz)
+        if not all(_finite(value) is not None for value in values):
+            return False
+        speed_tolerance = float(self.p['active_motion_speed_tolerance_mps'])
+        orthogonal = float(self.p['active_motion_orthogonal_tolerance'])
+        pairs = ((expected.vx, actual.vx), (expected.vy, actual.vy),
+                 (expected.wz, actual.wz))
+        for wanted, observed in pairs:
+            if abs(float(wanted)) > 0.0:
+                if abs(float(observed) - float(wanted)) > speed_tolerance:
+                    return False
+            elif abs(float(observed)) > orthogonal:
+                return False
+        return True
+
+    def _sensors_fresh(self, *names) -> bool:
+        return all(bool(self._sensor_fresh.get(name, False)) for name in names)
+
+    def _hold_for_stale_sensor(self) -> bool:
+        """状态所需输入过期时清零确认/计时；转向 odom 过期明确故障关闭。"""
+        requirements = {
+            'TRANSFER_ANCHOR_WAIT': ('corner', 'line'),
+            'TRANSFER_FINE_OFFSET': ('corner', 'line'),
+            'TRANSFER_STOP_CONFIRM': ('final_cmd',),
+            'PICKUP_VISUAL_APPROACH': ('board',),
+            'PICKUP_STOP_CONFIRM': ('final_cmd',),
+            'PICKUP_TURN_LEFT': ('odom',),
+            'PICKUP_TURN_RIGHT': ('odom',),
+            'PICKUP_REVERSE_ZERO_CONFIRM': ('final_cmd',),
+            'PICKUP_FORWARD_ZERO_CONFIRM': ('final_cmd',),
+            'PICKUP_SIDE_POSITION_READY': ('final_cmd',),
+            'PLACE_WHITE_BAR_APPROACH': ('white', 'line'),
+            'PLACE_FINAL_OFFSET': ('white', 'line'),
+            'PLACE_STOP_CONFIRM': ('final_cmd',),
+        }
+        required = requirements.get(self.state)
+        if required is None or self._sensors_fresh(*required):
+            return False
+        if self.state.startswith('PICKUP_TURN') and 'odom' in required:
+            self._fail('PICKUP_ODOM_STALE')
+        else:
+            if self.state in ZERO_CONFIRM_STATES:
+                self._reset_zero_confirmation()
+            if self.state == 'TRANSFER_ANCHOR_WAIT':
+                self._counts['transfer'] = 0
+            elif self.state == 'PICKUP_VISUAL_APPROACH':
+                self._counts['pickup_board'] = 0
+            elif self.state == 'PLACE_WHITE_BAR_APPROACH':
+                self._counts['place'] = 0
+            self.reason = self._platform().upper() + '_SENSOR_STALE'
+        return True
 
     @staticmethod
     def _not_calibrated_state(prefix: str) -> str:
@@ -698,9 +911,10 @@ class TaskPlatformPositioningCore:
             }
         if self._platform() == 'place':
             return {
-                'white_bar_y_ratio': self.p['place_white_bar_target_y_ratio'],
-                'white_bar_span_ratio': self.p[
-                    'place_white_bar_target_span_ratio'],
+                'white_bar_y_ratio': self._place_profile_value(
+                    'white_bar_target_y_ratio'),
+                'white_bar_span_ratio': self._place_profile_value(
+                    'white_bar_target_span_ratio'),
                 'line_lateral_error': 0.0,
                 'line_heading_error': 0.0,
             }
@@ -736,6 +950,9 @@ class TaskPlatformPositioningCore:
 DEFAULT_PLATFORM_PARAMETERS = {
     'allow_motion_execution': False,
     'active_motion_direction_epsilon': 0.001,
+    # Mux 反馈须同时匹配标定速度和正交轴近零，才能计入实际运动时间。
+    'active_motion_speed_tolerance_mps': 0.005,
+    'active_motion_orthogonal_tolerance': 0.005,
     'transfer_platform_calibrated': False,
     'transfer_anchor_signature_valid': False,
     'transfer_anchor_confirm_frames': 3,
@@ -795,4 +1012,17 @@ DEFAULT_PLATFORM_PARAMETERS = {
     'place_final_offset_direction': 'forward',
     'place_final_offset_speed_mps': 0.0,
     'place_final_offset_duration_sec': 0.0,
+    # 两个放置台各有独立 profile，初值均不可用，禁止交叉复用 golden 值。
+    'place1_white_bar_target_y_ratio': 0.0,
+    'place1_white_bar_y_tolerance': 0.0,
+    'place1_white_bar_target_span_ratio': 0.0,
+    'place1_white_bar_span_tolerance': 0.0,
+    'place1_line_max_lateral_error': 0.0,
+    'place1_line_max_heading_error': 0.0,
+    'place2_white_bar_target_y_ratio': 0.0,
+    'place2_white_bar_y_tolerance': 0.0,
+    'place2_white_bar_target_span_ratio': 0.0,
+    'place2_white_bar_span_tolerance': 0.0,
+    'place2_line_max_lateral_error': 0.0,
+    'place2_line_max_heading_error': 0.0,
 }

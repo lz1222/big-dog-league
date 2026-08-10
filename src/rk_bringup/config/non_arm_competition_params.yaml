@@ -251,6 +251,7 @@ task_platform_positioning_node:
     white_bar_topic: /perception/white_bar_detection
     pickup_board_topic: /perception/pickup_board_anchor
     final_cmd_topic: /navigation/cmd_vel
+    cmd_mux_status_topic: /control/cmd_mux_status
     odom_topic: /utlidar/robot_odom
     recognition_result_topic: /mission/pickup_recognition_result
     platform_event_topic: /mission/task_platform_event
@@ -259,6 +260,17 @@ task_platform_positioning_node:
     candidate_topic: /control/task_platform_positioning_candidate
     control_rate_hz: 10.0
     active_motion_direction_epsilon: 0.001
+    active_motion_speed_tolerance_mps: 0.005
+    active_motion_orthogonal_tolerance: 0.005
+    # 独立单调时钟时效门；未收到/超时均为 stale，平台状态机保持零输出。
+    platform_route_timeout_sec: 1.0
+    platform_line_timeout_sec: 0.5
+    platform_corner_timeout_sec: 0.5
+    platform_white_bar_timeout_sec: 0.5
+    platform_board_timeout_sec: 0.5
+    platform_odom_timeout_sec: 0.5
+    platform_final_cmd_timeout_sec: 0.5
+    platform_cmd_mux_status_timeout_sec: 0.5
 
     # Transfer platform calibration
     transfer_platform_calibrated: false
@@ -326,6 +338,19 @@ task_platform_positioning_node:
     place_final_offset_direction: forward
     place_final_offset_speed_mps: 0.0
     place_final_offset_duration_sec: 0.0
+    # place1/place2 必须单独标定；0/false 继续表示 CALIBRATION_REQUIRED。
+    place1_white_bar_target_y_ratio: 0.0
+    place1_white_bar_y_tolerance: 0.0
+    place1_white_bar_target_span_ratio: 0.0
+    place1_white_bar_span_tolerance: 0.0
+    place1_line_max_lateral_error: 0.0
+    place1_line_max_heading_error: 0.0
+    place2_white_bar_target_y_ratio: 0.0
+    place2_white_bar_y_tolerance: 0.0
+    place2_white_bar_target_span_ratio: 0.0
+    place2_white_bar_span_tolerance: 0.0
+    place2_line_max_lateral_error: 0.0
+    place2_line_max_heading_error: 0.0
 
 pickup_board_anchor_detector:
   ros__parameters:

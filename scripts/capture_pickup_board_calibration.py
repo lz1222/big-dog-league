@@ -9,6 +9,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rk_interfaces.msg import SpecialTargetDetection
+from rk_mission.platform_calibration_contract import pickup_capture_result
 
 
 def _summary(values):
@@ -70,9 +71,13 @@ def main():
             rclpy.spin_once(
                 node, timeout_sec=min(
                     0.2, deadline - time.monotonic()))
+        capture_valid, reason = pickup_capture_result(node.samples)
         payload = {
             'schema': 'pickup_board_golden_signature/v1',
             'calibration_required': True,
+            # 默认 detector 使用不可检测阈值；无正样本必须明确报告而非伪造标定。
+            'capture_valid': capture_valid,
+            'reason': reason,
             'source_topic': args.topic,
             'duration_sec': args.duration_sec,
             'metrics': {

@@ -18,6 +18,7 @@ def _transfer_params(**overrides):
         'transfer_anchor_confirm_frames': 2,
         'transfer_anchor_heading_tolerance': 0.1,
         'transfer_anchor_lateral_tolerance': 0.1,
+        'transfer_offset_required': False,
     }
     params.update(overrides)
     return params
@@ -40,6 +41,12 @@ def _pickup_params(**overrides):
         'pickup_zero_epsilon': 0.001,
         'pickup_yaw_tolerance_deg': 1.0,
         'pickup_yaw_timeout_sec': 2.0,
+        'pickup_turn_speed_radps': 0.5,
+        'pickup_timing_calibrated': True,
+        'pickup_view_reverse_speed_mps': 0.10,
+        'pickup_view_reverse_duration_sec': 1.0,
+        'pickup_side_forward_speed_mps': 0.10,
+        'pickup_side_forward_duration_sec': 1.0,
     }
     params.update(overrides)
     return params
@@ -57,6 +64,12 @@ def _place_params(**overrides):
         'place_white_bar_span_tolerance': 0.02,
         'place_line_max_lateral_error': 0.10,
         'place_line_max_heading_error': 0.10,
+        'place1_white_bar_target_y_ratio': 0.80,
+        'place1_white_bar_y_tolerance': 0.02,
+        'place1_white_bar_target_span_ratio': 0.60,
+        'place1_white_bar_span_tolerance': 0.02,
+        'place1_line_max_lateral_error': 0.10,
+        'place1_line_max_heading_error': 0.10,
     }
     params.update(overrides)
     return params
@@ -73,6 +86,21 @@ def _bar():
 def _enter_pickup(core):
     core.set_route_phase('PICKUP_PLATFORM_APPROACH')
     core.tick(0.0)
+
+
+def _enter_place(core):
+    core.set_place_platform_id('place1')
+    core.set_route_phase('PLACE_PLATFORM_APPROACH')
+    core.tick(0.0)
+
+
+def _observe_mux(core, command, source='mission', fresh=True):
+    core.observe_cmd_mux_status({
+        'active_source': source,
+        'final_vx': command.vx,
+        'final_vy': command.vy,
+        'final_wz': command.wz,
+    }, fresh=fresh)
 
 
 def _lock_pickup(core):
@@ -123,7 +151,8 @@ def test_transfer_requires_route_and_valid_anchor():
 
 
 def test_transfer_offset_flag_distinguishes_disabled_and_uncalibrated():
-    core = TaskPlatformPositioningCore(_transfer_params())
+    core = TaskPlatformPositioningCore(_transfer_params(
+        transfer_offset_required=True))
     core.set_route_phase('TRANSFER_PLATFORM_APPROACH')
     core.tick(0.0)
     for _ in range(2):
@@ -131,7 +160,7 @@ def test_transfer_offset_flag_distinguishes_disabled_and_uncalibrated():
             detected=True, confidence=1.0,
             heading_error=0.0, lateral_error=0.0)
     assert core.tick(0.1) == PlatformCommand()
-    assert core.state == 'TRANSFER_OFFSET_NOT_CALIBRATED'
+    assert core.state == 'TRANSFER_PREFLIGHT_NOT_READY'
 
     core = TaskPlatformPositioningCore(_transfer_params(
         transfer_offset_required=False))
@@ -167,6 +196,7 @@ def test_transfer_offset_counts_only_matching_final_command():
     core.tick(0.2)
     assert core.snapshot()['active_motion_elapsed_sec'] == 0.0
     core.observe_final_command(PlatformCommand(vx=0.10))
+    _observe_mux(core, PlatformCommand(vx=0.10))
     core.tick(0.71)
     assert core.state == 'TRANSFER_STOP_CONFIRM'
 
@@ -235,25 +265,24 @@ def test_pickup_reverse_uses_final_active_motion_time_and_freezes_on_zero():
     core.observe_odom_yaw(math.pi / 2.0)
     core.tick(0.4)
     core.observe_final_command(PlatformCommand(vx=-0.10))
+    _observe_mux(core, PlatformCommand(vx=-0.10))
     core.tick(0.9)
     assert core.snapshot()['active_motion_elapsed_sec'] == pytest.approx(0.5)
     core.observe_final_command(PlatformCommand())
     core.tick(1.41)
     assert core.snapshot()['active_motion_elapsed_sec'] == pytest.approx(0.5)
     core.observe_final_command(PlatformCommand(vx=-0.10))
+    _observe_mux(core, PlatformCommand(vx=-0.10))
     core.tick(1.92)
     assert core.state == 'PICKUP_REVERSE_ZERO_CONFIRM'
 
 
 def test_pickup_timing_and_recognition_fail_closed():
-    core = TaskPlatformPositioningCore(_pickup_params())
+    core = TaskPlatformPositioningCore(_pickup_params(
+        pickup_timing_calibrated=False))
     _enter_pickup(core)
-    _start_left_turn(core)
-    core.observe_odom_yaw(math.pi / 2.0)
-    core.tick(0.4)
-    core.tick(0.5)
-    assert core.state == 'PICKUP_REVERSE_NOT_CALIBRATED'
-    assert core.tick(0.6) == PlatformCommand()
+    assert core.state == 'PICKUP_PREFLIGHT_NOT_READY'
+    assert core.tick(0.1) == PlatformCommand()
 
     core = TaskPlatformPositioningCore(_pickup_params(
         pickup_view_reverse_required=False))
@@ -293,6 +322,7 @@ def test_pickup_forward_right_turn_and_arm_handoff_sequence():
     core.tick(0.9)
     assert core.snapshot()['active_motion_elapsed_sec'] == 0.0
     core.observe_final_command(PlatformCommand(vx=0.10))
+    _observe_mux(core, PlatformCommand(vx=0.10))
     core.tick(1.41)
     assert core.state == 'PICKUP_FORWARD_ZERO_CONFIRM'
     _confirm_zero(core)
@@ -313,8 +343,7 @@ def test_place_requires_white_and_line_gates_for_consecutive_frames():
     core.observe_place_white_bar(
         _bar(), line_lateral_error=0.0, line_heading_error=0.0)
     assert core.state == 'IDLE'
-    core.set_route_phase('PLACE_PLATFORM_APPROACH')
-    core.tick(0.0)
+    _enter_place(core)
     core.observe_place_white_bar(
         _bar(), line_lateral_error=0.5, line_heading_error=0.0)
     core.observe_place_white_bar(
@@ -335,8 +364,7 @@ def test_place_requires_white_and_line_gates_for_consecutive_frames():
 
 def test_place_done_still_requires_explicit_finish_rearm():
     core = TaskPlatformPositioningCore(_place_params())
-    core.set_route_phase('PLACE_PLATFORM_APPROACH')
-    core.tick(0.0)
+    _enter_place(core)
     for _ in range(2):
         core.observe_place_white_bar(
             _bar(), line_lateral_error=0.0, line_heading_error=0.0)
@@ -356,8 +384,7 @@ def test_place_optional_offset_uses_active_motion_time():
         place_final_offset_speed_mps=0.05,
         place_final_offset_duration_sec=0.5,
     ))
-    core.set_route_phase('PLACE_PLATFORM_APPROACH')
-    core.tick(0.0)
+    _enter_place(core)
     for _ in range(2):
         core.observe_place_white_bar(
             _bar(), line_lateral_error=0.0, line_heading_error=0.0)
@@ -366,6 +393,7 @@ def test_place_optional_offset_uses_active_motion_time():
     core.tick(0.2)
     assert core.snapshot()['active_motion_elapsed_sec'] == 0.0
     core.observe_final_command(PlatformCommand(vx=0.05))
+    _observe_mux(core, PlatformCommand(vx=0.05))
     core.tick(0.71)
     assert core.state == 'PLACE_STOP_CONFIRM'
 

@@ -9,6 +9,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rk_interfaces.msg import LineTrack, SpecialTargetDetection
+from rk_mission.platform_calibration_contract import place_capture_result
 
 from capture_pickup_board_calibration import _summary
 
@@ -74,10 +75,14 @@ def main():
             rclpy.spin_once(
                 node, timeout_sec=min(
                     0.2, deadline - time.monotonic()))
+        capture_valid, reason = place_capture_result(node.samples)
         payload = {
             'schema': 'place_white_bar_golden_signature/v1',
             'platform': args.platform,
             'calibration_required': True,
+            # 放置锁定同时依赖白横线和 LineTrack，任一缺样本都不可作为标定证据。
+            'capture_valid': capture_valid,
+            'reason': reason,
             'duration_sec': args.duration_sec,
             'metrics': {
                 key: _summary(values) for key,
