@@ -36,6 +36,8 @@ def _pickup_params(**overrides):
         'pickup_center_x_tolerance': 0.02,
         'pickup_target_width_ratio': 0.40,
         'pickup_width_tolerance': 0.02,
+        'pickup_target_top_y_ratio': 0.60,
+        'pickup_top_y_tolerance': 0.02,
         'pickup_position_confirm_frames': 2,
         'pickup_zero_confirm_samples': 2,
         'pickup_zero_epsilon': 0.001,

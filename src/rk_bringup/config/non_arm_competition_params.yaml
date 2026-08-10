@@ -290,12 +290,15 @@ task_platform_positioning_node:
 
     # Pickup board visual docking
     pickup_platform_calibrated: false
-    pickup_board_signature_valid: false
+    # 已完成弧顶视觉签名；yaw、倒车和侧向时序仍未实体标定。
+    pickup_board_signature_valid: true
     pickup_board_confirm_frames: 3
     pickup_position_confirm_frames: 3
     pickup_zero_confirm_samples: 3
     pickup_zero_epsilon: 0.001
-    pickup_target_area_ratio: 0.0  # CALIBRATION_REQUIRED; signature flag is false.
+    # 旧的 area/bottom/center_x/width 参数仅保留协议兼容和 telemetry，
+    # 不参与 V1.2 停车硬门，因为现场证实它们受 ROI/图像边界裁切。
+    pickup_target_area_ratio: 0.0
     pickup_area_tolerance: 0.0
     pickup_target_bottom_y_ratio: 0.0
     pickup_bottom_y_tolerance: 0.0
@@ -304,6 +307,9 @@ task_platform_positioning_node:
     pickup_target_width_ratio: 0.0
     pickup_width_tolerance: 0.0
     pickup_visual_approach_speed_mps: 0.0
+    # 连续圆弧弧顶的已验证视觉锚点：top_y=center_y-height/2。
+    pickup_target_top_y_ratio: 0.338
+    pickup_top_y_tolerance: 0.012
     pickup_visual_slow_trigger_ratio: 0.0
     pickup_turn_left_angle_deg: 90.0
     pickup_turn_right_angle_deg: 90.0
@@ -359,22 +365,22 @@ pickup_board_anchor_detector:
     metrics_topic: /perception/pickup_board_anchor_metrics
     route_state_topic: /mission/line_course_state
     calibration_mode: false
-    pickup_board_roi_left_fraction: 0.0
-    pickup_board_roi_right_fraction: 1.0
-    pickup_board_roi_top_fraction: 0.0
-    pickup_board_roi_bottom_fraction: 1.0
-    # Detector scaffold: disabled by impossible area interval until image calibration.
-    pickup_board_threshold: 0
+    # 现场标定：抓取平台前挡板为低饱和浅灰区域，范围仅适用于当前前置相机。
+    pickup_board_roi_left_fraction: 0.30
+    pickup_board_roi_right_fraction: 1.00
+    pickup_board_roi_top_fraction: 0.28
+    pickup_board_roi_bottom_fraction: 1.00
+    pickup_board_threshold: 190
     pickup_board_hsv_h_min: 0
     pickup_board_hsv_h_max: 180
     pickup_board_hsv_s_min: 0
-    pickup_board_hsv_s_max: 255
-    pickup_board_hsv_v_min: 0
-    pickup_board_hsv_v_max: 255
-    pickup_board_min_area_ratio: 1.0
-    pickup_board_max_area_ratio: 0.0
-    pickup_board_min_aspect_ratio: 1.0
-    pickup_board_max_aspect_ratio: 0.0
+    pickup_board_hsv_s_max: 20
+    pickup_board_hsv_v_min: 140
+    pickup_board_hsv_v_max: 185
+    pickup_board_min_area_ratio: 0.38
+    pickup_board_max_area_ratio: 0.55
+    pickup_board_min_aspect_ratio: 1.60
+    pickup_board_max_aspect_ratio: 2.20
     pickup_board_confirm_frames: 3
 
 white_bar_action_executor:

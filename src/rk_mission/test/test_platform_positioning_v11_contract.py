@@ -21,6 +21,7 @@ def _pickup_params(**overrides):
         'pickup_target_bottom_y_ratio': .8, 'pickup_bottom_y_tolerance': .02,
         'pickup_target_center_x_ratio': .5, 'pickup_center_x_tolerance': .02,
         'pickup_target_width_ratio': .4, 'pickup_width_tolerance': .02,
+        'pickup_target_top_y_ratio': .6, 'pickup_top_y_tolerance': .02,
         'pickup_turn_speed_radps': .4, 'pickup_yaw_tolerance_deg': 1.0,
         'pickup_yaw_timeout_sec': 2.0, 'pickup_view_reverse_required': False,
         'pickup_side_forward_required': False,

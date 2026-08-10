@@ -36,7 +36,7 @@ class PickupBoardCapture(Node):
         super().__init__('capture_pickup_board_calibration')
         self.samples = {name: [] for name in (
             'area_ratio', 'center_x_ratio', 'center_y_ratio', 'bottom_y_ratio',
-            'width_ratio', 'height_ratio')}
+            'width_ratio', 'height_ratio', 'top_y_ratio')}
         self.create_subscription(
             SpecialTargetDetection, topic, self._on_board, 10)
 
@@ -50,6 +50,9 @@ class PickupBoardCapture(Node):
             message.center_y + message.height_ratio / 2.0)
         self.samples['width_ratio'].append(message.width_ratio)
         self.samples['height_ratio'].append(message.height_ratio)
+        # 顶边不受本轮 bottom/image 边界饱和的直接影响，供弧顶现场复核。
+        self.samples['top_y_ratio'].append(
+            message.center_y - message.height_ratio / 2.0)
 
 
 def main():

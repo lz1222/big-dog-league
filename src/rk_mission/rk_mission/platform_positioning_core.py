@@ -527,33 +527,28 @@ class TaskPlatformPositioningCore:
         self._last_place_line = {}
 
     def _pickup_target_matches(self, o: BoardObservation) -> bool:
-        pairs = (
-            ('area_ratio',
-             'pickup_target_area_ratio',
-             'pickup_area_tolerance'),
-            ('bottom_y_ratio',
-             'pickup_target_bottom_y_ratio',
-             'pickup_bottom_y_tolerance'),
-            ('center_x_ratio',
-             'pickup_target_center_x_ratio',
-             'pickup_center_x_tolerance'),
-            ('width_ratio',
-             'pickup_target_width_ratio',
-             'pickup_width_tolerance'))
-        return all(
-            _finite(
-                getattr(
-                    o,
-                    key)) is not None and abs(
-                float(
-                    getattr(
-                        o,
-                        key)) -
-                float(
-                    self.p[target])) <= float(
-                self.p[tolerance]) for key,
-            target,
-            tolerance in pairs)
+        """按现场弧顶签名确认挡板，拒绝受图像边界裁切的旧特征。"""
+        # bottom/width/center_x 在弧顶附近会被 ROI 或图像边缘裁切，不能作为
+        # 停车位置的硬门；顶边由已有消息字段安全派生，不扩展 ROS 协议。
+        top_y_ratio = self._pickup_top_y_ratio(o)
+        target = _finite(self.p['pickup_target_top_y_ratio'])
+        tolerance = _finite(self.p['pickup_top_y_tolerance'])
+        return (
+            bool(o.detected)
+            and top_y_ratio is not None
+            and target is not None
+            and tolerance is not None
+            and tolerance > 0.0
+            and abs(top_y_ratio - target) <= tolerance)
+
+    @staticmethod
+    def _pickup_top_y_ratio(observation: BoardObservation) -> Optional[float]:
+        """从 bbox 中派生顶边比例，异常输入必须拒绝而非触发位置锁定。"""
+        center_y = _finite(observation.center_y_ratio)
+        height = _finite(observation.height_ratio)
+        if center_y is None or height is None:
+            return None
+        return center_y - height / 2.0
 
     def _pickup_target_configured(self) -> bool:
         """显式签名标记避免把数值 0 错当成已完成的现场标定。"""
@@ -593,13 +588,8 @@ class TaskPlatformPositioningCore:
     def _pickup_preflight_ready(self) -> bool:
         targets_ok = (
             self._pickup_target_configured()
-            and self._all_finite_nonnegative((
-                'pickup_area_tolerance', 'pickup_bottom_y_tolerance',
-                'pickup_center_x_tolerance', 'pickup_width_tolerance',
-            )) and all(_finite(self.p[name]) is not None for name in (
-                'pickup_target_area_ratio', 'pickup_target_bottom_y_ratio',
-                'pickup_target_center_x_ratio', 'pickup_target_width_ratio',
-            )))
+            and _finite(self.p['pickup_target_top_y_ratio']) is not None
+            and self._finite_positive(self.p['pickup_top_y_tolerance']))
         yaw_ok = all(self._finite_positive(self.p[name]) for name in (
             'pickup_turn_speed_radps', 'pickup_yaw_tolerance_deg',
             'pickup_yaw_timeout_sec',
@@ -904,10 +894,7 @@ class TaskPlatformPositioningCore:
             }
         if self._platform() == 'pickup':
             return {
-                'area_ratio': self.p['pickup_target_area_ratio'],
-                'bottom_y_ratio': self.p['pickup_target_bottom_y_ratio'],
-                'center_x_ratio': self.p['pickup_target_center_x_ratio'],
-                'width_ratio': self.p['pickup_target_width_ratio'],
+                'top_y_ratio': self.p['pickup_target_top_y_ratio'],
             }
         if self._platform() == 'place':
             return {
@@ -924,7 +911,11 @@ class TaskPlatformPositioningCore:
         if self._platform() == 'transfer':
             return dict(self._last_transfer)
         if self._platform() == 'pickup':
-            return dict(self._last_board.__dict__)
+            values = dict(self._last_board.__dict__)
+            # 状态 telemetry 同步暴露实际硬门，便于现场核对 top_y 误差。
+            values['top_y_ratio'] = self._pickup_top_y_ratio(
+                self._last_board)
+            return values
         if self._platform() == 'place':
             values = dict(self._last_white.__dict__)
             values.update(self._last_place_line)
@@ -982,6 +973,9 @@ DEFAULT_PLATFORM_PARAMETERS = {
     'pickup_center_x_tolerance': 0.0,
     'pickup_target_width_ratio': 0.0,
     'pickup_width_tolerance': 0.0,
+    # V1.2 弧顶视觉签名；默认不可用，避免未标定时误锁定位置。
+    'pickup_target_top_y_ratio': 0.0,
+    'pickup_top_y_tolerance': 0.0,
     'pickup_visual_approach_speed_mps': 0.0,
     'pickup_visual_slow_trigger_ratio': 0.0,
     'pickup_turn_left_angle_deg': 90.0,
