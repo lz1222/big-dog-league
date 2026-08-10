@@ -131,6 +131,8 @@ install(PROGRAMS
   scripts/go2_control_plane_gate.py
   scripts/go2_control_plane_measure.py
   scripts/stair_camera_gait_gate.py
+  scripts/global_gait_owner.py
+  scripts/global_gait_owner_core.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -189,7 +191,6 @@ if(unitree_sdk2_FOUND)
   add_executable(go2_sdk_motion_action
     src/go2_sdk_motion_action.cpp
   )
-  rk_configure_unitree_sdk_target(go2_sdk_motion_action)
   add_executable(go2_sdk_velocity_action
     src/go2_sdk_velocity_action.cpp
   )
@@ -287,6 +288,11 @@ if(unitree_sdk2_FOUND)
     src/go2_sdk_competition_gait_manager.cpp
   )
   rk_configure_unitree_sdk_target(go2_sdk_competition_gait_manager)
+  # 架空实体全局步态闭环矩阵；默认 dry-run，显式授权后仍受足端载荷门禁。
+  add_executable(go2_sdk_gait_matrix
+    src/go2_sdk_gait_matrix.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_gait_matrix)
   add_executable(fake_sdk_motion_helper
     src/fake_sdk_motion_helper.cpp
   )
@@ -316,6 +322,7 @@ if(unitree_sdk2_FOUND)
     go2_motion_control_prearm
     go2_sdk_select_normal_mode_once
     go2_sdk_competition_gait_manager
+    go2_sdk_gait_matrix
     go2_front_camera_stream_helper
     fake_sdk_motion_helper
     DESTINATION lib/${PROJECT_NAME}

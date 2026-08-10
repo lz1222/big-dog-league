@@ -1,4 +1,4 @@
-"""正式人工经典确认合同的无硬件回归测试。"""
+"""正式全局经典步态 owner 合同的无硬件回归测试。"""
 
 import sys
 from pathlib import Path
@@ -19,25 +19,34 @@ def _status(event, sequence=1, ret=0):
 
 
 def test_classic_verified_status_event_is_protocol_valid():
-    """readiness 必须观测当前实例的人工经典签名验证结果。"""
+    """readiness 必须观测当前实例的经典步态 command ACK。"""
     decoded = decode_status_datagram(_status('CLASSIC_VERIFIED', 2).encode())
     assert decoded['event'] == 'CLASSIC_VERIFIED'
     assert decoded['ret'] == 0
 
 
-def test_manual_classic_confirmation_precedes_udp_bind_and_fails_closed():
-    """缺少人工确认时，不得绑定 UDP Move socket。"""
+def test_single_owner_action_status_events_are_protocol_valid():
+    """动作代理的事件必须能穿过 forwarder，供现场审计单写者执行结果。"""
+    for event in ('ACTION_REQUESTED', 'ACTION_READY', 'ACTION_FAILED'):
+        decoded = decode_status_datagram(_status(event, 3).encode())
+        assert decoded is not None
+        assert decoded['event'] == event
+
+
+def test_startup_classic_ack_precedes_udp_bind_and_fails_closed():
+    """SDK 经典步态序列成功前，不得绑定 UDP Move socket。"""
     source = (PACKAGE_ROOT / 'src' / 'go2_sdk_udp_server.cpp').read_text(
         encoding='utf-8'
     )
-    classic = source.index('config.manual_classic_confirmed')
     startup = source.index('SendStartupStopWithRetry(client, status)')
+    classic = source.index('ApplyGaitRequest(', startup)
     udp_bind = source.index('CreateUdpSocket(config)')
-    assert classic < startup < udp_bind
-    assert 'MANUAL_CLASSIC_CONFIRMATION_REQUIRED' in source
-    assert 'manual_classic_confirmation_missing' in source
-    assert 'client.ClassicWalk(' not in source
-    assert '--manual-classic-confirmed' in source
+    assert startup < classic < udp_bind
+    assert 'client.ClassicWalk(true)' in source
+    assert 'client.FreeWalk()' in source
+    assert 'verification_source=command_ack' in source
+    assert 'SelectMode(' not in source
+    assert 'ReleaseMode(' not in source
     assert 'error_code() ==' not in source
 
 
@@ -46,15 +55,38 @@ def test_move_loop_does_not_contain_gait_entry_calls():
     source = (PACKAGE_ROOT / 'src' / 'go2_sdk_udp_server.cpp').read_text(
         encoding='utf-8'
     )
-    execute_decision = source.split('void ExecuteDecision(', 1)[1].split(
+    execute_decision = source.rsplit('void ExecuteDecision(', 1)[1].split(
         'int CreateUdpSocket', 1
     )[0]
     assert 'ClassicWalk' not in execute_decision
     assert 'wirelesscontroller' not in execute_decision
 
 
-def test_formal_start_records_current_instance_manual_classic_confirmation():
-    """启动脚本在 UDP socket/ROS 图之前记录人工经典确认。"""
+def test_motion_helper_delegates_all_sdk_writes_to_server():
+    """正式 helper 只能收发有 request_id 的 UDP ACK，不能创建 SDK client。"""
+    helper = (PACKAGE_ROOT / 'src' / 'go2_sdk_motion_action.cpp').read_text(
+        encoding='utf-8'
+    )
+    for forbidden in (
+        '#include <unitree/', 'ClassicWalk(', 'FreeWalk(', 'FrontJump()',
+        'StandUp()', 'StopMove()',
+    ):
+        assert forbidden not in helper
+    assert 'GAIT_ACK ' in helper
+    assert 'ACTION_ACK ' in helper
+    assert 'RK_GO2_SDK_UDP_HOST' in helper
+    assert 'RK_GO2_SDK_UDP_PORT' in helper
+
+    server = (PACKAGE_ROOT / 'src' / 'go2_sdk_udp_server.cpp').read_text(
+        encoding='utf-8'
+    )
+    assert 'ParseActionRequest' in server
+    assert 'ApplyActionRequest' in server
+    assert 'ACTION_ACK' in server
+
+
+def test_formal_start_waits_for_current_instance_classic_ack():
+    """启动脚本在 ROS 图之前等待 server 的经典步态 ACK。"""
     start_source = (
         PACKAGE_ROOT.parent / 'rk_bringup' / 'scripts' /
         'start_non_arm_competition.sh'
@@ -63,6 +95,13 @@ def test_formal_start_records_current_instance_manual_classic_confirmation():
     startup_ack = start_source.index('--event STARTUP_STOP')
     listener = start_source.index('wait_for_udp_listener_count', startup_ack)
     assert classic_ack < startup_ack < listener
-    assert '--manual-classic-confirmed "$MANUAL_CLASSIC_CONFIRMED"' in (
-        start_source
-    )
+    assert 'global_gait_owner.py' in (
+        PACKAGE_ROOT.parent / 'rk_bringup' / 'launch' /
+        'competition_non_arm.launch.py'
+    ).read_text(encoding='utf-8')
+    launch_source = (
+        PACKAGE_ROOT.parent / 'rk_bringup' / 'launch' /
+        'competition_non_arm.launch.py'
+    ).read_text(encoding='utf-8')
+    assert launch_source.count("'RK_GO2_SDK_UDP_HOST': sdk_udp_host") == 2
+    assert launch_source.count("'RK_GO2_SDK_UDP_PORT': sdk_udp_port") == 2

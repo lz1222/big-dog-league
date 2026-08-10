@@ -35,6 +35,7 @@ REQUIRED_FORMAL_NODES = (
     'line_course_mission_node',
     'white_bar_stage_command_publisher',
     'white_bar_action_executor',
+    'global_gait_owner.py',
     'gait_control_node',
     'inspection_action_executor',
     'command_mux_node',

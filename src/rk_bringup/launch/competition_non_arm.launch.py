@@ -509,10 +509,34 @@ def generate_launch_description():
         ),
         # 真实 Action server 保持唯一；smoke 只替换其 helper，不替换 server。
         Node(
+            package='rk_go2_sdk_bridge',
+            executable='global_gait_owner.py',
+            name='global_gait_owner',
+            output='log',
+            parameters=[{
+                'udp_host': sdk_udp_host,
+                'udp_port': ParameterValue(sdk_udp_port, value_type=int),
+                'final_cmd_topic': '/navigation/cmd_vel',
+                'sdk_status_topic': '/go2/sdk_motion_status',
+                'status_topic': '/gait/mode_status',
+                'lock_request_topic': (
+                    '/gait/control_lock_req/global_gait_owner'
+                ),
+                'software_smoke_mode': ParameterValue(
+                    software_smoke_mode, value_type=bool
+                ),
+            }],
+        ),
+        Node(
             package='rk_locomotion',
             executable='gait_control_node',
             name='gait_control_node',
             output='log',
+            # helper 不再持有 SDK；显式继承与唯一 server 完全相同的 UDP 端点。
+            additional_env={
+                'RK_GO2_SDK_UDP_HOST': sdk_udp_host,
+                'RK_GO2_SDK_UDP_PORT': sdk_udp_port,
+            },
             parameters=[gait_config, formal_config, {
                 'cmd_vel_topic': '/control/locomotion_cmd',
                 'motion_action_name': '/locomotion/execute_motion',
@@ -547,6 +571,10 @@ def generate_launch_description():
             executable='inspection_action_executor',
             name='inspection_action_executor',
             output='log',
+            additional_env={
+                'RK_GO2_SDK_UDP_HOST': sdk_udp_host,
+                'RK_GO2_SDK_UDP_PORT': sdk_udp_port,
+            },
             condition=IfCondition(start_mission_nodes),
             parameters=[formal_config, {
                 'sdk_network_interface': ParameterValue(
@@ -590,6 +618,7 @@ def generate_launch_description():
                 'input_topics': [
                     '/gait/control_lock_req/gait',
                     '/gait/control_lock_req/inspection',
+                    '/gait/control_lock_req/global_gait_owner',
                 ],
                 'output_topic': '/gait/control_lock',
                 'source_timeout_sec': 2.0,

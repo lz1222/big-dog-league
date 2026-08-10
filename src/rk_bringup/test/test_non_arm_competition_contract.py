@@ -1013,7 +1013,7 @@ def test_gid_gate_no_publishers_fail():
     assert 'raw_count=0' in detail, detail
 
 
-def test_sdk_hardware_ready_keeps_current_manual_classic_ack_during_idle():
+def test_sdk_hardware_ready_keeps_current_classic_ack_during_idle():
     from rk_bringup.competition_readiness_node import (
         CompetitionReadinessNode,
     )
@@ -1032,7 +1032,7 @@ def test_sdk_hardware_ready_keeps_current_manual_classic_ack_during_idle():
     }
     classic_verified_status = {
         **startup_status,
-        'sequence': 1,
+        'sequence': 3,
         'event': 'CLASSIC_VERIFIED',
     }
     ok, detail = node._sdk_status_ready(
@@ -1066,7 +1066,7 @@ def test_sdk_hardware_ready_rejects_nonstartup_or_current_instance_error():
     startup_status['ret'] = 0
     classic_verified_status = {
         **startup_status,
-        'sequence': 2,
+        'sequence': 4,
         'event': 'CLASSIC_VERIFIED',
     }
     node._sdk_error_status = {
@@ -1080,7 +1080,7 @@ def test_sdk_hardware_ready_rejects_nonstartup_or_current_instance_error():
 
 
 def test_sdk_hardware_ready_rejects_old_instance_classic_verified():
-    """旧 server 的人工经典签名不能为新 server 放行。"""
+    """旧 server 的经典步态 ACK 不能为新 server 放行。"""
     from rk_bringup.competition_readiness_node import (
         CompetitionReadinessNode,
     )
@@ -1103,6 +1103,32 @@ def test_sdk_hardware_ready_rejects_old_instance_classic_verified():
     assert node._sdk_status_ready(
         startup_status, old_classic_verified_status,
     )[0] is False
+
+
+def test_global_gait_owner_readiness_requires_classic_command_ack():
+    """生产必须是经典步态 ACK 且已释放锁；smoke 来源不得混入硬件。"""
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    payload = {
+        'state': 'CLASSIC_READY',
+        'target': 'CLASSIC',
+        'verification_source': 'command_ack',
+        'movement_lock_held': False,
+    }
+    assert CompetitionReadinessNode._global_gait_mode_ready(payload, False)
+    assert not CompetitionReadinessNode._global_gait_mode_ready(payload, True)
+    for key, bad_value in (
+        ('state', 'FREE_READY'),
+        ('target', 'FREE'),
+        ('verification_source', 'software_smoke'),
+        ('movement_lock_held', True),
+    ):
+        rejected = dict(payload)
+        rejected[key] = bad_value
+        assert not CompetitionReadinessNode._global_gait_mode_ready(
+            rejected, False
+        )
 
 
 def test_validation_start_override_is_scoped_to_follower_only():

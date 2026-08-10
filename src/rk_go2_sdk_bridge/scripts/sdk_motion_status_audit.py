@@ -39,7 +39,7 @@ class StatusAuditNode(Node):
 
 
 def summarize(statuses, expected_server_instance_id):
-    """验证人工经典签名、启动停车、零命令停车及 MOVE=0 的闭环合同。"""
+    """验证启动停车、随后经典 ACK、零命令停车及无 MOVE 的闭环合同。"""
     startup = [
         status for status in statuses
         if status['event'] == 'STARTUP_STOP' and status['ret'] == 0
@@ -68,7 +68,7 @@ def summarize(statuses, expected_server_instance_id):
         bool(startup)
         and bool(classic_verified)
         and bool(stop)
-        and classic_verified_sequence < startup_sequence < zero_sequence
+        and startup_sequence < classic_verified_sequence < zero_sequence
         and not move
         and not errors
         and monotonic

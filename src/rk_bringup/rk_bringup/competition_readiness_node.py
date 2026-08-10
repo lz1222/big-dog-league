@@ -64,8 +64,8 @@ class CompetitionReadinessNode(Node):
         self._last_messages = {}
         self._last_payload = {}
         # SDK status 是调用完成后的事件流而非心跳。当前实例必须先完成
-        # CLASSIC_VERIFIED 与 STARTUP_STOP；同实例 SDK_ERROR 永久撤销资格。
-        # 前者是遥控器人工入口的已采样签名，不是未实现的 2049 RPC ACK。
+        # STARTUP_STOP，再由唯一 server 完成 CLASSIC_VERIFIED；同实例
+        # SDK_ERROR 永久撤销资格。
         self._sdk_startup_status = None
         self._sdk_classic_verified_status = None
         self._sdk_error_status = None
@@ -124,6 +124,16 @@ class CompetitionReadinessNode(Node):
         )
         self.create_subscription(
             String, self.gait_status_topic, self._on_gait_status, 10
+        )
+        gait_mode_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(
+            String, self.gait_mode_status_topic,
+            self._on_gait_mode_status, gait_mode_qos,
         )
         self.create_subscription(
             Bool, self.gait_control_lock_topic,
@@ -205,6 +215,7 @@ class CompetitionReadinessNode(Node):
             ),
             'sign_detections_topic': '/perception/sign_detections',
             'gait_status_topic': '/gait/status',
+            'gait_mode_status_topic': '/gait/mode_status',
             'gait_control_lock_topic': '/gait/control_lock',
             'gait_control_lock_status_topic': '/gait/control_lock/status',
             'estop_state_topic': '/safety/estop_state',
@@ -259,6 +270,7 @@ class CompetitionReadinessNode(Node):
             'inspection_action_status_topic',
             'sign_detections_topic',
             'gait_status_topic',
+            'gait_mode_status_topic',
             'gait_control_lock_topic',
             'gait_control_lock_status_topic',
             'estop_state_topic',
@@ -338,6 +350,10 @@ class CompetitionReadinessNode(Node):
 
     def _on_gait_status(self, msg):
         self._remember('gait_status', str(msg.data).strip())
+
+    def _on_gait_mode_status(self, msg):
+        """记录全局 owner 的权威状态；JSON 非对象会在 readiness 中拒绝。"""
+        self._remember('gait_mode_status', json_object(msg.data))
 
     def _on_gait_control_lock(self, msg):
         """记录仲裁后的真实锁值，避免只检查 publisher 存在便放行。"""
@@ -633,6 +649,16 @@ class CompetitionReadinessNode(Node):
         ):
             return False
         inspection = sources.get('/gait/control_lock_req/inspection', {})
+        global_owner = sources.get(
+            '/gait/control_lock_req/global_gait_owner', {}
+        )
+        if not (
+            global_owner.get('required') is True
+            and global_owner.get('seen') is True
+            and global_owner.get('fresh') is True
+            and global_owner.get('value') is False
+        ):
+            return False
         if self._isolated_line_validation:
             return (
                 inspection.get('required') is False
@@ -644,6 +670,20 @@ class CompetitionReadinessNode(Node):
             and inspection.get('seen') is True
             and inspection.get('fresh') is True
             and inspection.get('value') is False
+        )
+
+    @staticmethod
+    def _global_gait_mode_ready(payload, software_smoke_mode):
+        """只接受经典就绪且已释放 movement lock 的权威 owner 状态。"""
+        expected_source = (
+            'software_smoke' if software_smoke_mode else 'command_ack'
+        )
+        return (
+            isinstance(payload, dict)
+            and payload.get('state') == 'CLASSIC_READY'
+            and payload.get('target') == 'CLASSIC'
+            and payload.get('verification_source') == expected_source
+            and payload.get('movement_lock_held') is False
         )
 
     @property
@@ -749,6 +789,37 @@ class CompetitionReadinessNode(Node):
                 gait_present,
                 gait_status or 'missing',
                 'missing' if gait_age is None else '{:.3f}s'.format(gait_age),
+            ),
+        ))
+        gait_owner_present = any(
+            name.endswith('/global_gait_owner') for name in node_names
+        )
+        gait_mode_status, gait_mode_age = self._fresh_value(
+            'gait_mode_status'
+        )
+        gait_mode_ready = (
+            gait_owner_present
+            and self._global_gait_mode_ready(
+                gait_mode_status, self.software_smoke_mode
+            )
+        )
+        checks.append(ReadinessCheck(
+            'global_gait_owner_classic_ready',
+            gait_mode_ready,
+            'present={}, state={}, target={}, verification_source={}, '
+            'lock={}, age={}'.format(
+                gait_owner_present,
+                gait_mode_status.get('state', 'missing')
+                if isinstance(gait_mode_status, dict) else 'missing',
+                gait_mode_status.get('target', 'missing')
+                if isinstance(gait_mode_status, dict) else 'missing',
+                gait_mode_status.get('verification_source', 'missing')
+                if isinstance(gait_mode_status, dict) else 'missing',
+                gait_mode_status.get('movement_lock_held', 'missing')
+                if isinstance(gait_mode_status, dict) else 'missing',
+                'missing' if gait_mode_age is None else '{:.3f}s'.format(
+                    gait_mode_age
+                ),
             ),
         ))
         guard_ok, guard_detail = self._cleanup_guard_is_clean()
@@ -1025,7 +1096,7 @@ class CompetitionReadinessNode(Node):
         )
 
     def _sdk_status_ready(self, startup_status, classic_verified_status):
-        """仅当前实例人工经典签名与 StopMove 成功时允许动态控制。"""
+        """仅当前实例启动停车与随后经典步态 ACK 成功时允许动态控制。"""
         if not self.sdk_server_instance_id:
             return False, 'expected_server_instance_id_empty'
         sdk_error = getattr(self, '_sdk_error_status', None)
@@ -1055,11 +1126,11 @@ class CompetitionReadinessNode(Node):
             or classic_verified_status.get('ret') != 0
             or not self._valid_sdk_status_identity(classic_verified_status)
             or classic_verified_status.get('sequence', 0)
-            >= startup_status.get('sequence', 0)
+            <= startup_status.get('sequence', 0)
         ):
             return False, 'classic_verified_instance_event_ret_or_sequence_mismatch'
         return True, (
-            'instance={} manual_classic_and_startup_qualified '
+            'instance={} sdk_classic_and_startup_qualified '
             'classic_verified_sequence={} startup_sequence={} '
             'idle_event_age_not_a_liveness_failure'.format(
                 self.sdk_server_instance_id,

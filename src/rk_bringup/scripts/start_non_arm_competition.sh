@@ -150,6 +150,7 @@ create_log_aliases() {
     link_node_log white_stage_publisher white_bar_stage_command_publisher
     link_node_log white_action_executor white_bar_action_executor
     link_node_log inspection_executor inspection_action_executor
+    link_node_log global_gait_owner global_gait_owner
     link_node_log gait_control gait_control_node
     link_node_log command_mux command_mux_node
     link_node_log udp_forwarder cmd_vel_udp_forwarder
@@ -559,8 +560,8 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
     record_tmux_pane sdk_server "${SESSION}:sdk_server" \
         "${LOG_DIR}/sdk_server.log"
 
-    # 当前固件不支持 2049 ClassicWalk API。操作者的人工经典确认只作为
-    # 当前实例审计事件；不读取 error_code 来推断步态，也不执行任何 gait 写入。
+    # 唯一 SDK server 已完成 ClassicWalk 调用序列后才发布当前实例 ACK；
+    # 不读取 error_code 来推断步态，也不把 UDP bind 当作经典步态成功。
     if ! "$SDK_STATUS_GATE" --mode status --event CLASSIC_VERIFIED \
             --required-ret 0 --reject-move \
             --expected-server-instance-id "$SERVER_INSTANCE_ID" \

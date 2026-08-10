@@ -5,11 +5,13 @@
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/channel/channel_subscriber.hpp>
 #include <unitree/robot/go2/sport/sport_client.hpp>
+#include <unitree/robot/go2/vui/vui_client.hpp>
 #include <unitree/idl/go2/SportModeState_.hpp>
 
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <condition_variable>
 #include <csignal>
@@ -22,6 +24,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <thread>
@@ -34,6 +37,14 @@ using rk_go2_sdk_bridge::MotionAction;
 using rk_go2_sdk_bridge::MotionDecision;
 using rk_go2_sdk_bridge::MotionLimits;
 using rk_go2_sdk_bridge::UdpMotionCore;
+
+enum class GaitState
+{
+  kUnknown,
+  kClassicReady,
+  kFreeReady,
+  kFailed,
+};
 
 volatile std::sig_atomic_t g_running = 1;
 
@@ -48,7 +59,7 @@ struct ServerConfig
   std::string server_instance_id;
   double rate_hz{20.0};
   double watchdog_sec{0.30};
-  // 仅接受本次启动入口传入的人工经典确认；不从 SportModeState 推断步态。
+  // 保留旧启动参数的解析兼容；步态资格现由本 server 的 SDK ACK 确认。
   bool manual_classic_confirmed{false};
   MotionLimits limits{};
 };
@@ -100,7 +111,7 @@ void PrintUsage(const char* program)
       << "  --server-instance-id ID  Startup nonce copied to every status event\n"
       << "  --rate-hz HZ           SDK Move output rate (default: 20)\n"
       << "  --watchdog-sec SEC     Stop timeout (default: 0.30)\n"
-      << "  --manual-classic-confirmed BOOL  Explicit operator confirmation (true/false)\n"
+      << "  --manual-classic-confirmed BOOL  Deprecated compatibility option\n"
       << "  --max-vx VALUE         Maximum |vx| (default: 0.25)\n"
       << "  --max-vy VALUE         Maximum |vy| (default: 0.05)\n"
       << "  --max-yaw VALUE        Maximum |yaw| (default: 0.60)\n"
@@ -354,6 +365,240 @@ int32_t SendStop(
   return result;
 }
 
+void ExecuteDecision(
+    unitree::robot::go2::SportClient& client,
+    MotionStatusPublisher& status,
+    UdpMotionCore& core,
+    const MotionDecision& decision);
+
+bool IsSafeRequestId(const std::string& request_id)
+{
+  if (request_id.empty() || request_id.size() > 64U) return false;
+  for (const unsigned char character : request_id) {
+    if (!std::isalnum(character) && character != '-' && character != '_') {
+      return false;
+    }
+  }
+  return true;
+}
+
+struct GaitRequest
+{
+  std::string request_id;
+  std::string target;
+};
+
+struct ActionRequest
+{
+  std::string request_id;
+  std::string action;
+};
+
+bool ParseGaitRequest(const std::string& payload, GaitRequest& request)
+{
+  std::istringstream stream(payload);
+  std::string prefix;
+  if (!(stream >> prefix >> request.request_id >> request.target) ||
+      prefix != "GAIT" || !IsSafeRequestId(request.request_id) ||
+      (request.target != "CLASSIC" && request.target != "FREE" &&
+       request.target != "HOLD")) {
+    return false;
+  }
+  stream >> std::ws;
+  return stream.eof();
+}
+
+bool IsOwnedAction(const std::string& action)
+{
+  return action == "balance_stand" || action == "static_walk" ||
+      action == "trot_run" || action == "stand_up" ||
+      action == "economic_gait" || action == "front_jump" ||
+      action == "hello" || action == "wave" || action == "stretch" ||
+      action == "blink_front_light_3" || action == "blink_light_3" ||
+      action == "recovery_stand" || action == "stop_move";
+}
+
+bool ParseActionRequest(const std::string& payload, ActionRequest& request)
+{
+  std::istringstream stream(payload);
+  std::string prefix;
+  if (!(stream >> prefix >> request.request_id >> request.action) ||
+      prefix != "ACTION" || !IsSafeRequestId(request.request_id) ||
+      !IsOwnedAction(request.action)) {
+    return false;
+  }
+  stream >> std::ws;
+  return stream.eof();
+}
+
+void SleepSec(double seconds)
+{
+  if (seconds > 0.0) {
+    std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
+  }
+}
+
+int32_t BlinkFrontLight()
+{
+  unitree::robot::go2::VuiClient client;
+  client.SetTimeout(2.0F);
+  client.Init();
+  int32_t result = 0;
+  for (int index = 0; index < 3; ++index) {
+    const int32_t on_result = client.SetBrightness(10);
+    if (on_result != 0) result = on_result;
+    SleepSec(0.35);
+    const int32_t off_result = client.SetBrightness(0);
+    if (off_result != 0) result = off_result;
+    SleepSec(0.35);
+  }
+  return result;
+}
+
+int32_t RunOwnedAction(
+    unitree::robot::go2::SportClient& client, const std::string& action)
+{
+  // 所有 SportClient 动作与步态调用集中在本进程，避免 helper
+  // 与速度 server 并发写 Unitree 控制面。
+  if (action == "balance_stand") return client.BalanceStand();
+  if (action == "static_walk") return client.StaticWalk();
+  if (action == "trot_run") return client.TrotRun();
+  if (action == "stand_up") return client.StandUp();
+  if (action == "economic_gait") return client.EconomicGait();
+  if (action == "front_jump") return client.FrontJump();
+  if (action == "hello" || action == "wave") return client.Hello();
+  if (action == "stretch") return client.Stretch();
+  if (action == "recovery_stand") return client.RecoveryStand();
+  if (action == "stop_move") return client.StopMove();
+  if (action == "blink_front_light_3" || action == "blink_light_3") {
+    return BlinkFrontLight();
+  }
+  return -1;
+}
+
+bool RequiresClassicHandback(const std::string& action)
+{
+  return action != "stop_move";
+}
+
+void SendRequestReply(
+    int socket_fd, const sockaddr_in& destination, socklen_t destination_size,
+    const std::string& kind, const std::string& request_id,
+    const std::string& target, const std::string& result)
+{
+  // 直返请求发起者的 ACK 只在 SDK 序列完成后发送，helper 不得
+  // 将 UDP send 成功误当成步态成功。
+  const std::string payload = kind + " " + request_id + " " + target +
+      " " + result;
+  const ssize_t sent = sendto(
+      socket_fd, payload.data(), payload.size(), 0,
+      reinterpret_cast<const sockaddr*>(&destination), destination_size);
+  if (sent != static_cast<ssize_t>(payload.size())) {
+    std::cerr << "[SDK] request ACK send failed: "
+              << std::strerror(errno) << std::endl;
+  }
+}
+
+std::string GaitReason(const GaitRequest& request, const std::string& phase)
+{
+  return "request_id=" + request.request_id + ";target=" + request.target +
+      ";phase=" + phase + ";verification_source=command_ack";
+}
+
+bool ApplyGaitRequest(
+    unitree::robot::go2::SportClient& client, MotionStatusPublisher& status,
+    UdpMotionCore& core, const GaitRequest& request, GaitState& gait_state)
+{
+  // server 单线程串行处理速度与步态请求；先清空 UdpMotionCore 的活动目标，
+  // 再执行省赛已验证的 ZERO → StopMove → gait → settle 合同。
+  status.Publish("GAIT_REQUESTED", 0, GaitReason(request, "requested"),
+                 0.0, 0.0, 0.0);
+  const MotionDecision stop = core.ForceStop("gait_transition");
+  ExecuteDecision(client, status, core, stop);
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+  int32_t ret = 0;
+  if (request.target == "HOLD") {
+    gait_state = GaitState::kUnknown;
+  } else if (request.target == "CLASSIC") {
+    ret = client.SpeedLevel(1);
+    std::cout << "[SDK_GAIT] request_id=" << request.request_id
+              << " call=SpeedLevel(1) ret=" << ret << std::endl;
+    if (ret == 0) ret = client.ClassicWalk(true);
+    std::cout << "[SDK_GAIT] request_id=" << request.request_id
+              << " call=ClassicWalk(true) ret=" << ret << std::endl;
+  } else {
+    ret = client.FreeWalk();
+    std::cout << "[SDK_GAIT] request_id=" << request.request_id
+              << " call=FreeWalk ret=" << ret << std::endl;
+  }
+
+  if (ret != 0) {
+    gait_state = GaitState::kFailed;
+    status.Publish("GAIT_FAILED", ret, GaitReason(request, "sdk_error"),
+                   0.0, 0.0, 0.0);
+    SendStop(client, status, "gait_failure");
+    return false;
+  }
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  const int32_t zero_ret = client.Move(0.0F, 0.0F, 0.0F);
+  const int32_t hold_ret = client.StopMove();
+  const int32_t final_ret = zero_ret != 0 ? zero_ret : hold_ret;
+  if (final_ret != 0) {
+    gait_state = GaitState::kFailed;
+    status.Publish("GAIT_FAILED", final_ret,
+                   GaitReason(request, "final_zero_error"), 0.0, 0.0, 0.0);
+    return false;
+  }
+  if (request.target == "CLASSIC") {
+    gait_state = GaitState::kClassicReady;
+  } else if (request.target == "FREE") {
+    gait_state = GaitState::kFreeReady;
+  }
+  status.Publish("GAIT_READY", 0, GaitReason(request, "ready"),
+                 0.0, 0.0, 0.0);
+  return true;
+}
+
+std::string ApplyActionRequest(
+    unitree::robot::go2::SportClient& client, MotionStatusPublisher& status,
+    UdpMotionCore& core, const ActionRequest& request, GaitState& gait_state)
+{
+  // 特殊动作前一律清空速度；需恢复的动作完成后复用同一
+  // ApplyGaitRequest 合同，只有经典步态 ACK 后才回 READY。
+  const MotionDecision stop = core.ForceStop("action_pre_stop");
+  ExecuteDecision(client, status, core, stop);
+  gait_state = GaitState::kUnknown;
+  status.Publish("ACTION_REQUESTED", 0,
+                 "request_id=" + request.request_id +
+                 ";action=" + request.action,
+                 0.0, 0.0, 0.0);
+  const int32_t ret = RunOwnedAction(client, request.action);
+  if (ret != 0) {
+    gait_state = GaitState::kFailed;
+    status.Publish("ACTION_FAILED", ret,
+                   "request_id=" + request.request_id +
+                   ";action=" + request.action,
+                   0.0, 0.0, 0.0);
+    SendStop(client, status, "action_failure");
+    return "FAILED";
+  }
+  if (RequiresClassicHandback(request.action)) {
+    const GaitRequest handback{
+        "action-" + request.request_id, "CLASSIC"};
+    if (!ApplyGaitRequest(client, status, core, handback, gait_state)) {
+      return "HANDBACK_FAILED";
+    }
+  }
+  status.Publish("ACTION_READY", 0,
+                 "request_id=" + request.request_id +
+                 ";action=" + request.action +
+                 ";verification_source=command_ack",
+                 0.0, 0.0, 0.0);
+  return "READY";
+}
+
 // SDK 已确认可控后，任何异常离开作用域都会再次尝试停车。启动门禁失败前
 // 不 arm，避免把“启动 StopMove 最多三次”的上限悄悄变成第四次动作调用。
 class EmergencyStopGuard
@@ -537,17 +782,6 @@ int RunServer(const ServerConfig& config)
       0, config.network_interface);
 
   MotionStatusPublisher status(config);
-  // 2049 ClassicWalk API 已在当前 server 返回 3203（未实现），正式链不再
-  // 调用或重试它。步态由操作者负责；本参数只记录其已确认状态，不能把
-  // SportModeState 的某个 error_code 误作跨固件的经典步态硬判据。
-  if (!config.manual_classic_confirmed) {
-    status.Publish("CLASSIC_VERIFIED", -1, "manual_classic_confirmation_missing",
-                   0.0, 0.0, 0.0);
-    throw std::runtime_error("MANUAL_CLASSIC_CONFIRMATION_REQUIRED");
-  }
-  status.Publish("CLASSIC_VERIFIED", 0,
-                 "manual_operator_confirmation_record_only", 0.0, 0.0, 0.0);
-
   // 正式控制链不申请 SDK motion lease；prearm 与已验收的 1003 路径均使用
   // false，避免默认构造语义随 SDK 版本变化而改变控制平面行为。
   unitree::robot::go2::SportClient client(false);
@@ -567,10 +801,20 @@ int RunServer(const ServerConfig& config)
   }
   stop_guard.Arm();
 
+  UdpMotionCore core(config.limits, config.watchdog_sec);
+  GaitState gait_state = GaitState::kUnknown;
+  const GaitRequest startup_request{"startup", "CLASSIC"};
+  if (!ApplyGaitRequest(client, status, core, startup_request, gait_state)) {
+    throw std::runtime_error("STARTUP_CLASSIC_FAILED");
+  }
+  // READY 仅表示 SDK 调用序列成功；不得把 SportModeState 某个 error_code
+  // 虚构为跨固件硬件确认。
+  status.Publish("CLASSIC_VERIFIED", 0,
+                 "startup_classic;verification_source=command_ack",
+                 0.0, 0.0, 0.0);
+
   const int socket_fd = CreateUdpSocket(config);
   SocketGuard socket_guard(socket_fd);
-  UdpMotionCore core(config.limits, config.watchdog_sec);
-
   std::cout << "[SDK] UDP server listening on "
             << config.listen_ip << ":" << config.port
             << " interface=" << config.network_interface
@@ -619,9 +863,11 @@ int RunServer(const ServerConfig& config)
 
     if (ready > 0 && FD_ISSET(socket_fd, &read_fds)) {
       char buffer[256];
+      sockaddr_in sender{};
+      socklen_t sender_size = sizeof(sender);
       const ssize_t received = recvfrom(
           socket_fd, buffer, sizeof(buffer) - 1, MSG_TRUNC,
-          nullptr, nullptr);
+          reinterpret_cast<sockaddr*>(&sender), &sender_size);
       if (received < 0) {
         const MotionDecision stop = core.ForceStop("recv_error");
         ExecuteDecision(client, status, core, stop);
@@ -636,8 +882,38 @@ int RunServer(const ServerConfig& config)
       } else {
         buffer[received] = '\0';
         payload.assign(buffer, static_cast<std::size_t>(received));
-        decision = core.AcceptPacket(
-            payload, MonotonicSeconds(start_time));
+        GaitRequest gait_request;
+        if (payload.rfind("GAIT ", 0) == 0) {
+          if (!ParseGaitRequest(payload, gait_request)) {
+            decision = core.ForceStop("invalid_gait_packet");
+          } else {
+            const bool success = ApplyGaitRequest(
+                client, status, core, gait_request, gait_state);
+            SendRequestReply(
+                socket_fd, sender, sender_size, "GAIT_ACK",
+                gait_request.request_id, gait_request.target,
+                success ? "READY" : "FAILED");
+            decision = {};
+          }
+        } else if (payload.rfind("ACTION ", 0) == 0) {
+          ActionRequest action_request;
+          if (!ParseActionRequest(payload, action_request)) {
+            decision = core.ForceStop("invalid_action_packet");
+          } else {
+            const std::string result = ApplyActionRequest(
+                client, status, core, action_request, gait_state);
+            SendRequestReply(
+                socket_fd, sender, sender_size, "ACTION_ACK",
+                action_request.request_id, action_request.action, result);
+            decision = {};
+          }
+        } else if (gait_state == GaitState::kFailed ||
+                   gait_state == GaitState::kUnknown) {
+          decision = core.ForceStop("gait_not_ready");
+        } else {
+          decision = core.AcceptPacket(
+              payload, MonotonicSeconds(start_time));
+        }
       }
 
       LogDecision("RX payload=\"" + payload + "\"", decision);

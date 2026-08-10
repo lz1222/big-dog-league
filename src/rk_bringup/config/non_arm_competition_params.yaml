@@ -540,6 +540,8 @@ competition_readiness_node:
     inspection_action_status_topic: /mission/inspection_action_status
     sign_detections_topic: /perception/sign_detections
     gait_status_topic: /gait/status
+    # 仅 CLASSIC_READY 且来源为真实 command_ack 时允许生产 readiness 放行。
+    gait_mode_status_topic: /gait/mode_status
     estop_state_topic: /safety/estop_state
     estop_service_name: /safety/estop
     motion_action_name: /locomotion/execute_motion
