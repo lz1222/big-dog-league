@@ -66,12 +66,6 @@ def _place_params(**overrides):
         'place_white_bar_span_tolerance': 0.02,
         'place_line_max_lateral_error': 0.10,
         'place_line_max_heading_error': 0.10,
-        'place1_white_bar_target_y_ratio': 0.80,
-        'place1_white_bar_y_tolerance': 0.02,
-        'place1_white_bar_target_span_ratio': 0.60,
-        'place1_white_bar_span_tolerance': 0.02,
-        'place1_line_max_lateral_error': 0.10,
-        'place1_line_max_heading_error': 0.10,
     }
     params.update(overrides)
     return params
@@ -91,7 +85,7 @@ def _enter_pickup(core):
 
 
 def _enter_place(core):
-    core.set_place_platform_id('place1')
+    core.set_place_target('place1')
     core.set_route_phase('PLACE_PLATFORM_APPROACH')
     core.tick(0.0)
 
@@ -377,6 +371,65 @@ def test_place_done_still_requires_explicit_finish_rearm():
     assert not core.snapshot()['finish_white_bar_armed']
     core.rearm_finish()
     assert core.snapshot()['finish_white_bar_armed']
+
+
+def _place_lock_snapshot(place_target):
+    """同一 PLACE_COMMON 观测必须与最终机械臂左右侧完全解耦。"""
+    core = TaskPlatformPositioningCore(_place_params())
+    core.set_place_target(place_target)
+    core.set_route_phase('PLACE_PLATFORM_APPROACH')
+    core.tick(0.0)
+    for _ in range(2):
+        core.observe_place_white_bar(
+            _bar(), line_lateral_error=0.0, line_heading_error=0.0)
+    _confirm_zero(core)
+    core.tick(0.1)
+    return core.snapshot()
+
+
+def test_place_common_pose_is_identical_for_both_arm_targets():
+    place1 = _place_lock_snapshot('place1')
+    place2 = _place_lock_snapshot('place2')
+    for key in ('anchor_detected', 'target_values', 'current_values',
+                'errors', 'state', 'reason'):
+        assert place1[key] == place2[key]
+    assert place1['state'] == 'PLACE_POSITION_LOCKED'
+    assert place1['place_arm_side'] == 'LEFT'
+    assert place2['place_arm_side'] == 'RIGHT'
+
+
+@pytest.mark.parametrize('place_target, failure', (
+    ('', 'PLACE_TARGET_MISSING'),
+    ('not-a-platform', 'PLACE_TARGET_INVALID'),
+))
+def test_place_target_missing_or_invalid_fails_closed_at_position_lock(
+        place_target, failure):
+    core = TaskPlatformPositioningCore(_place_params())
+    core.set_place_target(place_target)
+    core.set_route_phase('PLACE_PLATFORM_APPROACH')
+    core.tick(0.0)
+    for _ in range(2):
+        core.observe_place_white_bar(
+            _bar(), line_lateral_error=0.0, line_heading_error=0.0)
+    _confirm_zero(core)
+    assert core.tick(0.1) == PlatformCommand()
+    assert core.snapshot()['state'] == failure
+    assert core.snapshot()['place_arm_side'] is None
+
+
+def test_conflicting_pickup_target_fails_closed_without_profile_change():
+    core = TaskPlatformPositioningCore(_place_params())
+    core.set_place_target('place1')
+    core.set_place_target('place2')
+    core.set_route_phase('PLACE_PLATFORM_APPROACH')
+    core.tick(0.0)
+    for _ in range(2):
+        core.observe_place_white_bar(
+            _bar(), line_lateral_error=0.0, line_heading_error=0.0)
+    _confirm_zero(core)
+    core.tick(0.1)
+    assert core.snapshot()['state'] == 'PLACE_TARGET_INCONSISTENT'
+    assert core.snapshot()['target_values']['white_bar_y_ratio'] == .8
 
 
 def test_place_optional_offset_uses_active_motion_time():

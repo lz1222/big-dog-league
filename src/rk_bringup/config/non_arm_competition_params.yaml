@@ -375,7 +375,8 @@ task_platform_positioning_node:
     place_final_offset_direction: forward
     place_final_offset_speed_mps: 0.0
     place_final_offset_duration_sec: 0.0
-    # place1/place2 必须单独标定；0/false 继续表示 CALIBRATION_REQUIRED。
+    # DEPRECATED：旧 place1/place2 base profile 仅保留 ROS 参数兼容；生产
+    # runtime 禁止读取。PLACE_COMMON 的 place_* 参数才是唯一底盘定位入口。
     place1_white_bar_target_y_ratio: 0.0
     place1_white_bar_y_tolerance: 0.0
     place1_white_bar_target_span_ratio: 0.0

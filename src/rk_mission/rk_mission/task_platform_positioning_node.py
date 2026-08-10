@@ -126,12 +126,14 @@ class TaskPlatformPositioningNode(Node):
         """仅认可显式平台阶段字段，既有 route state 不会被猜测映射。"""
         self._received['route'] = time.monotonic()
         contract = parse_platform_route_state(message.data)
-        self.core.set_place_platform_id(contract.place_platform_id)
-        self.core.set_route_phase(contract.platform_route_phase)
         if not contract.valid:
             self.get_logger().warning(
                 'platform route rejected: %s', contract.reason)
             return
+        # target 由抓取阶段锁存；中间 route 帧缺字段不能清空它，也不能影响
+        # PLACE_COMMON 底盘视觉参数。非法/冲突值由 core 在最终锁定点 fail-closed。
+        self.core.set_place_target(contract.place_platform_id)
+        self.core.set_route_phase(contract.platform_route_phase)
         try:
             payload = json.loads(message.data)
             if payload.get('finish_rearmed') is True:
@@ -203,6 +205,14 @@ class TaskPlatformPositioningNode(Node):
                     dict) and isinstance(
                     payload.get('success'),
                     bool):
+                # 抓取阶段的既有识别结果一旦成功就锁存最终放置 target。PLACE
+                # 区不会再次识别编号；缺字段则保留空值并在位置锁定点 fail-closed。
+                if (self.core.state == 'PICKUP_OBJECT_RECOGNITION'
+                        and payload['success'] and (
+                        'place_target' in payload
+                        or 'place_platform_id' in payload)):
+                    self.core.set_place_target(payload.get(
+                        'place_target', payload.get('place_platform_id')))
                 self.core.recognition_result(payload['success'])
         except (TypeError, ValueError, json.JSONDecodeError):
             return

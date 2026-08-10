@@ -19,7 +19,7 @@ PLATFORM_ROUTE_PHASES = frozenset((
 
 @dataclass(frozen=True)
 class PlatformRouteContract:
-    """严格解析后的平台路线字段；不合法输入一律安全回落到 ``NONE``。"""
+    """严格解析后的平台路线字段；target 仅用于最终机械臂侧别。"""
 
     valid: bool
     platform_route_phase: str
@@ -48,7 +48,9 @@ def parse_platform_route_state(raw_message):
     if phase not in PLATFORM_ROUTE_PHASES:
         return PlatformRouteContract(
             False, 'NONE', '', 'platform_route_phase_invalid')
-    place_id = payload.get('place_platform_id', '')
+    # ``place_target`` 是新语义；旧 route producer 仍可用
+    # ``place_platform_id`` 传递相同的抓取阶段锁存值。
+    place_id = payload.get('place_target', payload.get('place_platform_id', ''))
     if place_id is None:
         place_id = ''
     if not isinstance(place_id, str):

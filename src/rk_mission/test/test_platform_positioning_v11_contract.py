@@ -35,18 +35,12 @@ def _place_params(**overrides):
     params = {
         'place_platform_calibrated': True,
         'place_white_bar_signature_valid': True,
-        'place1_white_bar_target_y_ratio': .8,
-        'place1_white_bar_y_tolerance': .02,
-        'place1_white_bar_target_span_ratio': .6,
-        'place1_white_bar_span_tolerance': .02,
-        'place1_line_max_lateral_error': .1,
-        'place1_line_max_heading_error': .1,
-        'place2_white_bar_target_y_ratio': .7,
-        'place2_white_bar_y_tolerance': .03,
-        'place2_white_bar_target_span_ratio': .5,
-        'place2_white_bar_span_tolerance': .03,
-        'place2_line_max_lateral_error': .2,
-        'place2_line_max_heading_error': .2,
+        'place_white_bar_target_y_ratio': .8,
+        'place_white_bar_y_tolerance': .02,
+        'place_white_bar_target_span_ratio': .6,
+        'place_white_bar_span_tolerance': .02,
+        'place_line_max_lateral_error': .1,
+        'place_line_max_heading_error': .1,
     }
     params.update(overrides)
     return params
@@ -163,15 +157,15 @@ def test_active_motion_requires_fresh_mission_source_and_axis_clean_vector():
     assert core.snapshot()['active_motion_elapsed_sec'] == .5
 
 
-def test_place_profiles_are_independent_and_unknown_profile_fails_closed():
+def test_place_common_profile_ignores_arm_target_and_missing_target_locks_fail_closed():
     core = TaskPlatformPositioningCore(_place_params())
-    core.set_place_platform_id('place2')
+    core.set_place_target('place2')
     core.set_route_phase('PLACE_PLATFORM_APPROACH')
-    assert core.snapshot()['target_values']['white_bar_y_ratio'] == .7
-    unknown = TaskPlatformPositioningCore(_place_params())
-    unknown.set_place_platform_id('not-a-platform')
-    unknown.set_route_phase('PLACE_PLATFORM_APPROACH')
-    assert unknown.state == 'PLACE_PREFLIGHT_NOT_READY'
+    assert core.snapshot()['target_values']['white_bar_y_ratio'] == .8
+    assert core.snapshot()['place_arm_side'] == 'RIGHT'
+    missing = TaskPlatformPositioningCore(_place_params())
+    missing.set_route_phase('PLACE_PLATFORM_APPROACH')
+    assert missing.state == 'PLACE_PLATFORM_APPROACH'
 
 
 def test_finish_interlock_contract_needs_place_done_and_explicit_rearm():

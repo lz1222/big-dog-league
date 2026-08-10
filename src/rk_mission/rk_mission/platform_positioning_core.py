@@ -27,6 +27,10 @@ GAIT_LOCK_STATES = frozenset((
     'PICKUP_OBJECT_RECOGNITION', 'PICKUP_ARM_HANDOFF_READY',
     'PLACE_POSITION_LOCKED', 'PLACE_DONE',
 ))
+PLACE_TARGET_ARM_SIDES = {
+    'place1': 'LEFT',
+    'place2': 'RIGHT',
+}
 
 
 @dataclass(frozen=True)
@@ -90,7 +94,10 @@ class TaskPlatformPositioningCore:
             self.p.update(parameters)
         # 路线协议必须显式给出 NONE，初值也采用同一安全语义。
         self.route_phase = 'NONE'
-        self.place_platform_id = ''
+        # 放置编号来自抓取阶段并一直保存到机械臂交接；它绝不能参与底盘
+        # 视觉 profile 的选择，因为两个放置台共用同一停车底盘姿态。
+        self.place_target = ''
+        self._place_target_error = ''
         self.state = 'IDLE'
         self.reason = 'platform_positioning_idle'
         self.anchor_detected = False
@@ -164,9 +171,23 @@ class TaskPlatformPositioningCore:
                                       'PLACE_PLATFORM_APPROACH'):
             self._reset_idle('route_phase_not_platform')
 
+    def set_place_target(self, place_target: str) -> None:
+        """锁存抓取阶段确定的最终机械臂方向，冲突输入保持 fail-closed。"""
+        candidate = str(place_target or '')
+        # 路线中间阶段可以不重复携带 target；不能因此清掉已锁存目标。
+        if not candidate:
+            return
+        if candidate not in PLACE_TARGET_ARM_SIDES:
+            self._place_target_error = 'PLACE_TARGET_INVALID'
+            return
+        if self.place_target and candidate != self.place_target:
+            self._place_target_error = 'PLACE_TARGET_INCONSISTENT'
+            return
+        self.place_target = candidate
+
     def set_place_platform_id(self, platform_id: str) -> None:
-        """选择 place1/place2 独立黄金 profile，未知编号不允许借用参数。"""
-        self.place_platform_id = str(platform_id or '')
+        """兼容旧 route 字段；生产语义等同于 ``set_place_target``。"""
+        self.set_place_target(platform_id)
 
     def update_sensor_freshness(self, **freshness: bool) -> None:
         """由适配层按单调时钟刷新输入时效；未出现的数据天然 stale。"""
@@ -424,8 +445,13 @@ class TaskPlatformPositioningCore:
             self.state = 'PICKUP_ARM_HANDOFF_READY'
             self.reason = 'pickup_right_turn_stop_confirmed'
         elif self.state == 'PLACE_STOP_CONFIRM' and self.stop_confirmed:
-            self.state = 'PLACE_POSITION_LOCKED'
-            self.reason = 'place_stop_confirmed'
+            # 先完成公共底盘停车，再读取抓取阶段已锁存的机械臂目标；缺失、
+            # 非法或冲突均保持候选速度 ZERO，绝不默认左右任一侧。
+            if not self._place_target_ready():
+                self._fail(self._place_target_failure_reason())
+            else:
+                self.state = 'PLACE_POSITION_LOCKED'
+                self.reason = 'place_stop_confirmed'
         elif self.state == 'PLACE_FINAL_OFFSET':
             self._run_timed_motion(
                 'place_final_offset', dt, 'PLACE_STOP_CONFIRM')
@@ -439,7 +465,10 @@ class TaskPlatformPositioningCore:
         return {
             'platform': self._platform(),
             'route_phase': self.route_phase,
-            'place_platform_id': self.place_platform_id,
+            # 旧字段仅供兼容观测；它不再选择任何底盘定位参数。
+            'place_platform_id': self.place_target,
+            'place_target': self.place_target,
+            'place_arm_side': PLACE_TARGET_ARM_SIDES.get(self.place_target),
             'state': self.state,
             'reason': self.reason,
             'calibrated': self._platform_calibrated(),
@@ -555,9 +584,19 @@ class TaskPlatformPositioningCore:
         return bool(self.p['pickup_board_signature_valid'])
 
     def _place_target_configured(self) -> bool:
-        """显式签名标记避免空 YAML 值被 ROS 参数系统静默转换。"""
-        return (bool(self.p['place_white_bar_signature_valid'])
-                and self._place_profile_name() is not None)
+        """公共视觉签名不依赖 place1/place2 任务身份。"""
+        return bool(self.p['place_white_bar_signature_valid'])
+
+    def _place_target_ready(self) -> bool:
+        """最终锁定点只接受抓取阶段保存且未冲突的有效 target。"""
+        return (not self._place_target_error
+                and self.place_target in PLACE_TARGET_ARM_SIDES)
+
+    def _place_target_failure_reason(self) -> str:
+        """将 target 错误显式暴露给上层，避免静默回退到默认机械臂侧。"""
+        if self._place_target_error:
+            return self._place_target_error
+        return 'PLACE_TARGET_MISSING'
 
     @staticmethod
     def _finite_positive(value) -> bool:
@@ -609,13 +648,13 @@ class TaskPlatformPositioningCore:
         if not self._place_target_configured():
             return False
         profile_ok = all(
-            _finite(self._place_profile_value(name)) is not None
-            and float(self._place_profile_value(name)) >= 0.0
+            _finite(self.p['place_' + name]) is not None
+            and float(self.p['place_' + name]) >= 0.0
             for name in (
                 'white_bar_y_tolerance', 'white_bar_span_tolerance',
                 'line_max_lateral_error', 'line_max_heading_error',
             )) and all(
-                _finite(self._place_profile_value(name)) is not None
+                _finite(self.p['place_' + name]) is not None
                 for name in (
                     'white_bar_target_y_ratio', 'white_bar_target_span_ratio',
                 ))
@@ -627,15 +666,12 @@ class TaskPlatformPositioningCore:
                 self.p['place_final_offset_duration_sec']))
 
     def _place_profile_name(self):
-        """只允许 place1/place2，防止任务编号缺失时误用另一平台标定。"""
-        return (self.place_platform_id if self.place_platform_id in (
-            'place1', 'place2') else None)
+        """生产底盘仅有一套 PLACE_COMMON profile。"""
+        return 'PLACE_COMMON'
 
     def _place_profile_value(self, suffix):
-        profile = self._place_profile_name()
-        if profile is None:
-            return float('nan')
-        return self.p[profile + '_' + suffix]
+        """旧 place1/place2 参数只保留兼容，运行时禁止读取。"""
+        return self.p['place_' + suffix]
 
     def _run_timed_motion(
             self,
@@ -1006,7 +1042,8 @@ DEFAULT_PLATFORM_PARAMETERS = {
     'place_final_offset_direction': 'forward',
     'place_final_offset_speed_mps': 0.0,
     'place_final_offset_duration_sec': 0.0,
-    # 两个放置台各有独立 profile，初值均不可用，禁止交叉复用 golden 值。
+    # DEPRECATED：旧双 profile 参数仅为 ROS 参数兼容保留；生产运行一律读取
+    # 上方 place_* 的 PLACE_COMMON profile，禁止按 place target 选择底盘姿态。
     'place1_white_bar_target_y_ratio': 0.0,
     'place1_white_bar_y_tolerance': 0.0,
     'place1_white_bar_target_span_ratio': 0.0,
