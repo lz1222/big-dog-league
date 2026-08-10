@@ -193,6 +193,10 @@ verify_cycle() {
     echo "ZERO_MOTION_GATE cycle=${cycle} gate=RECEIVER_FIRST"
     grep -Fq '"classification":"PASS"' \
         "${log_dir}/status_receiver_gate.log" || return 1
+    echo "ZERO_MOTION_GATE cycle=${cycle} gate=CLASSIC_VERIFIED"
+    grep -Fq '"event":"CLASSIC_VERIFIED"' \
+        "${log_dir}/classic_verified_status_gate.log" || return 1
+    grep -Fq '"ret":0' "${log_dir}/classic_verified_status_gate.log" || return 1
     echo "ZERO_MOTION_GATE cycle=${cycle} gate=STARTUP_ACK"
     grep -Fq '"event":"STARTUP_STOP"' \
         "${log_dir}/startup_status_gate.log" || return 1
@@ -281,6 +285,10 @@ for cycle in $(seq 1 "$CYCLES"); do
     export RK_COMPETITION_START_SDK_SERVER=true
     export RK_COMPETITION_START_UDP_FORWARDER=true
     export RK_COMPETITION_START_LINE_CAMERA=true
+    # 必须在 prearm 完成后由操作者切入经典签名；此窗口内 server 尚未构造
+    # SportClient，零运动验收不会以旧的 2049 API 或 Move 替代人工确认。
+    export RK_COMPETITION_CLASSIC_VERIFY_TIMEOUT_SEC="${RK_ZERO_ACCEPT_CLASSIC_VERIFY_TIMEOUT_SEC:-60}"
+    export RK_COMPETITION_CLASSIC_VERIFY_STATUS_GATE_TIMEOUT_SEC="${RK_ZERO_ACCEPT_CLASSIC_VERIFY_STATUS_GATE_TIMEOUT_SEC:-70}"
     ACTIVE_CYCLE=1
 
     "$START_SCRIPT" 2>&1 | tee "${CYCLE_ROOT}/formal_start.txt"

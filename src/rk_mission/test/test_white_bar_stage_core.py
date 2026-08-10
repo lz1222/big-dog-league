@@ -69,15 +69,16 @@ def test_start_maps_only_to_start_jump():
     assert event.motion_name == 'start_jump'
 
 
-def test_start_armed_sends_one_request_only_after_threshold():
+def test_start_armed_sends_one_request_only_after_blind_completion():
     controller = _controller()
     assert controller.apply_command(_command()).accepted
 
-    approach = controller.white_bar_event(False)
+    following = controller.white_bar_event(False)
     sent = controller.white_bar_event(True)
     duplicate = controller.white_bar_event(True)
 
-    assert approach.action == 'APPROACH'
+    assert following.action == 'FOLLOW'
+    assert following.reason == 'white_bar_blind_forward_not_complete'
     assert sent.action == 'SEND_REQUEST'
     assert sent.motion_name == 'start_jump'
     assert duplicate.action == 'WAIT_RESULT'

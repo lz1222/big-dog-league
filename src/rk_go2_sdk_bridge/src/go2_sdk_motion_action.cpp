@@ -102,6 +102,39 @@ int32_t RunAction(unitree::robot::go2::SportClient& sport_client,
   throw std::runtime_error("unsupported action: " + action);
 }
 
+bool RequiresClassicWalkHandback(const std::string& action)
+{
+  // 这些入口都会暂时脱离正式巡线步态。helper 是其既有 SportClient owner，
+  // 因此在同一进程内完成 handback，避免新增并发 SDK client。
+  return action == "balance_stand" || action == "static_walk" ||
+         action == "trot_run" || action == "free_walk" ||
+         action == "stand_up" || action == "economic_gait" ||
+         action == "front_jump" || action == "hello" || action == "wave" ||
+         action == "stretch" || action == "recovery_stand" ||
+         action == "blink_front_light_3" || action == "blink_light_3";
+}
+
+int32_t RestoreClassicWalkForLineFollow(
+    unitree::robot::go2::SportClient& sport_client)
+{
+  // 交接顺序是安全合同的一部分：停止特殊动作残留，再切经典步态，最后
+  // StopMove 确认不带入速度。任一失败令 helper 非零退出，上游保持 gait lock。
+  int32_t result = sport_client.StopMove();
+  std::cout << "ClassicWalk handback StopMove result: " << result << std::endl;
+  if (result != 0) {
+    return result;
+  }
+  result = sport_client.ClassicWalk(true);
+  std::cout << "ClassicWalk handback enable result: " << result << std::endl;
+  if (result != 0) {
+    return result;
+  }
+  result = sport_client.StopMove();
+  std::cout << "ClassicWalk handback confirm StopMove result: " << result
+            << std::endl;
+  return result;
+}
+
 void PrintUsage(const char* program)
 {
   std::cerr
@@ -141,11 +174,19 @@ int main(int argc, char** argv)
     sport_client.Init();
 
     std::cout << "Running SDK action: " << action << std::endl;
-    const int32_t result = RunAction(sport_client, action);
+    int32_t result = RunAction(sport_client, action);
     std::cout << "SDK action result: " << result << std::endl;
+    const bool requires_handback = RequiresClassicWalkHandback(action);
+    bool classic_walk_handback_failed = false;
+    if (result == 0 && requires_handback) {
+      result = RestoreClassicWalkForLineFollow(sport_client);
+      classic_walk_handback_failed = result != 0;
+    }
     SleepSec(wait_sec);
 
-    return result == 0 ? 0 : 1;
+    // 42 是本 helper 的受限内部合同：调用者据此保持 gait lock，不能把
+    // ClassicWalk handback 失败误当成普通特殊动作失败后继续巡线。
+    return result == 0 ? 0 : (classic_walk_handback_failed ? 42 : 1);
   } catch (const std::exception& error) {
     std::cerr << "Error: " << error.what() << std::endl;
     PrintUsage(argv[0]);

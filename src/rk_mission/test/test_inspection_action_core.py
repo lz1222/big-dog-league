@@ -143,6 +143,46 @@ def test_detection_before_request_cannot_arm_an_action():
     assert core.candidate_count == 0
 
 
+def test_formal_request_locks_before_sign_and_rechecks_final_zero_after_sign():
+    """红圆检查先锁 gait；识别成功后仍必须重新确认最终零速。"""
+    core = _core()
+    requested = core.request(_request(), 0.0)
+
+    assert requested.acquire_gait_lock
+    prelocked = core.lock_acquired(
+        requested.run_id, requested.request_id, 0.01
+    )
+    assert prelocked.state == ARMED
+    assert core.gait_lock_held
+    assert core.arm(requested.run_id, requested.request_id, 0.02).state == (
+        WAIT_SIGN
+    )
+    event = None
+    for frame in range(core.config.sign_confirm_frames):
+        event = core.observe_detection(
+            'warning', 'electric_shock', 0.90, 0.10 + frame * 0.01
+        )
+
+    assert event.state == WAIT_ZERO
+    assert not event.acquire_gait_lock
+    assert core.final_zero_streak == 0
+
+
+def test_sign_timeout_after_prelock_keeps_gait_lock_fail_closed():
+    """未识别到警示牌时保持检查位锁，不能自动恢复巡线。"""
+    core = _core(sign_wait_timeout_sec=0.20)
+    requested = core.request(_request(), 0.0)
+    core.lock_acquired(requested.run_id, requested.request_id, 0.01)
+    core.arm(requested.run_id, requested.request_id, 0.02)
+
+    timeout = core.tick(0.23)
+
+    assert timeout.state == TIMEOUT
+    assert timeout.reason == 'sign_wait_timeout'
+    assert not timeout.release_gait_lock
+    assert core.gait_lock_held
+
+
 def test_stable_detection_requires_same_valid_value_on_consecutive_frames():
     core = _armed_core()
 
@@ -287,6 +327,23 @@ def test_unverified_helper_cleanup_faults_and_keeps_gait_lock():
     assert result.state == FAULTED
     assert not result.release_gait_lock
     assert 'cleanup_unverified_lock_held' in result.reason
+    assert core.gait_lock_held
+
+
+def test_classic_walk_handback_failure_keeps_gait_lock():
+    """特殊动作恢复经典步态失败时，line follower 不得重新取得控制权。"""
+    core, event = _running_core()
+
+    result = core.helper_finished(
+        event.run_id,
+        event.request_id,
+        FAILED,
+        'classic_walk_handback_failed',
+        cleanup_completed=True,
+    )
+
+    assert result.state == FAILED
+    assert not result.release_gait_lock
     assert core.gait_lock_held
 
 

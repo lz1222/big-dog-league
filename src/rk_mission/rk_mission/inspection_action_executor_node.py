@@ -504,6 +504,11 @@ class InspectionActionExecutorNode(Node):
                 result_state = result.terminal_state
                 reason = result.reason
                 cleanup_completed = result.cleanup_completed
+                if result.return_code == 42:
+                    # go2_sdk_motion_action 的专用失败码：特殊动作已结束，
+                    # 但 ClassicWalk handback 未确认，必须让 core 保持 lock。
+                    result_state = FAILED
+                    reason = 'classic_walk_handback_failed'
                 if result_state == SUCCEEDED:
                     if not self._wait_post_action_settle(cancel_event):
                         result_state = CANCELED

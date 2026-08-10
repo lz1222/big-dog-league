@@ -116,10 +116,12 @@ class WhiteBarStageController:
             return self._clear(sequence)
         return self._reset(sequence)
 
-    def white_bar_event(self, stop_threshold_reached):
-        """Advance an armed stage only after the white-bar stop threshold."""
-        if not stop_threshold_reached:
-            return self._event(True, 'APPROACH', 'white_bar_stop_threshold_not_reached')
+    def white_bar_event(self, blind_forward_complete):
+        """Advance an armed stage only after the shared blind window."""
+        if not blind_forward_complete:
+            return self._event(
+                True, 'FOLLOW', 'white_bar_blind_forward_not_complete'
+            )
         if self.state == 'START_ARMED':
             return self._start_action('START')
         if self.state == 'FINISH_ARMED':

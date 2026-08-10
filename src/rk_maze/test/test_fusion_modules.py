@@ -66,12 +66,32 @@ class TestHeadingController:
                             left_clearance=1.0, right_clearance=1.0, now_sec=2.0)
         assert s2.wz_reference < s1.wz_reference  # damped version more negative
 
-    def test_lateral_center(self):
-        hc = HeadingController(HeadingControllerConfig(kp_center=1.0, kp_heading=0.0, kd_gyro=0.0))
+    def test_default_does_not_turn_for_persistent_lateral_bias(self):
+        """默认不得把单侧墙距差当作持续左/右偏航补偿。"""
+        hc = HeadingController(HeadingControllerConfig(kp_heading=0.0, kd_gyro=0.0))
         s = hc.compute(corridor_heading=0.0, wall_confidence=1.0, wall_age_sec=0.0,
                        odom_yaw=0.0, odom_age_sec=0.0, imu_wz=0.0, imu_age_sec=0.0,
                        left_clearance=0.20, right_clearance=0.60, now_sec=1.0)
+        assert s.valid and s.center_component == 0.0 and s.wz_reference == 0.0
+
+    def test_lateral_center_is_limited_to_explicit_post_turn_realign(self):
+        """侧向量只允许在转弯后重捕获时小幅使用，防止巡航累计偏置。"""
+        hc = HeadingController(HeadingControllerConfig(
+            enable_lateral_centering=True, kp_center=1.0, kp_heading=0.0,
+            kd_gyro=0.0))
+        s = hc.compute(corridor_heading=0.0, wall_confidence=1.0, wall_age_sec=0.0,
+                       odom_yaw=0.0, odom_age_sec=0.0, imu_wz=0.0, imu_age_sec=0.0,
+                       left_clearance=0.20, right_clearance=0.60, now_sec=1.0,
+                       post_turn_realign=True)
         assert s.wz_reference < 0.0  # closer to left wall → move right
+
+    def test_abnormal_yaw_rate_is_invalid_for_planner(self):
+        """异常偏航速率必须切断候选轨迹输入，交给安全仲裁输出零速度。"""
+        hc = HeadingController(HeadingControllerConfig(max_abs_imu_wz=1.0))
+        s = hc.compute(corridor_heading=0.0, wall_confidence=1.0, wall_age_sec=0.0,
+                       odom_yaw=0.0, odom_age_sec=0.0, imu_wz=1.2, imu_age_sec=0.0,
+                       left_clearance=1.0, right_clearance=1.0, now_sec=1.0)
+        assert not s.valid and s.abnormal_yaw_rate and s.reason == 'imu_yaw_rate_excess'
 
     def test_odom_stale(self):
         hc = HeadingController(HeadingControllerConfig(odom_max_age_sec=0.10))
@@ -193,24 +213,32 @@ class TestJointHealthGuard:
 
 # ============== Stop Bias Estimator ==============
 class TestStopBiasEstimator:
+    def test_disabled_by_default_never_collects_or_feedforwards(self):
+        """停稳统计是可选实验功能，默认不能暗中改变下一段控制目标。"""
+        sbe = StopBiasEstimator(StopBiasConfig())
+        sbe.record_stop(0.0, 0.0, 0.05, 0.5, 35.0, 35.0, 1.0, 1.0)
+        target, applied = sbe.get_compensation_angle(0.3)
+        assert sbe.sample_count == 0 and sbe.get_estimate().reason == 'disabled'
+        assert target == 0.3 and not applied
+
     def test_insufficient_samples(self):
-        sbe = StopBiasEstimator(StopBiasConfig(min_samples=10))
+        sbe = StopBiasEstimator(StopBiasConfig(enabled=True, min_samples=10))
         for i in range(5): sbe.record_stop(0.0, 0.0, 0.02, 0.5, 35.0, 35.0, 1.0, 1.0)
         est = sbe.get_estimate()
         assert est is not None and not est.enabled and est.sample_count == 5
 
     def test_enabled_with_stable_data(self):
-        sbe = StopBiasEstimator(StopBiasConfig(min_samples=10, max_std_dev_deg=5.0, direction_stability_threshold=0.6))
+        sbe = StopBiasEstimator(StopBiasConfig(enabled=True, min_samples=10, max_std_dev_deg=5.0, direction_stability_threshold=0.6))
         for i in range(12): sbe.record_stop(0.0, 0.0, 0.05 + (i % 3) * 0.002, 0.5, 35.0, 35.0, 1.0, 1.0)
         assert sbe.get_estimate().enabled and sbe.get_estimate().bias_rad > 0.0
 
     def test_unstable_not_enabled(self):
-        sbe = StopBiasEstimator(StopBiasConfig(min_samples=10, direction_stability_threshold=0.8))
+        sbe = StopBiasEstimator(StopBiasConfig(enabled=True, min_samples=10, direction_stability_threshold=0.8))
         for i in range(12): sbe.record_stop(0.0, 0.0, 0.05 if i % 2 == 0 else -0.05, 0.5, 35.0, 35.0, 1.0, 1.0)
         assert not sbe.get_estimate().enabled
 
     def test_compensation_reduces_error(self):
-        sbe = StopBiasEstimator(StopBiasConfig(min_samples=10, compensation_ratio=0.30))
+        sbe = StopBiasEstimator(StopBiasConfig(enabled=True, feedforward_enabled=True, min_samples=10, compensation_ratio=0.30))
         for i in range(12): sbe.record_stop(0.0, 0.0, 0.05 + _random() * 0.005, 0.5, 35.0, 35.0, 1.0, 1.0)
         if sbe.get_estimate().enabled:
             pre, applied = sbe.get_compensation_angle(0.0)
@@ -224,7 +252,7 @@ class TestStopBiasEstimator:
         assert sbe.classify_final_error(math.radians(6.0))[0] == 'fault_stop'
 
     def test_reset(self):
-        sbe = StopBiasEstimator(StopBiasConfig(min_samples=10))
+        sbe = StopBiasEstimator(StopBiasConfig(enabled=True, min_samples=10))
         for i in range(15): sbe.record_stop(0.0, 0.0, 0.05, 0.5, 35.0, 35.0, 1.0, 1.0)
         sbe.reset()
         assert sbe.sample_count == 0 and sbe.get_estimate() is None

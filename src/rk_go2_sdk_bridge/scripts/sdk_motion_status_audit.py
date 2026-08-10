@@ -39,7 +39,7 @@ class StatusAuditNode(Node):
 
 
 def summarize(statuses, expected_server_instance_id):
-    """验证启动停车、零命令停车、序号和 MOVE=0 的闭环合同。"""
+    """验证人工经典签名、启动停车、零命令停车及 MOVE=0 的闭环合同。"""
     startup = [
         status for status in statuses
         if status['event'] == 'STARTUP_STOP' and status['ret'] == 0
@@ -48,9 +48,16 @@ def summarize(statuses, expected_server_instance_id):
         status for status in statuses
         if status['event'] == 'STOP_MOVE' and status['ret'] == 0
     ]
+    classic_verified = [
+        status for status in statuses
+        if status['event'] == 'CLASSIC_VERIFIED' and status['ret'] == 0
+    ]
     move = [status for status in statuses if status['event'] == 'MOVE']
     errors = [status for status in statuses if status['event'] == 'SDK_ERROR']
     startup_sequence = startup[-1]['sequence'] if startup else 0
+    classic_verified_sequence = (
+        classic_verified[-1]['sequence'] if classic_verified else 0
+    )
     zero_sequence = stop[-1]['sequence'] if stop else 0
     sequences = [status['sequence'] for status in statuses]
     monotonic = all(
@@ -59,8 +66,9 @@ def summarize(statuses, expected_server_instance_id):
     )
     success = (
         bool(startup)
+        and bool(classic_verified)
         and bool(stop)
-        and zero_sequence > startup_sequence
+        and classic_verified_sequence < startup_sequence < zero_sequence
         and not move
         and not errors
         and monotonic
@@ -70,6 +78,7 @@ def summarize(statuses, expected_server_instance_id):
         'server_instance_id': expected_server_instance_id,
         'status_count': len(statuses),
         'startup_sequence': startup_sequence,
+        'classic_verified_sequence': classic_verified_sequence,
         'zero_sequence': zero_sequence,
         'move_count': len(move),
         'sdk_error_count': len(errors),

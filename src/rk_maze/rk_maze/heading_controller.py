@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""F7: LiDAR wall-line + Odom + IMU heading fusion controller.
+"""轻量航向稳定器：墙线重对齐、IMU 阻尼与异常偏航保护。
 
-Computes wz_reference from:
-  wz_ref = K_heading * heading_error + K_center * lateral_error - K_gyro * imu_wz
-
-The heading reference is primarily from LiDAR wall lines (corridor_heading).
-Odom provides short-term yaw tracking and relative displacement.
-IMU angular_velocity.z provides fast yaw damping and overshoot suppression.
-
-Key rule: heading controller produces wz_reference as INPUT to the planner.
-It MUST NOT modify the selected candidate's wz after planning.
+该模块不再试图以单侧墙距长期“纠正左偏/右偏”。巡航只使用可信墙线的
+航向误差；侧向居中仅能在转弯后的短暂重捕获阶段显式启用。IMU 只承担
+yaw-rate 阻尼和异常偏航保护，最终轨迹仍由 planner 的碰撞检查决定。
 """
 
 import math
@@ -23,7 +17,7 @@ class HeadingControllerConfig:
 
     # PD gains
     kp_heading: float = 1.5        # proportional to heading error
-    kp_center: float = 0.8         # proportional to lateral (center) error
+    kp_center: float = 0.0         # 默认关闭：不以墙距差持续制造偏航
     kd_gyro: float = 0.3           # derivative: IMU gyro damping
     ki_heading: float = 0.0        # integral (disabled in v1)
 
@@ -31,6 +25,10 @@ class HeadingControllerConfig:
     max_wz: float = 0.50           # rad/s — absolute cap on wz reference
     max_wz_rate: float = 0.30      # rad/s² — max change in wz per second
     deadband_deg: float = 1.5      # heading error deadband in degrees
+    post_turn_kp_heading: float = 0.8
+    post_turn_max_wz: float = 0.20
+    enable_lateral_centering: bool = False
+    max_abs_imu_wz: float = 1.50   # 超过正常转弯范围即拒绝给规划器候选
 
     # Confidence gates
     min_wall_confidence: float = 0.4    # wall line confidence threshold
@@ -60,10 +58,11 @@ class HeadingState:
     heading_component: float = 0.0
     center_component: float = 0.0
     gyro_component: float = 0.0
+    abnormal_yaw_rate: bool = False
 
 
 class HeadingController:
-    """LiDAR/Odom/IMU heading fusion with gyro damping."""
+    """只输出受限航向参考；输入失真时 fail-closed，不生成补偿性转向。"""
 
     def __init__(self, config: HeadingControllerConfig):
         self._config = config
@@ -85,6 +84,7 @@ class HeadingController:
         right_clearance: float,
         now_sec: float,
         in_turn: bool = False,
+        post_turn_realign: bool = False,
     ) -> HeadingState:
         """Compute wz_reference from fused sensor inputs."""
 
@@ -103,10 +103,14 @@ class HeadingController:
             state.reason = 'odom_stale'
             state.stale = True
             return state
-        # IMU is optional: missing/old IMU → PD-only mode (no gyro damping).
-        # Only odom staleness is a hard fault because heading error needs odom_yaw.
+        # IMU 暂时不可用时不猜测角速度；全局安全仲裁仍会把 IMU stale 当作停止条件。
         if imu_stale or not math.isfinite(imu_wz):
             imu_wz = 0.0  # fallback: no gyro damping
+        elif abs(imu_wz) > self._config.max_abs_imu_wz:
+            # 异常 yaw-rate 可能来自跌倒、碰撞或坐标约定错误，绝不能继续叠加墙线补偿。
+            state.reason = 'imu_yaw_rate_excess'
+            state.abnormal_yaw_rate = True
+            return state
 
         # ---- NaN/Inf protection ----
         if not math.isfinite(odom_yaw):
@@ -143,13 +147,16 @@ class HeadingController:
             heading_error = 0.0
             heading_error_deg = 0.0
 
-        # ---- Lateral (center) error ----
+        # ---- 侧向误差只服务于转弯后重对齐 ----
         lateral_error = 0.0
-        if math.isfinite(left_clearance) and math.isfinite(right_clearance):
+        if (post_turn_realign and self._config.enable_lateral_centering
+                and math.isfinite(left_clearance) and math.isfinite(right_clearance)):
             lateral_error = (left_clearance - right_clearance) / 2.0
 
         # ---- Compute wz components ----
-        heading_component = self._config.kp_heading * heading_error
+        heading_gain = (self._config.post_turn_kp_heading if post_turn_realign
+                        else self._config.kp_heading)
+        heading_component = heading_gain * heading_error
         center_component = self._config.kp_center * lateral_error
         gyro_component = -self._config.kd_gyro * imu_wz
 
@@ -168,7 +175,9 @@ class HeadingController:
         raw_wz = heading_component + center_component + gyro_component
 
         # ---- Wz limiting ----
-        raw_wz = max(-self._config.max_wz, min(self._config.max_wz, raw_wz))
+        max_wz = (min(self._config.max_wz, self._config.post_turn_max_wz)
+                  if post_turn_realign else self._config.max_wz)
+        raw_wz = max(-max_wz, min(max_wz, raw_wz))
 
         # ---- Wz rate limiting ----
         if self._prev_time > 0.0:

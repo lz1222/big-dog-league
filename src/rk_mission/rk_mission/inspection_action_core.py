@@ -327,7 +327,7 @@ class InspectionActionCore:
         return self._lock_held
 
     def request(self, request, now):
-        """接收一个显式请求；重复请求不重启已运行或已完成的动作。"""
+        """接收请求后先申请 gait lock，确保识别本身发生在静止姿态。"""
         now = finite_float(now, 'now', nonnegative=True)
         if not isinstance(request, InspectionActionRequest):
             raise InspectionActionProtocolError(
@@ -353,7 +353,9 @@ class InspectionActionCore:
         self.action = request.action
         self.state = ARMED
         self.active = True
-        return self._event('inspection_request_accepted')
+        return self._event(
+            'inspection_request_accepted', acquire_gait_lock=True
+        )
 
     def arm(self, run_id, request_id, now):
         """开始观察当前请求之后的检测帧，阻断请求前的旧检测。"""
@@ -398,14 +400,26 @@ class InspectionActionCore:
         if self._candidate_count < self.config.sign_confirm_frames:
             return None
 
+        if self._lock_held:
+            # 红圆正式链路已在识别前锁定；确认目标动作后仍需重新收集
+            # 最终零速度样本，不能复用识别前的停车证据。
+            self.state = WAIT_ZERO
+            self._zero_deadline = now + self.config.final_zero_timeout_sec
+            self._final_zero_streak = 0
+            self._last_final_cmd_time = None
+            self._last_final_cmd_zero = False
+            return self._event('stable_warning_sign_confirmed_lock_held')
         self.state = COMMAND_READY
         return self._event(
             'stable_warning_sign_confirmed', acquire_gait_lock=True
         )
 
     def lock_acquired(self, run_id, request_id, now):
-        """仅在 gait lock 发布成功后开始统计最终速度归零样本。"""
+        """记录预锁或兼容识别后锁；两种路径都不允许带速度执行。"""
         now = finite_float(now, 'now', nonnegative=True)
+        if self._matches(run_id, request_id, ARMED):
+            self._lock_held = True
+            return self._event('gait_lock_acquired_before_sign')
         if not self._matches(run_id, request_id, COMMAND_READY):
             return None
         self._lock_held = True
@@ -418,7 +432,10 @@ class InspectionActionCore:
 
     def lock_failed(self, run_id, request_id, reason):
         """锁发布失败时不执行 SDK，并发出一次 best-effort 解锁请求。"""
-        if not self._matches(run_id, request_id, COMMAND_READY):
+        if not (
+            self._matches(run_id, request_id, ARMED)
+            or self._matches(run_id, request_id, COMMAND_READY)
+        ):
             return None
         self._lock_held = True
         return self._finish(
@@ -587,7 +604,21 @@ class InspectionActionCore:
         self.active = False
         # helper 线程拥有进程组；它报告 reap 完成前不能解除控制权锁。
         wait_for_cleanup = self._helper_cleanup_pending
-        release_gait_lock = self._lock_held and not wait_for_cleanup
+        # ClassicWalk handback 有独立失败码；该动作后的锁绝不能因 helper
+        # 已回收而提前释放。其它既有失败路径维持原有路线级恢复语义。
+        classic_walk_handback_failed = (
+            'classic_walk_handback_failed' in str(reason)
+        )
+        # 识别超时仍停在检查位；只有显式 mission stop/reset 才可解除该锁。
+        inspection_timeout_lock_held = (
+            state == TIMEOUT and 'sign_wait_timeout' in str(reason)
+        )
+        release_gait_lock = (
+            self._lock_held
+            and not wait_for_cleanup
+            and not classic_walk_handback_failed
+            and not inspection_timeout_lock_held
+        )
         if release_gait_lock:
             self._lock_held = False
         return self._event(

@@ -37,8 +37,17 @@ def generate_launch_description():
                 'enable_depth': True,
                 'enable_gyro': False,
                 'enable_accel': False,
+                # 深度生成在设备内部仍会使用双目红外，但抓取链路只消费彩色、
+                # 对齐深度和相机内参；关闭 Infra ROS 发布可减少图像拷贝与 DDS 压力。
+                'enable_infra1': False,
+                'enable_infra2': False,
+                'pointcloud.enable': False,
+                'enable_sync': False,
                 'rgb_camera.profile': '640x480x15',
                 'depth_module.profile': '640x480x15',
+                # D435i 当前固件不接受 wrapper 默认的自动档值 3；显式关闭
+                # 工频补偿以避免启动期反复重配流。现场若出现灯光频闪再按环境设为 1/2。
+                'rgb_camera.power_line_frequency': 0,
                 'align_depth.enable': True,
             }],
         ),

@@ -11,7 +11,12 @@ realtime_maze_controller:
     enable_motion: false
     armed: false
     kp_heading: 1.5
-    kp_center: 0.8
+    # 巡航不持续以单侧墙距纠偏；只允许转弯后、显式开启的轻量重对齐。
+    kp_center: 0.0
+    enable_lateral_centering: false
+    post_turn_kp_heading: 0.8
+    post_turn_max_wz: 0.20
+    max_abs_imu_wz: 1.50
     kd_gyro: 0.3
     ki_heading: 0.0
     max_wz: 0.50
@@ -30,6 +35,9 @@ realtime_maze_controller:
     corridor_slow_vx: 0.15
     delta_wz: 0.05
     allow_in_place_rotation: false
+    # 停稳偏差统计/前馈均为实验功能；默认旁路，不能影响目标 yaw。
+    stop_bias_enabled: false
+    stop_feedforward_enabled: false
     perception_rate_hz: 15.0
     planning_rate_hz: 12.0
     control_rate_hz: 20.0

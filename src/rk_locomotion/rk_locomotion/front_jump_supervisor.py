@@ -1018,6 +1018,7 @@ class _GoalContext:
     helper_path: str = ''
     sdk_request_may_have_been_sent: bool = False
     sdk_command_accepted: bool = False
+    classic_walk_handback_failed: bool = False
     post_settle_completed: bool = False
     helper_process: object = None
     helper_reaped: bool = False
@@ -1903,6 +1904,9 @@ class FrontJumpSupervisor:
                     and final_zero_clean
                     and guard_cleanup_clean
                     and not context.guard_update_failed
+                    # helper 的专用 42 退出码表示 ClassicWalk handback 失败。
+                    # 该场景必须保持锁，普通特殊动作失败仍沿用既有恢复策略。
+                    and not context.classic_walk_handback_failed
                 ):
                     try:
                         lock_result = self._publish_lock_callback(False)
@@ -2479,6 +2483,12 @@ class FrontJumpSupervisor:
                     elapsed_sec=elapsed,
                 )
                 if process_result.return_code != 0:
+                    if process_result.return_code == 42:
+                        context.classic_walk_handback_failed = True
+                        raise _FlowExit(
+                            'abort', context.stage,
+                            'classic_walk_handback_failed',
+                        )
                     raise _FlowExit(
                         'abort',
                         context.stage,

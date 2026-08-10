@@ -63,9 +63,11 @@ class CompetitionReadinessNode(Node):
         self._read_parameters()
         self._last_messages = {}
         self._last_payload = {}
-        # SDK status 是调用完成后的事件流而非心跳。当前实例的 STARTUP_STOP
-        # 成功后保持启动资格；同实例 SDK_ERROR 则永久撤销资格直到新实例启动。
+        # SDK status 是调用完成后的事件流而非心跳。当前实例必须先完成
+        # CLASSIC_VERIFIED 与 STARTUP_STOP；同实例 SDK_ERROR 永久撤销资格。
+        # 前者是遥控器人工入口的已采样签名，不是未实现的 2049 RPC ACK。
         self._sdk_startup_status = None
+        self._sdk_classic_verified_status = None
         self._sdk_error_status = None
 
         self.status_publisher = self.create_publisher(
@@ -381,6 +383,13 @@ class CompetitionReadinessNode(Node):
             and self._valid_sdk_status_identity(status)
         ):
             self._sdk_startup_status = status
+            return
+        if (
+            status.get('event') == 'CLASSIC_VERIFIED'
+            and status.get('ret') == 0
+            and self._valid_sdk_status_identity(status)
+        ):
+            self._sdk_classic_verified_status = status
 
     def _fresh_value(self, name):
         record = self._last_messages.get(name)
@@ -987,7 +996,7 @@ class CompetitionReadinessNode(Node):
                 ),
             ))
             sdk_status_ok, sdk_status_detail = self._sdk_status_ready(
-                self._sdk_startup_status, None
+                self._sdk_startup_status, self._sdk_classic_verified_status,
             )
             checks.append(ReadinessCheck(
                 'SDK_MOTION_BACKEND_READY',
@@ -1015,8 +1024,8 @@ class CompetitionReadinessNode(Node):
             and receive_ns >= 1
         )
 
-    def _sdk_status_ready(self, status, _local_age):
-        """当前实例 STARTUP_STOP 是资格事件，长期 idle 不得被误判为 stale。"""
+    def _sdk_status_ready(self, startup_status, classic_verified_status):
+        """仅当前实例人工经典签名与 StopMove 成功时允许动态控制。"""
         if not self.sdk_server_instance_id:
             return False, 'expected_server_instance_id_empty'
         sdk_error = getattr(self, '_sdk_error_status', None)
@@ -1028,21 +1037,34 @@ class CompetitionReadinessNode(Node):
             return False, 'current_instance_sdk_error_sequence={}'.format(
                 sdk_error.get('sequence', 'unknown')
             )
-        if not isinstance(status, dict):
-            return False, 'missing_or_invalid_status'
+        if not isinstance(startup_status, dict):
+            return False, 'missing_or_invalid_startup_stop_status'
         if (
-            status.get('server_instance_id') != self.sdk_server_instance_id
-            or status.get('event') != 'STARTUP_STOP'
-            or status.get('ret') != 0
-            or not self._valid_sdk_status_identity(status)
+            startup_status.get('server_instance_id') != self.sdk_server_instance_id
+            or startup_status.get('event') != 'STARTUP_STOP'
+            or startup_status.get('ret') != 0
+            or not self._valid_sdk_status_identity(startup_status)
         ):
-            return False, 'instance_event_ret_or_sequence_mismatch'
+            return False, 'startup_stop_instance_event_ret_or_sequence_mismatch'
+        if not isinstance(classic_verified_status, dict):
+            return False, 'missing_or_invalid_classic_verified_status'
+        if (
+            classic_verified_status.get('server_instance_id')
+            != self.sdk_server_instance_id
+            or classic_verified_status.get('event') != 'CLASSIC_VERIFIED'
+            or classic_verified_status.get('ret') != 0
+            or not self._valid_sdk_status_identity(classic_verified_status)
+            or classic_verified_status.get('sequence', 0)
+            >= startup_status.get('sequence', 0)
+        ):
+            return False, 'classic_verified_instance_event_ret_or_sequence_mismatch'
         return True, (
-            'instance={} startup_qualified event={} ret=0 sequence={} '
+            'instance={} manual_classic_and_startup_qualified '
+            'classic_verified_sequence={} startup_sequence={} '
             'idle_event_age_not_a_liveness_failure'.format(
                 self.sdk_server_instance_id,
-                status['event'],
-                status['sequence'],
+                classic_verified_status['sequence'],
+                startup_status['sequence'],
             )
         )
 

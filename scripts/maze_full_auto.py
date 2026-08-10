@@ -15,7 +15,7 @@ ROUTE = ['LEFT', 'LEFT', 'RIGHT', 'RIGHT', 'LEFT']
 TURN_YAWS = {'LEFT': +90.0, 'RIGHT': -90.0}
 STOP_DIST = 0.35
 EMERG_DIST = 0.20
-VX_CRUISE = 0.30
+VX_CRUISE = 0.25
 VX_TURN = 0.10
 WZ_TURN = 0.50
 
@@ -27,7 +27,13 @@ cloud_data = []; odo_yaw = [0.0]; odo_yaw0 = [None]; imu_wz = [0.0]
 grid = LocalOccupancyGrid(LocalGridConfig())
 we = LidarWallExtractor(LocalGridConfig())
 hc = HeadingController(HeadingControllerConfig())
-ld = LidarDistanceConfig(min_cluster_points=3)
+ld = LidarDistanceConfig(
+    min_cluster_points=3,
+    ground_z_min_m=-0.50,
+    ground_z_max_m=-0.42,
+    obstacle_z_min_m=-0.40,
+    obstacle_z_max_m=0.80,
+)
 frame = [0]; last_log = [0.0]
 
 def on_c(msg):
@@ -82,14 +88,6 @@ while time.time() - t0 < 120:
         pts_raw = list(cloud_data); o_yaw = odo_yaw[0]; o_yaw0 = odo_yaw0[0]; i_wz = imu_wz[0]
     if not pts_raw: continue
 
-    # Raw front check EVERY frame for safety
-    raw_x = sorted([p[0] for p in pts_raw if abs(math.degrees(math.atan2(p[1], p[0]))) <= 30 and p[2] > 0.005 and math.isfinite(p[0])])
-    raw_front = (sorted(raw_x)[len(raw_x)//2] if raw_x else 1.0) - 0.28 - 0.03
-    if 0.01 < raw_front < 0.25:
-        tw = Twist()
-        with lock_twist: current_twist = tw
-        print(f'EMERG! front={raw_front:.2f}m'); time.sleep(0.3); continue
-
     if frame[0] % 2 != 0: continue
 
     pts = pts_raw
@@ -97,7 +95,7 @@ while time.time() - t0 < 120:
     now = time.time()
     cloud = [Point3D(x=p[0],y=p[1],z=p[2]) for p in pts]
     filt = voxel_downsample(filter_point_cloud(cloud, ld), 0.02)
-    fp = [p for p in filt if abs(math.degrees(math.atan2(p.y,p.x))) <= 30 and p.z > 0.005]
+    fp = [p for p in filt if abs(math.degrees(math.atan2(p.y,p.x))) <= 30 and p.z > -0.40]
     if not fp: continue
 
     sd = compute_hard_distance(fp, SECTOR_FRONT, ld, now, now)

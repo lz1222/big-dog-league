@@ -9,10 +9,16 @@ Phase 4: 巡线 + 红圆检测 + 终段巡线 (来自 1.py)
 Phase 5: 站立 + arm left + 白线检测单次跳跃 + 直走3s + 左转85° + 右平移2s
 
 用法:
-  python3 integrated_mission.py <networkInterface>
-  python3 integrated_mission.py eth0
+  python3 final_provincial_reference.py <networkInterface>
+  python3 final_provincial_reference.py --dds-probe-only wlan0
+  python3 final_provincial_reference.py --phase3-only eth0
+
+``--phase3-only`` 仅执行楼梯 Phase 3，并从 ROS 图像话题读取 USB 巡线相机。
+它不会启动 D435i、机械臂或其它比赛阶段，适合在隔离场地单独标定楼梯流程。
+``--dds-probe-only`` 只验证 Go2 运动状态 DDS，绝不调用任何运动接口。
 """
 
+import argparse
 import sys
 import os
 import time
@@ -27,10 +33,29 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-import pyrealsense2 as rs
 import cyclonedds.idl as idl
 import cyclonedds.idl.annotations as annotate
 import cyclonedds.idl.types as types
+
+try:
+    # 完整旧流程仍可使用 D435i；楼梯单独模式不依赖该 SDK。
+    import pyrealsense2 as rs
+except ImportError:
+    rs = None
+
+try:
+    import rclpy
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
+    from sensor_msgs.msg import Image
+except ImportError:
+    # 保持旧脚本在非 ROS 环境中的导入兼容性；单独模式启动时会给出明确错误。
+    rclpy = None
+    SingleThreadedExecutor = None
+    Node = object
+    qos_profile_sensor_data = None
+    Image = object
 
 from unitree_sdk2py.core.channel import (
     ChannelFactoryInitialize,
@@ -54,6 +79,81 @@ from unitree_sdk2py.go2.vui.vui_client import VuiClient
 @annotate.autoid("sequential")
 class ArmString_(idl.IdlStruct, typename="unitree_arm.msg.dds_.ArmString_"):
     data_: str
+
+
+if rclpy is not None:
+    class RosLineImageSubscriber(Node):
+        """缓存 USB 巡线相机的最新 BGR 图像，供旧 Phase 3 同步状态机读取。"""
+
+        def __init__(self, image_topic):
+            super().__init__('legacy_stairs_image_subscriber')
+            self._condition = threading.Condition()
+            self._latest_image = None
+            self._frame_sequence = 0
+            self._unsupported_encoding = ''
+            self.create_subscription(
+                Image, image_topic, self._on_image, qos_profile_sensor_data)
+            self.get_logger().info(
+                '订阅楼梯巡线图像: {}'.format(image_topic))
+
+        def _on_image(self, message):
+            """只接受无压缩常见编码，避免将未知字节布局误作控制输入。"""
+            image = self._to_bgr(message)
+            if image is None:
+                return
+            with self._condition:
+                self._latest_image = image
+                self._frame_sequence += 1
+                self._condition.notify_all()
+
+        def _to_bgr(self, message):
+            """按 ROS Image 的 step 解包，兼容行填充且不假定相机分辨率。"""
+            encoding = str(message.encoding).lower()
+            channels = {'bgr8': 3, 'rgb8': 3, 'mono8': 1}.get(encoding)
+            if channels is None:
+                if self._unsupported_encoding != encoding:
+                    self._unsupported_encoding = encoding
+                    self.get_logger().error(
+                        '不支持图像编码 {}；需要 bgr8、rgb8 或 mono8'.format(
+                            encoding))
+                return None
+            width = int(message.width)
+            height = int(message.height)
+            row_bytes = width * channels
+            step = int(message.step)
+            if width <= 0 or height <= 0 or step < row_bytes:
+                self.get_logger().error('收到无效图像尺寸或 step')
+                return None
+            raw = np.frombuffer(message.data, dtype=np.uint8)
+            if raw.size < height * step:
+                self.get_logger().error('图像数据长度不足，已丢弃该帧')
+                return None
+            rows = raw[:height * step].reshape(height, step)
+            image = rows[:, :row_bytes].reshape(height, width, channels)
+            if encoding == 'rgb8':
+                return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            if encoding == 'mono8':
+                return cv2.cvtColor(image[:, :, 0], cv2.COLOR_GRAY2BGR)
+            return image.copy()
+
+        def wait_for_next_image(self, previous_sequence, timeout_sec):
+            """等待新帧；返回 None 表示超时，调用方必须先发零速度保证失图安全。"""
+            deadline = time.monotonic() + max(0.0, float(timeout_sec))
+            with self._condition:
+                while self._frame_sequence <= previous_sequence:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.0:
+                        return previous_sequence, None
+                    self._condition.wait(remaining)
+                return self._frame_sequence, self._latest_image.copy()
+else:
+    class RosLineImageSubscriber:
+        """在未安装 ROS Python 依赖时延迟报错，避免影响旧 D435i 流程。"""
+
+        def __init__(self, image_topic):
+            del image_topic
+            raise RuntimeError(
+                '缺少 rclpy 或 sensor_msgs，无法订阅 USB 巡线相机话题')
 
 
 ARM_ACTIONS = {
@@ -278,6 +378,11 @@ P3_STAIRS_SPEED = 0.55          # 台阶前进速度 (m/s)
 P3_TURN_ANGLE_DEG = 79         # 台阶上转向角度 (度)
 P3_TURN_SPEED = 1.0            # 台阶上转向速度 (rad/s)
 P3_STAIRS_DOWN_DUR = 2.9       # 下台阶前进时长 (秒)
+P3_IMAGE_TIMEOUT_SEC = 1.0     # USB 相机超过此时间未出新帧时，楼梯巡线必须停止
+# USB 图像的 PID 时间步按实际到达间隔计算；限幅避免偶发调度抖动放大微分项。
+P3_USB_PID_DT_MIN_SEC = 0.04
+P3_USB_PID_DT_MAX_SEC = 0.20
+P3_USB_PID_DT_INITIAL_SEC = 1.0 / 15.0
 
 # ================================================================
 #  Phase 4 — 巡线 + 红圆检测 + 终段巡线
@@ -700,9 +805,11 @@ class TargetDetector:
 # 多阶段整合主控类
 # ============================================================
 class IntegratedMission:
-    """Go2 五阶段任务流水线"""
+    """Go2 五阶段任务流水线；可在隔离场地仅运行 Phase 3 楼梯流程。"""
 
-    def __init__(self, network_interface="", action_mode=1):
+    def __init__(self, network_interface="", action_mode=1,
+                 phase3_only=False, dds_probe_only=False,
+                 image_topic='/line_camera/image_raw'):
         # ---- 共享命令 ----
         self._cmd_lock = threading.Lock()
         self._target_vx = 0.0
@@ -715,6 +822,18 @@ class IntegratedMission:
 
         # ---- 动作模式 ----
         self._action_mode = action_mode
+        # 单独模式的图像来自 ROS USB 相机，不打开 D435i，也不允许机械臂初始化。
+        self._phase3_only = bool(phase3_only)
+        # DDS 探针复用单独模式的最小初始化，但只读取状态而不启动相机或步态。
+        self._dds_probe_only = bool(dds_probe_only)
+        self._line_image_topic = str(image_topic)
+        self._line_image_subscriber = None
+        self._line_image_executor = None
+        self._line_image_spin_thread = None
+        self._owns_rclpy_context = False
+        # 单独楼梯模式只有收到状态 DDS 后才允许调用任何 SportClient 方法，
+        # 连关机 StopMove 也不例外，避免离线 RPC 在失败路径上长时间阻塞。
+        self._sport_client_allowed = not self._phase3_only
 
         # ---- 运行标志 ----
         self._running = True
@@ -755,31 +874,38 @@ class IntegratedMission:
         self._sport.SetTimeout(10.0)
         self._sport.Init()
 
-        self._audio = AudioClient()
-        self._audio.SetTimeout(5.0)
-        self._audio.Init()
-        print("[INIT] AudioClient 初始化完成")
+        self._audio = None
+        self._vui = None
+        if not self._phase3_only:
+            self._audio = AudioClient()
+            self._audio.SetTimeout(5.0)
+            self._audio.Init()
+            print("[INIT] AudioClient 初始化完成")
 
-        # 前照灯控制 (通过 VuiClient)
-        self._vui = VuiClient()
-        self._vui.SetTimeout(5.0)
-        self._vui.Init()
-        print("[INIT] VuiClient 初始化完成")
+            # 前照灯控制 (通过 VuiClient)
+            self._vui = VuiClient()
+            self._vui.SetTimeout(5.0)
+            self._vui.Init()
+            print("[INIT] VuiClient 初始化完成")
 
         print(f"[INIT] 订阅状态主题: {TOPIC_HIGHSTATE}")
         self._state_suber = ChannelSubscriber(TOPIC_HIGHSTATE, SportModeState_)
         self._state_suber.Init(self._on_high_state, 10)
 
-        # 机械臂控制发布器
-        self._arm_pub = ChannelPublisher("rt/arm_Command", ArmString_)
-        self._arm_pub.Init()
+        self._arm_pub = None
         self._arm_seq = 0
-        print("[INIT] 机械臂发布器已初始化")
-        self._arm_enable()
-        # 使能后立即进入"夹住走"默认姿态，保持关节上力
-        self._arm_set_angles(ARM_ACTIONS["夹住走"])
-        time.sleep(0.3)
-        print("[ARM] 默认姿态: 夹住走")
+        if not self._phase3_only:
+            # 机械臂仅属于完整旧流程；楼梯调试绝不下发任何机械臂 DDS 指令。
+            self._arm_pub = ChannelPublisher("rt/arm_Command", ArmString_)
+            self._arm_pub.Init()
+            print("[INIT] 机械臂发布器已初始化")
+            self._arm_enable()
+            # 使能后立即进入"夹住走"默认姿态，保持关节上力
+            self._arm_set_angles(ARM_ACTIONS["夹住走"])
+            time.sleep(0.3)
+            print("[ARM] 默认姿态: 夹住走")
+        else:
+            print("[INIT] Phase 3 单独模式：跳过音频、灯光和机械臂初始化")
 
         print("[INIT] 等待首帧机器人状态...")
         waited = 0
@@ -787,7 +913,10 @@ class IntegratedMission:
             time.sleep(0.1)
             waited += 1
         if self._robot_state is None:
-            print("[WARN] 未收到机器人状态，里程计数据将不可用")
+            if self._phase3_only:
+                print("[ERROR] Phase 3 单独模式未收到机器人状态，将拒绝运动初始化")
+            else:
+                print("[WARN] 未收到机器人状态，里程计数据将不可用")
 
     # ================================================================
     # 机器人状态
@@ -870,6 +999,9 @@ class IntegratedMission:
     # 摄像头管理
     # ================================================================
     def _start_camera(self):
+        if rs is None:
+            raise RuntimeError(
+                '完整旧流程需要 pyrealsense2；楼梯单独模式请使用 --phase3-only')
         self._pipeline = rs.pipeline()
         config = rs.config()
         config.enable_stream(rs.stream.color, FRAME_WIDTH, FRAME_HEIGHT,
@@ -880,6 +1012,43 @@ class IntegratedMission:
         except RuntimeError as e:
             print(f"[ERROR] 摄像头启动失败: {e}")
             raise
+
+    def _start_ros_line_camera(self):
+        """订阅正式 USB 巡线话题，不直接打开设备以避免与 line_camera_node 争用。"""
+        if rclpy is None:
+            raise RuntimeError(
+                '楼梯单独模式需要 ROS 2 Python 环境（rclpy、sensor_msgs）')
+        if not self._line_image_topic:
+            raise RuntimeError('楼梯单独模式的 image_topic 不能为空')
+        self._owns_rclpy_context = not rclpy.ok()
+        if self._owns_rclpy_context:
+            rclpy.init()
+        self._line_image_executor = SingleThreadedExecutor()
+        self._line_image_subscriber = RosLineImageSubscriber(
+            self._line_image_topic)
+        self._line_image_executor.add_node(self._line_image_subscriber)
+        self._line_image_spin_thread = threading.Thread(
+            target=self._line_image_executor.spin,
+            daemon=True,
+            name='stairs_image_ros_spin',
+        )
+        self._line_image_spin_thread.start()
+        print('[CAM] 使用 ROS USB 巡线图像: {}'.format(self._line_image_topic))
+
+    def _stop_ros_line_camera(self):
+        """先停止 spin 再销毁订阅，防止关机期间继续向已释放对象派发回调。"""
+        if self._line_image_executor is not None:
+            self._line_image_executor.shutdown()
+        if self._line_image_spin_thread is not None:
+            self._line_image_spin_thread.join(timeout=1.0)
+        if self._line_image_subscriber is not None:
+            self._line_image_subscriber.destroy_node()
+        self._line_image_executor = None
+        self._line_image_spin_thread = None
+        self._line_image_subscriber = None
+        if self._owns_rclpy_context and rclpy is not None and rclpy.ok():
+            rclpy.shutdown()
+        self._owns_rclpy_context = False
 
     def _restart_camera(self):
         """重启摄像头管道 (Phase 4 TURN_RIGHT 后使用)"""
@@ -1503,6 +1672,10 @@ class IntegratedMission:
         state_start_yaw = self._get_yaw()
         black_confirm_count = 0
         center_confirm = 0
+        image_sequence = 0
+        image_timeout_reported = False
+        last_image_receive_time = None
+        pid_dt = CTRL_DT
         self._pid.reset()
 
         while self._running:
@@ -1518,7 +1691,7 @@ class IntegratedMission:
                         state = P3S_TURN_LEFT
                         state_start_time = time.time()
                         state_start_yaw = self._get_yaw()
-                        print("[P3] STAIRS_UP 完成 -> TURN_LEFT(60°)")
+                        print(f"[P3] STAIRS_UP 完成 -> TURN_LEFT({P3_TURN_ANGLE_DEG}°)")
 
                 elif state == P3S_TURN_LEFT:
                     current_yaw = self._get_yaw()
@@ -1531,7 +1704,7 @@ class IntegratedMission:
                         time.sleep(0.4)
                         state = P3S_STAIRS_DOWN
                         state_start_time = time.time()
-                        print("[P3] 左转60°完成 -> STAIRS_DOWN")
+                        print(f"[P3] 左转{P3_TURN_ANGLE_DEG}°完成 -> STAIRS_DOWN")
 
                 elif state == P3S_STAIRS_DOWN:
                     elapsed = time.time() - state_start_time
@@ -1550,14 +1723,43 @@ class IntegratedMission:
                 time.sleep(CTRL_DT)
                 continue
 
-            # 需要视觉处理的状态
-            frames = self._pipeline.wait_for_frames()
-            color_frame = frames.get_color_frame()
-            if not color_frame:
-                time.sleep(0.01)
-                continue
-
-            color_img = np.asanyarray(color_frame.get_data())
+            # 需要视觉处理的状态。单独模式只消费 ROS 图像话题，完整旧流程保持 D435i 输入。
+            if self._phase3_only:
+                image_sequence, color_img = (
+                    self._line_image_subscriber.wait_for_next_image(
+                        image_sequence, P3_IMAGE_TIMEOUT_SEC))
+                if color_img is None:
+                    # 相机断流时不能保留上一帧的前进命令，控制线程会持续发送零速度。
+                    self.set_command(0.0, 0.0, 0.0)
+                    # 断流期间的旧误差不能参与恢复后的微分计算，避免首帧突发转向。
+                    self._pid.reset()
+                    last_image_receive_time = None
+                    if not image_timeout_reported:
+                        print('[P3][SAFE] USB 巡线图像超时，已停止等待新帧')
+                        image_timeout_reported = True
+                    continue
+                image_receive_time = time.monotonic()
+                if last_image_receive_time is None:
+                    # 首帧没有可测量间隔，使用相机请求帧率对应的保守初值。
+                    pid_dt = P3_USB_PID_DT_INITIAL_SEC
+                else:
+                    raw_pid_dt = image_receive_time - last_image_receive_time
+                    pid_dt = float(np.clip(
+                        raw_pid_dt, P3_USB_PID_DT_MIN_SEC,
+                        P3_USB_PID_DT_MAX_SEC))
+                last_image_receive_time = image_receive_time
+                if image_timeout_reported:
+                    print('[P3] USB 巡线图像恢复')
+                    image_timeout_reported = False
+            else:
+                frames = self._pipeline.wait_for_frames()
+                color_frame = frames.get_color_frame()
+                if not color_frame:
+                    time.sleep(0.01)
+                    continue
+                color_img = np.asanyarray(color_frame.get_data())
+                # 旧 D435i 完整流程保持原有固定控制周期，避免改变既有比赛参数。
+                pid_dt = CTRL_DT
             gray = cv2.cvtColor(color_img, cv2.COLOR_BGR2GRAY)
             (found, offset, best_cx, best_cy, largest_area,
              _touches_left, _touches_right, _sig_count) = self._detector.detect(gray)
@@ -1601,7 +1803,7 @@ class IntegratedMission:
                     black_confirm_count = max(0, black_confirm_count - 1)
 
                 if found:
-                    yaw = self._pid.update(offset, CTRL_DT)
+                    yaw = self._pid.update(offset, pid_dt)
                     slow_coeff = 0.6 if abs(offset) > 0.5 else 1.0
                     vx = P3_BASE_SPEED * slow_coeff
                     self.set_command(vx, 0.0, yaw)
@@ -2229,14 +2431,24 @@ class IntegratedMission:
     # ================================================================
     def _shutdown(self):
         print("\n[SHUTDOWN] 停止所有系统...")
+        # 先清零目标速度，再停控制线程，避免线程退出前保留最后一条运动命令。
+        self.set_command(0.0, 0.0, 0.0)
         self._control_running = False
         time.sleep(0.3)
 
+        if self._sport_client_allowed:
+            try:
+                self._sport.StopMove()
+                time.sleep(0.4)
+            except Exception:
+                pass
+        else:
+            print("[SHUTDOWN] DDS 预检未通过，未发送 StopMove 请求")
+
         try:
-            self._sport.StopMove()
-            time.sleep(0.4)
-        except Exception:
-            pass
+            self._stop_ros_line_camera()
+        except Exception as e:
+            print(f"[WARN] ROS 巡线图像订阅关闭失败: {e}")
 
         try:
             if self._pipeline:
@@ -2252,22 +2464,38 @@ class IntegratedMission:
     # 顶层编排
     # ================================================================
     def run(self):
-        # 一次性机器人初始化
-        self._init_robot()
-
-        # 启动控制线程（在摄像头之前，确保尽快开始发送 Move(0,0,0)）
-        ctrl_thread = threading.Thread(
-            target=self._control_loop, daemon=True, name="ctrl")
-        ctrl_thread.start()
-
-        # 启动摄像头
-        self._start_camera()
-
-        # 初始化完成，允许控制线程发指令
-        self._init_done = True
-
-        # 顺序执行全部阶段
         try:
+            if self._dds_probe_only:
+                if self._robot_state is None:
+                    raise RuntimeError(
+                        '未收到 rt/sportmodestate，DDS 状态探针失败')
+                print('[DDS] rt/sportmodestate 已收到，DDS 状态探针通过')
+                return
+            if self._phase3_only and self._robot_state is None:
+                # 楼梯动作依赖步态、转向和安全停车；没有状态 DDS 时禁止发送站立命令。
+                raise RuntimeError(
+                    '未收到 rt/sportmodestate，拒绝执行 Phase 3 楼梯动作')
+            # 状态流已存在后才允许初始化和停止 SportClient，避免离线服务阻塞失败路径。
+            self._sport_client_allowed = True
+            # 一次性机器人初始化；控制线程在 _init_done 前不会发送非零目标速度。
+            self._init_robot()
+            ctrl_thread = threading.Thread(
+                target=self._control_loop, daemon=True, name="ctrl")
+            ctrl_thread.start()
+
+            # 楼梯单独模式订阅已运行的 USB 相机；完整流程才独占打开 D435i。
+            if self._phase3_only:
+                self._start_ros_line_camera()
+            else:
+                self._start_camera()
+            self._init_done = True
+
+            # 单独模式不经过其余比赛状态，也不会初始化机械臂或 D435i。
+            if self._phase3_only:
+                print('[INFO] Phase 3 单独模式启动：仅执行楼梯状态机')
+                self._phase3_stairs()
+                return
+
             self._phase1_track_and_jump()
             if not self._running:
                 print("[INFO] Phase 1 中被用户终止")
@@ -2310,44 +2538,69 @@ class IntegratedMission:
 def main():
     sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
 
-    if len(sys.argv) >= 2:
-        network_iface = sys.argv[1]
-    else:
+    parser = argparse.ArgumentParser(
+        description='Go2 旧比赛流程；--phase3-only 仅调试 USB 相机楼梯状态机。')
+    parser.add_argument(
+        'network_interface', nargs='?', default='',
+        help='Go2 DDS 网络接口，例如 eth0；省略时自动检测。')
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        '--phase3-only', action='store_true',
+        help='只执行楼梯 Phase 3，不启动 D435i、机械臂或其它阶段。')
+    mode_group.add_argument(
+        '--dds-probe-only', action='store_true',
+        help='只订阅 rt/sportmodestate 验证 DDS；绝不调用任何运动接口。')
+    parser.add_argument(
+        '--image-topic', default='/line_camera/image_raw',
+        help='Phase 3 单独模式订阅的 USB 巡线图像 ROS Topic。')
+    arguments = parser.parse_args()
+
+    network_iface = arguments.network_interface
+    if not network_iface:
         print("[INFO] 未指定网络接口，自动检测...")
         network_iface = auto_detect_interface()
         if network_iface is None:
-            print("用法: python3 integrated_mission.py <networkInterface>")
-            print("示例: python3 integrated_mission.py eth0")
+            print("用法: python3 final_provincial_reference.py [--phase3-only] <networkInterface>")
+            print("示例: python3 final_provincial_reference.py --phase3-only eth0")
             sys.exit(-1)
 
     print("=" * 60)
-    print("  Go2 多阶段整合任务")
-    print("  Phase 1: 循迹 + 白线检测 + 两次前跳")
-    print("  Phase 2: 迷宫定序运动")
-    print("  Phase 3: 巡线 + 黑区FreeWalk + 后退")
-    print("  Phase 4: 巡线 + 红圆检测 + 终段巡线")
-    print("  Phase 5: 站立 + 机械臂 + 白线单跳 + 线消失左转 + 右平移")
+    standalone_mode = arguments.phase3_only or arguments.dds_probe_only
+    if arguments.dds_probe_only:
+        print("  Go2 DDS 状态只读探针")
+        print("  已禁用: D435i、机械臂、相机、运动控制")
+    elif arguments.phase3_only:
+        print("  Go2 楼梯 Phase 3 单独调试")
+        print(f"  图像话题: {arguments.image_topic}")
+        print("  已禁用: D435i、机械臂、Phase 1/2/4/5")
+    else:
+        print("  Go2 多阶段整合任务")
+        print("  Phase 1: 循迹 + 白线检测 + 两次前跳")
+        print("  Phase 2: 迷宫定序运动")
+        print("  Phase 3: 巡线 + 黑区FreeWalk + 后退")
+        print("  Phase 4: 巡线 + 红圆检测 + 终段巡线")
+        print("  Phase 5: 站立 + 机械臂 + 白线单跳 + 线消失左转 + 右平移")
     print(f"  网络接口: {network_iface}")
     print("=" * 60)
-    print("  动作模式选择:")
-    print("    1: Phase5 arm_left   + Phase4 伸懒腰")
-    print("    2: Phase5 arm_left   + Phase4 打招呼")
-    print("    3: Phase5 arm_left   + Phase4 闪烁灯3次")
-    print("    4: Phase5 arm_right  + Phase4 伸懒腰")
-    print("    5: Phase5 arm_right  + Phase4 打招呼")
-    print("    6: Phase5 arm_right  + Phase4 闪烁灯3次")
-    print("=" * 60)
-
-    while True:
-        try:
-            action_mode = int(input("请输入动作模式(1-6): "))
-            if 1 <= action_mode <= 6:
-                break
-            print("输入无效，请输入1-6之间的数字")
-        except ValueError:
-            print("输入无效，请输入数字")
-
-    print(f"[INFO] 选择模式 {action_mode}")
+    action_mode = 1
+    if not standalone_mode:
+        print("  动作模式选择:")
+        print("    1: Phase5 arm_left   + Phase4 伸懒腰")
+        print("    2: Phase5 arm_left   + Phase4 打招呼")
+        print("    3: Phase5 arm_left   + Phase4 闪烁灯3次")
+        print("    4: Phase5 arm_right  + Phase4 伸懒腰")
+        print("    5: Phase5 arm_right  + Phase4 打招呼")
+        print("    6: Phase5 arm_right  + Phase4 闪烁灯3次")
+        print("=" * 60)
+        while True:
+            try:
+                action_mode = int(input("请输入动作模式(1-6): "))
+                if 1 <= action_mode <= 6:
+                    break
+                print("输入无效，请输入1-6之间的数字")
+            except ValueError:
+                print("输入无效，请输入数字")
+        print(f"[INFO] 选择模式 {action_mode}")
 
     # 信号处理
     def on_signal(sig, frame):
@@ -2358,13 +2611,25 @@ def main():
     signal.signal(signal.SIGTERM, on_signal)
 
     try:
-        mission = IntegratedMission(network_interface=network_iface, action_mode=action_mode)
+        mission = IntegratedMission(
+            network_interface=network_iface,
+            action_mode=action_mode,
+            phase3_only=standalone_mode,
+            dds_probe_only=arguments.dds_probe_only,
+            image_topic=arguments.image_topic,
+        )
     except Exception as e:
         print(f"\n[ERROR] 使用接口 {network_iface} 初始化失败: {e}")
         auto_iface = auto_detect_interface()
         if auto_iface and auto_iface != network_iface:
             print(f"[INFO] 重试接口: {auto_iface}")
-            mission = IntegratedMission(network_interface=auto_iface, action_mode=action_mode)
+            mission = IntegratedMission(
+                network_interface=auto_iface,
+                action_mode=action_mode,
+                phase3_only=standalone_mode,
+                dds_probe_only=arguments.dds_probe_only,
+                image_topic=arguments.image_topic,
+            )
         else:
             print("[FATAL] 无法找到可用的网络接口")
             sys.exit(-1)

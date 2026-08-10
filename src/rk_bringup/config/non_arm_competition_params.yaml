@@ -12,6 +12,7 @@ real_line_tracker_node:
     red_circle_topic: /perception/red_circle_detection
     stop_zone_topic: /perception/stop_zone_detection
     white_bar_topic: /perception/white_bar_detection
+    gait_control_lock_topic: /gait/control_lock
     corner_candidate_topic: /perception/corner_candidate
     enable_debug_image: false
     debug_log: false
@@ -119,6 +120,8 @@ line_follower_node:
     mission_start_topic: /mission/start
     mission_stop_topic: /mission/stop
     gait_control_lock_topic: /gait/control_lock
+    # 经典步态正式弯角：mission 独占转向，follower 丢线后只发布零候选。
+    corner_owner: mission
     control_rate_hz: 10.0
     debug_log: false
 
@@ -186,6 +189,11 @@ line_course_mission_node:
     white_bar_stage_status_topic: /mission/white_bar_stage_status
     inspection_action_request_topic: /mission/inspection_action_request
     inspection_action_status_topic: /mission/inspection_action_status
+    # 红圆转角只信任真实里程计 yaw；停车/经典步态确认由 SDK status 回执闭环。
+    odom_topic: /utlidar/robot_odom
+    final_cmd_topic: /navigation/cmd_vel
+    cmd_mux_status_topic: /control/cmd_mux_status
+    sdk_motion_status_topic: /go2/sdk_motion_status
     control_rate_hz: 10.0
     suggested_cmd_timeout_sec: 0.5
     detection_timeout_sec: 0.8
@@ -202,24 +210,47 @@ line_course_mission_node:
     align_lateral_gain: 0.20
     inspection_action_timeout_sec: 32.0
 
-    red_circle_confirm_frames: 3
-    red_circle_min_confidence: 0.55
-    red_circle_approach_speed: 0.04
-    red_circle_stop_area_ratio: 0.020
-    red_circle_stop_y_ratio: 0.65
-    red_circle_approach_timeout_sec: 8.0
+    # 不再使用代码默认 left。方向只取 detector 已输出的 left/right hint；
+    # 静态左右角审计未通过时，hint=unknown 会拒绝触发而不是猜测转向。
+    enable_corner_pre_turn: true
+    corner_owner: mission
+    corner_turn_direction: hint
+    corner_confirm_frames: 3
+    corner_min_confidence: 0.45
+    corner_vx: 0.03
+    corner_angular_z: 0.32
+    corner_min_time_sec: 0.8
+    corner_max_time_sec: 2.5
+    corner_cooldown_sec: 3.0
+
+    # TargetDetector 已在 real_line_tracker_node 中按省赛 HSV/形态学合同实现；
+    # 此处首帧可靠输出即锁存 T_RED_FIRST_SEEN，不另行调整检测算法。
+    red_circle_confirm_frames: 1  # 首次可靠红圆检测即确认
+    red_circle_min_confidence: 0.55  # 红圆检测最低置信度
+    red_approach_duration_sec: 3.9  # 看到红圆后继续巡线时长（秒）
+    red_turn_left_angle_deg: 83.0  # 红圆后的左转目标角度（度）
+    red_turn_left_angular_z: 1.0  # 左转角速度（弧度/秒，正值为左转）
+    # 独立于常规巡线速度。0.0 明确表示未现场标定，正式运行必须保持停车。
+    red_reverse_speed_mps: 0.25  # 后退速度（米/秒）；现场确认后填写正数
+    red_reverse_duration_sec: 1.2  # 后退有效运动时长（秒）；现场标定后填写正数
+    red_turn_right_angle_deg: 80.0  # 识别动作后的右转目标角度（度）
+    red_turn_right_angular_z: -1.0  # 右转角速度（弧度/秒，负值为右转）
+    red_yaw_timeout_sec: 8.0  # 单次红圆转向的 yaw 反馈超时（秒）
+    red_stop_confirm_timeout_sec: 3.0  # 后退结束后确认 StopMove 的超时（秒）
+    red_classic_recovery_timeout_sec: 8.0  # 等待 CLASSIC_VERIFIED 的超时（秒）
     # Deprecated: 正式路径由 inspection request 和稳定警示牌决定 SDK 动作。
     red_circle_sdk_action: ''
     red_circle_sdk_wait_sec: 0.0
     red_circle_action_timeout_sec: 15.0
-    turn_after_red_direction: left
-    turn_after_red_angle_deg: 90.0
-    turn_after_red_angular_z: 0.35
-    turn_after_red_timeout_sec: 5.0
 
-    # 白横线阶段来自显式 stage command；不再按白线次数推断。
+    # START/FINISH 共用 stable seen→stable lost→blind forward 状态机。
     white_bar_confirm_frames: 3
     white_bar_min_confidence: 0.55
+    # 候选标定值：START/FINISH 共用，表示累计有效 blind forward 时间。
+    white_bar_blind_forward_duration_sec: 1.3
+    # 必须与 line_follower_node.short_lost_timeout 保持一致。
+    white_bar_line_recovery_timeout_sec: 0.75
+    # DEPRECATED / rollback-only：新生产路径不读取这两项作速度或触发判定。
     white_bar_approach_speed: 0.03
     white_bar_stop_y_ratio: 0.70
     white_bar_executor_action_timeout_sec: 22.0
@@ -402,7 +433,8 @@ white_bar_stage_command_publisher:
     white_bar_stage_command_topic: /mission/white_bar_stage_command
     line_course_state_topic: /mission/line_course_state
     publisher_status_topic: /mission/white_bar_stage_command_publisher_status
-    finish_milestone_state: TURN_AFTER_RED
+    # 红圆右转完成后仍先做安全找线；仅 POST_INSPECTION 可 arm FINISH。
+    finish_milestone_state: POST_INSPECTION
     control_rate_hz: 10.0
     command_retry_sec: 0.5
     command_ack_timeout_sec: 5.0

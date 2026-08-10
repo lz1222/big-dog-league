@@ -36,22 +36,26 @@ def status(sequence, event, ret=0):
     }
 
 
-def test_audit_passes_only_startup_then_zero_stop():
+def test_audit_passes_only_verified_classic_then_startup_then_zero_stop():
     audit = _load_audit_module()
     result = audit.summarize([
-        status(1, 'STARTUP_STOP'), status(2, 'STOP_MOVE')
+        status(1, 'CLASSIC_VERIFIED'), status(2, 'STARTUP_STOP'),
+        status(3, 'STOP_MOVE')
     ], 'instance-a')
     assert result['success'] is True
-    assert result['startup_sequence'] == 1
-    assert result['zero_sequence'] == 2
+    assert result['classic_verified_sequence'] == 1
+    assert result['startup_sequence'] == 2
+    assert result['zero_sequence'] == 3
     assert result['move_count'] == 0
 
 
 def test_audit_rejects_move_error_or_missing_zero_ack():
     audit = _load_audit_module()
     for statuses in (
-        [status(1, 'STARTUP_STOP'), status(2, 'MOVE')],
-        [status(1, 'STARTUP_STOP'), status(2, 'SDK_ERROR', -1)],
-        [status(1, 'STARTUP_STOP')],
+        [status(1, 'CLASSIC_VERIFIED'), status(2, 'STARTUP_STOP'),
+         status(3, 'MOVE')],
+        [status(1, 'CLASSIC_VERIFIED'), status(2, 'STARTUP_STOP'),
+         status(3, 'SDK_ERROR', -1)],
+        [status(1, 'STARTUP_STOP'), status(2, 'STOP_MOVE')],
     ):
         assert audit.summarize(statuses, 'instance-a')['success'] is False

@@ -20,6 +20,9 @@ SHORT_LOST = 'SHORT_LOST'
 TURN_LOST_KEEP = 'TURN_LOST_KEEP'
 TURN_90 = 'TURN_90'
 SEARCH_LINE = 'SEARCH_LINE'
+# 正式弯角由 mission 接管时，follower 只能等待并持续发布零候选，
+# 绝不能同时进入自己的转向/搜索状态。
+CORNER_OWNER_WAIT = 'CORNER_OWNER_WAIT'
 STOP = 'STOP'
 
 RUNNING_STATES = {
@@ -28,6 +31,7 @@ RUNNING_STATES = {
     TURN_LOST_KEEP,
     TURN_90,
     SEARCH_LINE,
+    CORNER_OWNER_WAIT,
 }
 VALID_STATES = {
     WAIT_START,
@@ -37,6 +41,7 @@ VALID_STATES = {
     TURN_LOST_KEEP,
     TURN_90,
     SEARCH_LINE,
+    CORNER_OWNER_WAIT,
     STOP,
 }
 
@@ -62,6 +67,8 @@ class LineFollowerNode(Node):
         self.declare_parameter('mission_start_topic', '/mission/start')
         self.declare_parameter('mission_stop_topic', '/mission/stop')
         self.declare_parameter('gait_control_lock_topic', '/gait/control_lock')
+        # ``mission`` 表示正式 90° 弯由路线状态机独占；follower 只负责直线。
+        self.declare_parameter('corner_owner', 'follower')
         self.declare_parameter('control_rate_hz', 10.0)
         self.declare_parameter('debug_log', True)
 
@@ -130,6 +137,11 @@ class LineFollowerNode(Node):
         self.gait_control_lock_topic = self.string_parameter(
             'gait_control_lock_topic'
         )
+        self.corner_owner = self.string_parameter('corner_owner').lower()
+        if self.corner_owner not in ('follower', 'mission'):
+            raise ValueError(
+                'corner_owner must be either follower or mission'
+            )
 
         self.state = WAIT_START
         self.state_enter_time = self.get_clock().now()
@@ -139,6 +151,9 @@ class LineFollowerNode(Node):
         self.last_seen_line_time = None
         self.last_lateral_error = 0.0
         self.last_heading_error = 0.0
+        # 这三项分别对应未限幅、限幅死区后和滤波后的 yaw，供经典步态验收取证。
+        self.last_raw_angular_z = 0.0
+        self.last_target_angular_z = 0.0
         self.last_angular_z = 0.0
         self.last_turn_direction = 1
         self.expected_turn_direction = 1
@@ -212,6 +227,7 @@ class LineFollowerNode(Node):
             f'start_topic={self.mission_start_topic}, '
             f'stop_topic={self.mission_stop_topic}, '
             f'gait_control_lock_topic={self.gait_control_lock_topic}, '
+            f'corner_owner={self.corner_owner}, '
             f'initial_state={self.state}, '
             f'control_rate_hz={self.control_rate_hz:.1f}'
         )
@@ -474,6 +490,10 @@ class LineFollowerNode(Node):
             ):
                 self.log_line_recovered('line_recovered_from_stop', msg)
                 self.set_state(LINE_FOLLOW, 'line_recovered_from_stop', now)
+            elif self.state == CORNER_OWNER_WAIT:
+                # mission 的 ALIGN_TO_LINE 已确认新线；此处仅恢复直线跟踪。
+                self.log_line_recovered('corner_owner_line_recovered', msg)
+                self.set_state(LINE_FOLLOW, 'corner_owner_line_recovered', now)
         else:
             self.lost_line_count += 1
             if self.state == LINE_FOLLOW:
@@ -566,6 +586,9 @@ class LineFollowerNode(Node):
             cmd = self.command_turn_90(now)
         elif self.state == SEARCH_LINE:
             cmd = self.command_search_line(now)
+        elif self.state == CORNER_OWNER_WAIT:
+            # 由 mission/mux 输出角点命令；follower 不得产生任何转向候选。
+            cmd = Twist()
         else:
             self.set_state(STOP, f'unhandled_state_{self.state}', now)
             self.publish_zero(f'unhandled_state_{self.state}')
@@ -617,6 +640,8 @@ class LineFollowerNode(Node):
             cmd.linear.x = self.slow_speed
 
         self.last_angular_z = cmd.angular.z
+        self.last_raw_angular_z = raw_angular
+        self.last_target_angular_z = target_angular
         self.expected_turn_direction = self.direction_from_angular(
             self.last_angular_z
         )
@@ -624,6 +649,11 @@ class LineFollowerNode(Node):
 
     def enter_line_lost_state(self, msg, now):
         self.last_loss_reason = self.line_loss_reason(msg)
+        # 兼容离线单元测试和旧 launch：未声明时沿用原 follower 自恢复行为。
+        if getattr(self, 'corner_owner', 'follower') == 'mission':
+            self.stable_seen_count = 0
+            self.set_state(CORNER_OWNER_WAIT, self.last_loss_reason, now)
+            return Twist()
         if self.was_turning_before_loss():
             self.expected_turn_direction = self.direction_from_angular(
                 self.last_angular_z
@@ -803,6 +833,8 @@ class LineFollowerNode(Node):
         cmd = Twist()
         self.last_stop_reason = reason
         self.last_angular_z = 0.0
+        self.last_raw_angular_z = 0.0
+        self.last_target_angular_z = 0.0
         if self.last_published_cmd_is_zero and not force:
             self.log_control_debug(cmd, reason)
             return
@@ -912,6 +944,13 @@ class LineFollowerNode(Node):
                 f'sweep_period={self.search_sweep_period:.3f}s, '
                 f'reacquire_count={self.line_reacquire_count}, '
                 f'stable_seen_count={self.stable_seen_count}'
+            )
+            return
+        if new_state == CORNER_OWNER_WAIT:
+            self.get_logger().info(
+                'Enter state CORNER_OWNER_WAIT: '
+                f'reason={reason}, corner_owner=mission; '
+                'follower turn/search output disabled'
             )
             return
         if new_state == STOP:
@@ -1134,6 +1173,8 @@ class LineFollowerNode(Node):
             'ready': bool(
                 self.mission_started and self.state == LINE_FOLLOW
             ),
+            'corner_owner': self.corner_owner,
+            'corner_owner_wait': self.state == CORNER_OWNER_WAIT,
             'start_ready_confirm_count': int(
                 self.start_ready_gate.confirm_count
             ),
@@ -1151,6 +1192,9 @@ class LineFollowerNode(Node):
             'lost_line_count': int(self.lost_line_count),
             'suggested_vx': float(cmd.linear.x),
             'suggested_wz': float(cmd.angular.z),
+            'raw_angular_z': float(self.last_raw_angular_z),
+            'target_angular_z': float(self.last_target_angular_z),
+            'smoothed_angular_z': float(self.last_angular_z),
             'reason': str(stop_reason),
         }, separators=(',', ':'))
         try:

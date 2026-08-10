@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""F8: Stop deviation statistics and adaptive feedforward."""
+"""可选的停稳偏差统计；默认不采样、不前馈，不能影响迷宫运动。"""
 import math
 from collections import deque
 from dataclasses import dataclass, field
@@ -7,6 +7,9 @@ from typing import Optional, Tuple
 
 @dataclass
 class StopBiasConfig:
+    # 该实验功能必须双开关显式允许：统计与前馈分离，避免历史数据暗中改目标 yaw。
+    enabled: bool = False
+    feedforward_enabled: bool = False
     min_samples: int = 10; max_history: int = 50
     direction_stability_threshold: float = 0.7; max_std_dev_deg: float = 3.0
     compensation_ratio: float = 0.30; max_compensation_deg: float = 5.0
@@ -36,6 +39,9 @@ class StopBiasEstimator:
     def record_stop(self, yaw_before_stop, yaw_at_stop_request, yaw_after_final_settle,
                     settling_time_sec, rl_hip_temp, rr_hip_temp, rl_hip_tau, rr_hip_tau,
                     gait_type='', speed_m_s=0.0, action_type=''):
+        # 默认完全旁路，既不积累样本也不为将来运动制造隐式前馈。
+        if not self._config.enabled:
+            return
         stop_yaw_shift = yaw_after_final_settle - yaw_before_stop
         record = StopRecord(yaw_before_stop=yaw_before_stop, yaw_at_stop_request=yaw_at_stop_request,
                             yaw_after_final_settle=yaw_after_final_settle, stop_yaw_shift=stop_yaw_shift,
@@ -45,10 +51,15 @@ class StopBiasEstimator:
         self._records.append(record)
         self._update_estimate()
 
-    def get_estimate(self) -> Optional[StopBiasEstimate]: return self._estimate
+    def get_estimate(self) -> Optional[StopBiasEstimate]:
+        if not self._config.enabled:
+            return StopBiasEstimate(reason='disabled')
+        return self._estimate
 
     def get_compensation_angle(self, target_yaw: float) -> Tuple[float, bool]:
-        if self._estimate is None or not self._estimate.enabled: return target_yaw, False
+        if (not self._config.enabled or not self._config.feedforward_enabled
+                or self._estimate is None or not self._estimate.enabled):
+            return target_yaw, False
         compensation = self._config.compensation_ratio * self._estimate.bias_rad
         max_comp = math.radians(self._config.max_compensation_deg)
         compensation = max(-max_comp, min(max_comp, compensation))

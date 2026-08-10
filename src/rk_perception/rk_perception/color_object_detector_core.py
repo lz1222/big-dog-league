@@ -318,14 +318,17 @@ class ColorObjectDetectorCore(object):
             return depth_image.astype(np.float32, copy=False)
         raise ValueError('unsupported depth encoding: {0}'.format(encoding))
 
-    def build_color_mask(self, bgr_image, color):
-        """合并一个颜色的多个 HSV 区间，支持红色 Hue 跨界。"""
-        color_config = self.config['colors'].get(color)
-        if not color_config or not color_config.get('enabled', False):
-            return np.zeros(bgr_image.shape[:2], dtype=np.uint8)
+    def _hsv_image(self, bgr_image):
+        """每帧只做一次模糊与 BGR→HSV，避免多颜色检测重复消耗 CPU。"""
         kernel_size = self._odd_kernel(self.config['blur_kernel_size'])
         blurred = cv2.GaussianBlur(bgr_image, (kernel_size, kernel_size), 0)
-        hsv_image = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+        return cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+
+    def _build_color_mask_from_hsv(self, hsv_image, color):
+        """从同一帧 HSV 构建一个颜色掩膜，供多目标/多颜色共享预处理结果。"""
+        color_config = self.config['colors'].get(color)
+        if not color_config or not color_config.get('enabled', False):
+            return np.zeros(hsv_image.shape[:2], dtype=np.uint8)
         mask = np.zeros(hsv_image.shape[:2], dtype=np.uint8)
         for hsv_range in color_config['hsv_ranges']:
             lower = np.array(hsv_range['lower'], dtype=np.uint8)
@@ -336,29 +339,38 @@ class ColorObjectDetectorCore(object):
         return self._morphology(mask, cv2.MORPH_CLOSE,
                                 self.config['morph_close_kernel'])
 
-    def detect(self, bgr_image, depth_image, depth_encoding, camera_info,
-               allowed_colors=None):
-        """检测候选并优先选择最靠近预设抓取图像中心的有效目标。"""
+    def build_color_mask(self, bgr_image, color):
+        """兼容单颜色调用入口，合并一个颜色的多个 HSV 区间。"""
+        return self._build_color_mask_from_hsv(self._hsv_image(bgr_image), color)
+
+    def detect_all(self, bgr_image, depth_image, depth_encoding, camera_info,
+                   allowed_colors=None):
+        """返回画面内全部有效候选，供同色多物体定位阶段使用。
+
+        返回列表仍只处于相机光学坐标系，且不会根据二维轮廓伪造三维类别或
+        机械臂坐标。调用方必须在手眼标定完成后才能将结果用于抓取。
+        """
         if bgr_image is None or depth_image is None:
-            return DetectionCandidate(reason='missing_image')
+            return []
         if bgr_image.ndim != 3 or bgr_image.shape[2] != 3:
-            return DetectionCandidate(reason='invalid_color_image')
+            return []
         if depth_image.shape[:2] != bgr_image.shape[:2]:
-            return DetectionCandidate(reason='color_depth_size_mismatch')
+            return []
         if not camera_info or not self._valid_intrinsics(camera_info):
-            return DetectionCandidate(reason='missing_or_invalid_camera_info')
+            return []
         self._image_height, self._image_width = bgr_image.shape[:2]
         try:
             depth_m = self.depth_to_meters(depth_image, depth_encoding)
-        except ValueError as exc:
-            return DetectionCandidate(reason=str(exc))
+        except ValueError:
+            return []
 
         colors = allowed_colors if allowed_colors is not None else self.config['colors'].keys()
+        hsv_image = self._hsv_image(bgr_image)
         candidates = []
         for color in colors:
             if color not in self.config['colors']:
                 continue
-            mask = self.build_color_mask(bgr_image, color)
+            mask = self._build_color_mask_from_hsv(hsv_image, color)
             contours_info = cv2.findContours(
                 mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             contours = contours_info[-2]
@@ -367,10 +379,28 @@ class ColorObjectDetectorCore(object):
                     contour, mask, depth_m, camera_info, color)
                 if candidate.detected:
                     candidates.append(candidate)
-        if not candidates:
-            return DetectionCandidate(reason='no_valid_contour')
         candidates.sort(key=self._candidate_sort_key)
-        return candidates[0]
+        return candidates
+
+    def detect(self, bgr_image, depth_image, depth_encoding, camera_info,
+               allowed_colors=None):
+        """保持单目标兼容接口，按抓取图像中心从多候选中选出一个。"""
+        # 先保留明确失败原因，避免旧接口把输入错误误报成“没有轮廓”。
+        if bgr_image is None or depth_image is None:
+            return DetectionCandidate(reason='missing_image')
+        if bgr_image.ndim != 3 or bgr_image.shape[2] != 3:
+            return DetectionCandidate(reason='invalid_color_image')
+        if depth_image.shape[:2] != bgr_image.shape[:2]:
+            return DetectionCandidate(reason='color_depth_size_mismatch')
+        if not camera_info or not self._valid_intrinsics(camera_info):
+            return DetectionCandidate(reason='missing_or_invalid_camera_info')
+        try:
+            self.depth_to_meters(depth_image, depth_encoding)
+        except ValueError as exc:
+            return DetectionCandidate(reason=str(exc))
+        candidates = self.detect_all(
+            bgr_image, depth_image, depth_encoding, camera_info, allowed_colors)
+        return candidates[0] if candidates else DetectionCandidate(reason='no_valid_contour')
 
     def _candidate_from_contour(self, contour, mask, depth_m, camera_info, color):
         """以轮廓内部深度而非单个中心像素构建候选。"""

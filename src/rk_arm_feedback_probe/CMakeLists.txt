@@ -93,9 +93,45 @@ target_link_options(d1_command_probe PRIVATE "-Wl,--disable-new-dtags")
 
 add_executable(d1_command_event src/d1_command_event.cpp)
 
+# STARTUP_HOME_POSE 统计核心不链接 DDS；测试可在没有机械臂的环境运行。
+add_library(startup_home_validation_core STATIC
+  src/startup_home_validation.cpp
+  "${CMAKE_CURRENT_SOURCE_DIR}/../rk_arm/src/d1_feedback_parser.cpp")
+target_include_directories(startup_home_validation_core PUBLIC
+  include
+  "${CMAKE_CURRENT_SOURCE_DIR}/../rk_arm/include")
+
+# 该可执行文件只创建两个白名单 ChannelSubscriber，输出本地 CSV、报告与 YAML 草案。
+add_executable(d1_startup_home_validator
+  src/d1_startup_home_validator.cpp
+  "${UNITREE_D1_SDK_ROOT}/src/msg/ArmString_.cpp"
+  "${UNITREE_D1_SDK_ROOT}/src/msg/PubServoInfo_.cpp")
+target_include_directories(d1_startup_home_validator PRIVATE
+  include
+  "${CMAKE_CURRENT_SOURCE_DIR}/../rk_arm/include"
+  "${UNITREE_D1_SDK_ROOT}/src"
+  "${UNITREE_SDK2_ROOT}/include"
+  "${UNITREE_SDK2_ROOT}/thirdparty/include"
+  "${UNITREE_SDK2_ROOT}/thirdparty/include/ddscxx")
+target_link_libraries(d1_startup_home_validator PRIVATE
+  startup_home_validation_core
+  "${UNITREE_SDK2_LIBRARY}"
+  "${UNITREE_DDS_LIBRARY_DIR}/libddsc.so"
+  "${UNITREE_DDS_LIBRARY_DIR}/libddscxx.so"
+  Threads::Threads
+  rt)
+set_target_properties(d1_startup_home_validator PROPERTIES
+  BUILD_RPATH "${UNITREE_DDS_LIBRARY_DIR}"
+  INSTALL_RPATH "${UNITREE_DDS_LIBRARY_DIR}")
+target_link_options(d1_startup_home_validator PRIVATE "-Wl,--disable-new-dtags")
+
 if(BUILD_TESTING)
   add_executable(test_feedback_parser test/test_feedback_parser.cpp)
   target_link_libraries(test_feedback_parser PRIVATE feedback_recorder)
   target_include_directories(test_feedback_parser PRIVATE include)
   add_test(NAME feedback_parser COMMAND test_feedback_parser)
+  add_executable(test_startup_home_validation test/test_startup_home_validation.cpp)
+  target_link_libraries(test_startup_home_validation PRIVATE startup_home_validation_core)
+  target_include_directories(test_startup_home_validation PRIVATE include)
+  add_test(NAME startup_home_validation COMMAND test_startup_home_validation)
 endif()

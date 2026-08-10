@@ -10,6 +10,8 @@ color_object_detector:
     overlay_topic: /perception/debug/color_object_overlay
     mask_topic: /perception/debug/color_object_mask
     status_topic: /perception/debug/color_object_status
+    # 同色多物体的只读定位清单；不含任何机械臂控制字段。
+    object_list_topic: /perception/color_object_detections_json
     expected_color_topic: /mission/expected_object_color
     camera_frame: ''
     arm_base_frame: arm_base
@@ -98,8 +100,14 @@ color_object_detector:
       blue:
         enabled: true
         hsv_ranges:
-          - lower: [95, 100, 60]
+          - lower: [105, 100, 60]
             upper: [130, 255, 255]
+      cyan:
+        # 现场四个抓取样品为青蓝色；此范围必须再由 HSV 标定工具复核。
+        enabled: true
+        hsv_ranges:
+          - lower: [75, 70, 45]
+            upper: [105, 255, 255]
       green:
         enabled: true
         hsv_ranges:

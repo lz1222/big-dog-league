@@ -3,12 +3,15 @@
 #include "rk_go2_sdk_bridge/motion_status_protocol.hpp"
 
 #include <unitree/robot/channel/channel_factory.hpp>
+#include <unitree/robot/channel/channel_subscriber.hpp>
 #include <unitree/robot/go2/sport/sport_client.hpp>
+#include <unitree/idl/go2/SportModeState_.hpp>
 
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -16,6 +19,7 @@
 #include <iomanip>
 #include <iostream>
 #include <fstream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <sys/select.h>
@@ -33,6 +37,7 @@ using rk_go2_sdk_bridge::UdpMotionCore;
 
 volatile std::sig_atomic_t g_running = 1;
 
+constexpr const char* kSportModeStateTopic = "rt/sportmodestate";
 struct ServerConfig
 {
   std::string network_interface{"eth1"};
@@ -43,6 +48,8 @@ struct ServerConfig
   std::string server_instance_id;
   double rate_hz{20.0};
   double watchdog_sec{0.30};
+  // 仅接受本次启动入口传入的人工经典确认；不从 SportModeState 推断步态。
+  bool manual_classic_confirmed{false};
   MotionLimits limits{};
 };
 
@@ -93,6 +100,7 @@ void PrintUsage(const char* program)
       << "  --server-instance-id ID  Startup nonce copied to every status event\n"
       << "  --rate-hz HZ           SDK Move output rate (default: 20)\n"
       << "  --watchdog-sec SEC     Stop timeout (default: 0.30)\n"
+      << "  --manual-classic-confirmed BOOL  Explicit operator confirmation (true/false)\n"
       << "  --max-vx VALUE         Maximum |vx| (default: 0.25)\n"
       << "  --max-vy VALUE         Maximum |vy| (default: 0.05)\n"
       << "  --max-yaw VALUE        Maximum |yaw| (default: 0.60)\n"
@@ -129,6 +137,14 @@ ServerConfig ParseArguments(int argc, char** argv)
       config.rate_hz = ParsePositiveDouble(value, "rate_hz");
     } else if (option == "--watchdog-sec") {
       config.watchdog_sec = ParsePositiveDouble(value, "watchdog_sec");
+    } else if (option == "--manual-classic-confirmed") {
+      if (value == "true") {
+        config.manual_classic_confirmed = true;
+      } else if (value == "false") {
+        config.manual_classic_confirmed = false;
+      } else {
+        throw std::runtime_error("manual-classic-confirmed must be true or false");
+      }
     } else if (option == "--max-vx") {
       config.limits.max_vx = ParsePositiveDouble(value, "max_vx");
     } else if (option == "--max-vy") {
@@ -520,6 +536,18 @@ int RunServer(const ServerConfig& config)
   unitree::robot::ChannelFactory::Instance()->Init(
       0, config.network_interface);
 
+  MotionStatusPublisher status(config);
+  // 2049 ClassicWalk API 已在当前 server 返回 3203（未实现），正式链不再
+  // 调用或重试它。步态由操作者负责；本参数只记录其已确认状态，不能把
+  // SportModeState 的某个 error_code 误作跨固件的经典步态硬判据。
+  if (!config.manual_classic_confirmed) {
+    status.Publish("CLASSIC_VERIFIED", -1, "manual_classic_confirmation_missing",
+                   0.0, 0.0, 0.0);
+    throw std::runtime_error("MANUAL_CLASSIC_CONFIRMATION_REQUIRED");
+  }
+  status.Publish("CLASSIC_VERIFIED", 0,
+                 "manual_operator_confirmation_record_only", 0.0, 0.0, 0.0);
+
   // 正式控制链不申请 SDK motion lease；prearm 与已验收的 1003 路径均使用
   // false，避免默认构造语义随 SDK 版本变化而改变控制平面行为。
   unitree::robot::go2::SportClient client(false);
@@ -530,11 +558,10 @@ int RunServer(const ServerConfig& config)
             << "[SDK] time=" << WallTimeSeconds()
             << " SportClient::Init elapsed_sec="
             << (WallTimeSeconds() - init_started) << std::endl;
-  MotionStatusPublisher status(config);
   EmergencyStopGuard stop_guard(client, status);
 
-  // 启动时只清除残留运动，不调用 BalanceStand，避免擅自改变当前步态。
-  // UDP socket 必须在此成功之后才可 bind，失败路径没有任何运动输入出口。
+  // CLASSIC_VERIFIED 与 STARTUP_STOP 成功前 UDP socket 不得 bind，因此失败
+  // 路径不存在运动输入出口，也不允许以零速度 Move 绕过人工经典步态门。
   if (SendStartupStopWithRetry(client, status) != 0) {
     throw std::runtime_error("STARTUP_STOPMOVE_RETRY_EXHAUSTED");
   }
@@ -647,6 +674,9 @@ int main(int argc, char** argv)
     if (message.find("STARTUP_STOPMOVE_RETRY_EXHAUSTED") != std::string::npos) {
       std::cerr << "SDK_STARTUP_DIAG classification="
                 << "STARTUP_STOPMOVE_RETRY_EXHAUSTED" << std::endl;
+    } else if (message.find("CLASSIC_GAIT_NOT_VERIFIED") != std::string::npos) {
+      std::cerr << "SDK_STARTUP_DIAG classification=CLASSIC_GAIT_NOT_VERIFIED"
+                << std::endl;
     } else if (message.find("bind failed") != std::string::npos) {
       std::cerr << "SDK_STARTUP_DIAG classification=UDP_BIND_ERROR" << std::endl;
     }

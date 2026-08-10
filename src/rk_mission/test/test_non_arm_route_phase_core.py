@@ -248,6 +248,35 @@ def test_corner_requires_followup_alignment_but_does_not_skip_route_phase():
     assert aligned.route_phase == 'MID_ROUTE'
 
 
+def test_formal_corner_contract_declares_mission_owner_and_hint_direction():
+    """正式参数不能依赖默认左转，且 follower/mission 必须共享唯一 owner。"""
+    source_root = Path(__file__).resolve().parents[2]
+    formal = yaml.safe_load((
+        source_root / 'rk_bringup' / 'config'
+        / 'non_arm_competition_params.yaml'
+    ).read_text(encoding='utf-8'))
+
+    follower = formal['line_follower_node']['ros__parameters']
+    mission = formal['line_course_mission_node']['ros__parameters']
+    assert follower['corner_owner'] == 'mission'
+    assert mission['corner_owner'] == 'mission'
+    assert mission['corner_turn_direction'] == 'hint'
+
+
+def test_corner_hint_rejects_unknown_instead_of_defaulting_left():
+    """未知 hint 必须零速阻断；只有明确左右才可生成转向符号。"""
+    source_root = Path(__file__).resolve().parents[2]
+    source_text = (
+        source_root / 'rk_mission' / 'rk_mission'
+        / 'line_course_mission_node.py'
+    ).read_text(encoding='utf-8')
+
+    assert 'corner_direction_unknown' in source_text
+    assert "return direction if direction in ('left', 'right') else None" in (
+        source_text
+    )
+
+
 def test_timeout_chain_uses_real_front_jump_profile_totals_and_strict_margin():
     """22/26 秒严格大于真实 profile 与执行器时长加 3 秒。"""
     source_root = Path(__file__).resolve().parents[2] / 'rk_locomotion'
@@ -362,4 +391,43 @@ def test_line_course_source_exposes_required_route_state_and_no_static_red_sdk(
         assert "'{}'".format(field) in source
     assert 'self.red_circle_sdk_action' not in source
     assert "payload.get('mission_started') is True" in source
-    assert source.count('if not self._line_follower_is_ready(now):') >= 4
+    # 角点阶段明确移除该门：follower 丢线后会安全地进入
+    # CORNER_OWNER_WAIT，由 mission 继续唯一的预转控制。
+    assert source.count('if not self._line_follower_is_ready(now):') >= 3
+    assert 'CORNER_OWNER_WAIT' in source
+
+
+def test_red_arrival_contract_uses_follower_yaw_and_active_reverse_time():
+    """红圆正式链路不得回退为低速靠近或时间盲转。"""
+    source_root = Path(__file__).resolve().parents[2]
+    source = (
+        source_root / 'rk_mission' / 'rk_mission'
+        / 'line_course_mission_node.py'
+    ).read_text(encoding='utf-8')
+    formal = yaml.safe_load((
+        source_root / 'rk_bringup' / 'config'
+        / 'non_arm_competition_params.yaml'
+    ).read_text(encoding='utf-8'))
+    params = formal['line_course_mission_node']['ros__parameters']
+
+    for state in (
+        'RED_TARGET_SEARCH', 'RED_APPROACH', 'RED_TURN_LEFT',
+        'RED_REVERSE_APPROACH', 'RED_INSPECTION_PREP', 'RED_INSPECTION',
+        'RED_ACTION_EXECUTION', 'RED_CLASSIC_RECOVERY', 'RED_TURN_RIGHT',
+        'RED_REVERSE_NOT_CALIBRATED', 'RED_INSPECTION_TIMEOUT',
+    ):
+        assert "'{}'".format(state) in source
+    for field in (
+        'configured_duration', 'active_elapsed', 'wall_elapsed', 'remaining',
+    ):
+        assert "'{}'".format(field) in source
+    assert 'self._copy_suggested_cmd(now)' not in (
+        source[source.index('def _control_red_approach'):source.index(
+            'def _control_inspection_wait'
+        )]
+    )
+    assert 'self._normalize_angle(' in source
+    assert 'CLASSIC_VERIFIED' in source
+    assert params['red_approach_duration_sec'] == 3.9
+    assert params['red_reverse_duration_sec'] == 0.0
+    assert 'red_reverse_speed_mps' in params

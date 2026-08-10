@@ -130,6 +130,7 @@ install(PROGRAMS
   scripts/go2_sdk_server_runtime.py
   scripts/go2_control_plane_gate.py
   scripts/go2_control_plane_measure.py
+  scripts/stair_camera_gait_gate.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -193,15 +194,99 @@ if(unitree_sdk2_FOUND)
     src/go2_sdk_velocity_action.cpp
   )
   rk_configure_unitree_sdk_target(go2_sdk_velocity_action)
+  # 楼梯入口专用经典步态工具；不复用迷宫路线或其速度/转弯参数。
+  add_executable(go2_sdk_stair_classic_action
+    src/go2_sdk_stair_classic_action.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_stair_classic_action)
+  # 平地分级减速验证；与楼梯完整流程完全独立，默认不执行真机动作。
+  add_executable(go2_sdk_flat_deceleration_test
+    src/go2_sdk_flat_deceleration_test.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_flat_deceleration_test)
+  # 独立经典步态直行验证工具，默认 Dry Run，显式 --execute 才允许调用 SDK。
+  add_executable(go2_sdk_classic_walk_probe
+    src/go2_sdk_classic_walk_probe.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_classic_walk_probe)
+  # 独立构建已冻结的写死迷宫路线快照，避免后续调试改动影响该可复现实验版本。
+  add_executable(go2_sdk_maze_hardcoded_v1
+    ${CMAKE_CURRENT_SOURCE_DIR}/../测试代码/迷宫写死完美通过第一版.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_maze_hardcoded_v1)
   add_executable(go2_sdk_sport_state_monitor
     src/go2_sdk_sport_state_monitor.cpp
   )
   rk_configure_unitree_sdk_target(go2_sdk_sport_state_monitor)
+  # 逐字段保存完整 SportModeState；仅订阅，供步态签名离线比较。
+  add_executable(go2_sdk_sport_state_raw_capture
+    src/go2_sdk_sport_state_raw_capture.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_sport_state_raw_capture)
+  # 被动记录 APP/遥控器可能下发的高层 DDS 运动命令；不创建控制客户端。
+  add_executable(go2_sdk_sport_mode_command_observer
+    src/go2_sdk_sport_mode_command_observer.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_sport_mode_command_observer)
+  # 被动记录遥控器按键边沿，供人工步态切换路径取证；不包含控制发布者。
+  add_executable(go2_sdk_wireless_controller_observer
+    src/go2_sdk_wireless_controller_observer.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_wireless_controller_observer)
+  # 只读 RobotState RPC 诊断，禁止在此工具中引入任何动作客户端。
+  add_executable(go2_sdk_robot_state_probe
+    src/go2_sdk_robot_state_probe.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_robot_state_probe)
+  # 仅用于 Sport RPC 版本握手诊断；不包含任何动作调用。
+  add_executable(go2_sdk_sport_identity_probe
+    src/go2_sdk_sport_identity_probe.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_sport_identity_probe)
+  # AutoRecoverGet 是唯一允许的非运动 Sport Call，用于诊断 RPC 路径。
+  add_executable(go2_sdk_sport_autorecover_get_probe
+    src/go2_sdk_sport_autorecover_get_probe.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_sport_autorecover_get_probe)
+  # 被动订阅 Sport API request/response；可用过滤或全量观察，不创建 SDK Client。
+  add_executable(go2_sdk_sport_api_observer
+    src/go2_sdk_sport_api_observer.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_sport_api_observer)
+  # 单次 StopMove 仅供被动 DDS trace 关联，严禁在此工具中增加重试。
+  add_executable(go2_sdk_stopmove_trace_probe
+    src/go2_sdk_stopmove_trace_probe.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_stopmove_trace_probe)
+  # 独立 MotionSwitcher 只读 CheckMode probe。
+  add_executable(go2_sdk_motion_switcher_check_mode_probe
+    src/go2_sdk_motion_switcher_check_mode_probe.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_motion_switcher_check_mode_probe)
+  # 人工安全前提成立后使用的单次模式恢复步骤；不属于常规运动链路。
+  add_executable(go2_sdk_release_mode_once
+    src/go2_sdk_release_mode_once.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_release_mode_once)
+  add_executable(go2_sdk_sport_mode_switch_once
+    src/go2_sdk_sport_mode_switch_once.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_sport_mode_switch_once)
   # 正式启动前唯一的 motion ownership / sport responder 恢复门。
   add_executable(go2_motion_control_prearm
     src/go2_motion_control_prearm.cpp
   )
   rk_configure_unitree_sdk_target(go2_motion_control_prearm)
+  # 固定 normal 的一次性 mode 选择，避免任意模式名进入恢复流程。
+  add_executable(go2_sdk_select_normal_mode_once
+    src/go2_sdk_select_normal_mode_once.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_select_normal_mode_once)
+  # 省赛合同的唯一经典步态启动 backend；默认 dry-run，显式参数才调用 SDK。
+  add_executable(go2_sdk_competition_gait_manager
+    src/go2_sdk_competition_gait_manager.cpp
+  )
+  rk_configure_unitree_sdk_target(go2_sdk_competition_gait_manager)
   add_executable(fake_sdk_motion_helper
     src/fake_sdk_motion_helper.cpp
   )
@@ -212,8 +297,25 @@ if(unitree_sdk2_FOUND)
     go2_sdk_speed_sweep
     go2_sdk_motion_action
     go2_sdk_velocity_action
+    go2_sdk_stair_classic_action
+    go2_sdk_flat_deceleration_test
+    go2_sdk_classic_walk_probe
+    go2_sdk_maze_hardcoded_v1
     go2_sdk_sport_state_monitor
+    go2_sdk_sport_state_raw_capture
+    go2_sdk_sport_mode_command_observer
+    go2_sdk_wireless_controller_observer
+    go2_sdk_robot_state_probe
+    go2_sdk_sport_identity_probe
+    go2_sdk_sport_autorecover_get_probe
+    go2_sdk_sport_api_observer
+    go2_sdk_stopmove_trace_probe
+    go2_sdk_motion_switcher_check_mode_probe
+    go2_sdk_release_mode_once
+    go2_sdk_sport_mode_switch_once
     go2_motion_control_prearm
+    go2_sdk_select_normal_mode_once
+    go2_sdk_competition_gait_manager
     go2_front_camera_stream_helper
     fake_sdk_motion_helper
     DESTINATION lib/${PROJECT_NAME}

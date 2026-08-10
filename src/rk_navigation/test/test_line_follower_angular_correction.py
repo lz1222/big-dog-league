@@ -27,6 +27,8 @@ def make_follower(lateral_error, heading_error=0.0):
     follower.angular_deadband = 0.08
     follower.angular_smoothing_alpha = 0.22
     follower.last_angular_z = 0.0
+    follower.last_raw_angular_z = 0.0
+    follower.last_target_angular_z = 0.0
     follower.last_turn_direction = 1
     follower.default_turn_direction = 1
     follower.error_slow_threshold = 0.12
@@ -85,6 +87,35 @@ def test_smoothing_starts_at_formal_alpha_times_clamped_target():
 
     assert first_output == pytest.approx(0.0616)
     assert 0.0 < first_output < 0.28
+
+
+def test_formal_yaw_diagnostics_preserve_raw_target_and_smoothed_values():
+    """经典步态验收必须能分别记录 PID 原始、限幅目标与滤波输出。"""
+    follower = make_follower(lateral_error=-1.0)
+
+    output = follower.command_line_follow(now=None).angular.z
+
+    assert follower.last_raw_angular_z == pytest.approx(0.85)
+    assert follower.last_target_angular_z == pytest.approx(0.28)
+    assert output == pytest.approx(follower.last_angular_z)
+
+
+def test_mission_corner_owner_never_enters_follower_turn_or_search():
+    """mission 接管正式弯角后，follower 丢线只能等待并输出零候选。"""
+    follower = make_follower(lateral_error=0.0)
+    follower.corner_owner = 'mission'
+    follower.line_loss_reason = lambda message: 'line_not_visible'
+    follower.set_state = lambda state, reason, now: setattr(
+        follower, 'state', state
+    )
+    follower.stable_seen_count = 3
+
+    command = follower.enter_line_lost_state(object(), now=None)
+
+    assert follower.state == 'CORNER_OWNER_WAIT'
+    assert follower.stable_seen_count == 0
+    assert command.linear.x == 0.0
+    assert command.angular.z == 0.0
 
 
 def test_sustained_clamped_request_monotonically_converges_not_deadlocks():

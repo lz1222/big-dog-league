@@ -4,10 +4,10 @@ from __future__ import division
 
 import math
 import os
+import json
 
 import cv2
 import numpy as np
-from cv_bridge import CvBridge
 import message_filters
 import rclpy
 from rclpy.duration import Duration
@@ -69,6 +69,53 @@ def _debug_image_message(image, encoding):
     return message
 
 
+def _image_message_to_numpy(message, desired_encoding=None):
+    """按 ROS Image 的 step/字节序解码 D435i 图像，不依赖 cv_bridge。
+
+    本机 Foxy 的 cv_bridge 与 OpenCV 5 存在类型映射不一致。这里仅覆盖 D435i
+    RGB8、BGR8、16UC1 和 32FC1 输入；未知编码直接失败并由调用方发布状态，
+    不以错误深度或错误颜色继续定位。
+    """
+    encoding = (message.encoding or '').lower()
+    formats = {
+        'rgb8': (np.dtype(np.uint8), 3),
+        'bgr8': (np.dtype(np.uint8), 3),
+        '16uc1': (np.dtype('>u2') if message.is_bigendian else np.dtype('<u2'), 1),
+        'mono16': (np.dtype('>u2') if message.is_bigendian else np.dtype('<u2'), 1),
+        '32fc1': (np.dtype('>f4') if message.is_bigendian else np.dtype('<f4'), 1),
+    }
+    if encoding not in formats:
+        raise ValueError('unsupported image encoding: {0}'.format(message.encoding))
+    dtype, channels = formats[encoding]
+    itemsize = dtype.itemsize
+    required_step = int(message.width) * channels * itemsize
+    required_size = int(message.height) * int(message.step)
+    if (message.width <= 0 or message.height <= 0 or
+            message.step < required_step or len(message.data) < required_size):
+        raise ValueError(
+            'invalid image layout {0}x{1} step={2} encoding={3}'.format(
+                message.width, message.height, message.step, message.encoding))
+
+    # 先保留每行 padding，再提取像素部分；copy 使数组不依赖 ROS 消息生命周期。
+    raw = np.frombuffer(message.data, dtype=np.uint8, count=required_size)
+    rows = raw.reshape(int(message.height), int(message.step))[:, :required_step]
+    pixels = rows.copy().reshape(int(message.height), int(message.width),
+                                 channels * itemsize)
+    if channels == 1:
+        image = pixels.reshape(int(message.height), int(message.width), itemsize)
+        image = image.view(dtype).reshape(int(message.height), int(message.width))
+        # 运算使用本机字节序，避免大端相机时深度数值被错误解释。
+        return image.astype(np.float32 if encoding == '32fc1' else np.uint16,
+                            copy=False)
+
+    image = pixels.reshape(int(message.height), int(message.width), channels)
+    if desired_encoding == 'bgr8' and encoding == 'rgb8':
+        return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    if desired_encoding and desired_encoding != encoding:
+        raise ValueError('cannot convert {0} to {1}'.format(encoding, desired_encoding))
+    return image
+
+
 class ColorObjectDetectorNode(Node):
     """只订阅相机与任务颜色，不发布任何底盘或机械臂控制命令。"""
 
@@ -89,7 +136,6 @@ class ColorObjectDetectorNode(Node):
         self.core = ColorObjectDetectorCore(self.config)
         self.expected_color = 'none'
         self.last_candidate = None
-        self.bridge = CvBridge()
         self.tracker = ConfirmationTracker(
             self.config['confirm_frames'], self.config['lost_frames'],
             self.config['max_position_jump_m'], self.config['max_depth_jump_m'])
@@ -104,6 +150,8 @@ class ColorObjectDetectorNode(Node):
             Image, self.config['mask_topic'], 10)
         self.status_publisher = self.create_publisher(
             String, self.config['status_topic'], 10)
+        self.object_list_publisher = self.create_publisher(
+            String, self.config['object_list_topic'], 10)
         self.expected_color_subscription = self.create_subscription(
             String, self.config['expected_color_topic'], self._on_expected_color,
             qos_profile_sensor_data)
@@ -165,11 +213,11 @@ class ColorObjectDetectorNode(Node):
                 self._camera_frame(color_message, camera_info_message))
             return
         try:
-            color_image = self.bridge.imgmsg_to_cv2(color_message, 'bgr8')
-            depth_image = self.bridge.imgmsg_to_cv2(depth_message, 'passthrough')
+            color_image = _image_message_to_numpy(color_message, 'bgr8')
+            depth_image = _image_message_to_numpy(depth_message)
         except Exception as exc:
             self._publish_result(
-                color_message, DetectionCandidate(reason='cv_bridge_error:{0}'.format(exc)),
+                color_message, DetectionCandidate(reason='image_decode_error:{0}'.format(exc)),
                 False, False, False, '', None,
                 self._camera_frame(color_message, camera_info_message))
             return
@@ -185,9 +233,11 @@ class ColorObjectDetectorNode(Node):
             allowed_colors = [self.expected_color]
         else:
             allowed_colors = list(self.config['colors'].keys())
-        candidate = self.core.detect(
+        candidates = self.core.detect_all(
             color_image, depth_image, depth_message.encoding, camera_info,
             allowed_colors)
+        candidate = (candidates[0] if candidates else
+                     DetectionCandidate(reason='no_valid_contour'))
         self.last_candidate = candidate if candidate.detected else None
         stale = self._is_stale(color_message)
         if self.expected_color == 'none':
@@ -215,7 +265,8 @@ class ColorObjectDetectorNode(Node):
         self._publish_result(
             color_message, candidate, confirmed, grasp_ready, stale,
             reason, arm_position, self._camera_frame(
-                color_message, camera_info_message), color_image)
+                color_message, camera_info_message), color_image, candidates)
+        self._publish_object_list(color_message, candidates)
 
     def _is_stale(self, image_message):
         """使用输入图像时间判断失效，绝不以处理完成时间替代采集时间。"""
@@ -271,7 +322,7 @@ class ColorObjectDetectorNode(Node):
 
     def _publish_result(self, image_message, candidate, confirmed, grasp_ready,
                         stale, reason, arm_position, camera_frame,
-                        color_image=None):
+                        color_image=None, candidates=None):
         """在固定 topic 发布检测和可选调试图，消息头保持彩色图时间。"""
         result = ColorObjectDetection()
         result.header = image_message.header
@@ -303,11 +354,59 @@ class ColorObjectDetectorNode(Node):
         self.detection_publisher.publish(result)
         self.status_publisher.publish(String(data=reason))
         if self.config['publish_debug_image'] and color_image is not None:
-            self._publish_debug_images(image_message, color_image, candidate, result)
+            self._publish_debug_images(
+                image_message, color_image, candidate, result, candidates or [])
 
-    def _publish_debug_images(self, image_message, color_image, candidate, result):
+    def _publish_object_list(self, image_message, candidates):
+        """发布同色多物体的只读相机坐标清单，供标定与抓取规划人工核验。
+
+        JSON 不携带任何执行命令；shape 是二维投影线索，不能替代三维类别验证。
+        """
+        objects = []
+        for index, candidate in enumerate(candidates):
+            objects.append({
+                'index': index,
+                'color': candidate.color,
+                'shape_2d': candidate.shape,
+                'shape_confidence': round(float(candidate.shape_confidence), 4),
+                'pixel': {'u': int(candidate.center_x), 'v': int(candidate.center_y)},
+                'depth_m': round(float(candidate.depth_m), 4),
+                # ROS optical frame: x-right, y-down, z-forward; units are metres.
+                'position_camera_m': {
+                    'x': round(float(candidate.position_camera[0]), 4),
+                    'y': round(float(candidate.position_camera[1]), 4),
+                    'z': round(float(candidate.position_camera[2]), 4),
+                },
+                'bbox': {
+                    'x': int(candidate.bbox_x), 'y': int(candidate.bbox_y),
+                    'width': int(candidate.bbox_width), 'height': int(candidate.bbox_height),
+                },
+            })
+        payload = {
+            'stamp_sec': round(_stamp_seconds(image_message.header.stamp), 6),
+            'camera_frame': image_message.header.frame_id,
+            'objects': objects,
+            'note': ('shape_2d is a projected contour clue, not a calibrated '
+                     '3D class or a grasp command'),
+        }
+        self.object_list_publisher.publish(
+            String(data=json.dumps(payload, separators=(',', ':'), sort_keys=True)))
+
+    def _publish_debug_images(self, image_message, color_image, candidate, result,
+                              candidates):
         """调试图只服务观测和排障，正式节点不调用任何 GUI API。"""
         overlay = color_image.copy()
+        for other in candidates:
+            if other is candidate:
+                continue
+            cv2.rectangle(overlay, (other.bbox_x, other.bbox_y),
+                          (other.bbox_x + other.bbox_width,
+                           other.bbox_y + other.bbox_height),
+                          (0, 200, 0), 1)
+            cv2.putText(overlay, '{0}/{1} z={2:.2f}'.format(
+                other.color, other.shape, other.depth_m),
+                (other.bbox_x, max(16, other.bbox_y - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 200, 0), 1, cv2.LINE_AA)
         if candidate.detected:
             cv2.rectangle(overlay, (candidate.bbox_x, candidate.bbox_y),
                           (candidate.bbox_x + candidate.bbox_width,
@@ -315,6 +414,10 @@ class ColorObjectDetectorNode(Node):
                           (0, 255, 255), 2)
             cv2.circle(overlay, (candidate.center_x, candidate.center_y), 4,
                        (255, 255, 255), -1)
+            cv2.putText(overlay, 'selected {0}/{1} z={2:.2f}'.format(
+                candidate.color, candidate.shape, candidate.depth_m),
+                (candidate.bbox_x, max(16, candidate.bbox_y - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 1, cv2.LINE_AA)
         camera_text = 'cam=({0:.3f},{1:.3f},{2:.3f})'.format(
             result.position_camera.x, result.position_camera.y, result.position_camera.z)
         arm_text = 'arm=({0:.3f},{1:.3f},{2:.3f})'.format(

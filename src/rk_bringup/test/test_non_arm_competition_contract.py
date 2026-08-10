@@ -1013,7 +1013,7 @@ def test_gid_gate_no_publishers_fail():
     assert 'raw_count=0' in detail, detail
 
 
-def test_sdk_hardware_ready_keeps_current_startup_ack_during_idle():
+def test_sdk_hardware_ready_keeps_current_manual_classic_ack_during_idle():
     from rk_bringup.competition_readiness_node import (
         CompetitionReadinessNode,
     )
@@ -1021,20 +1021,29 @@ def test_sdk_hardware_ready_keeps_current_startup_ack_during_idle():
     node.sdk_server_instance_id = 'current-instance'
     node.sdk_status_freshness_timeout_sec = 30.0
     node._sdk_error_status = None
-    status = {
+    startup_status = {
         'server_instance_id': 'current-instance',
-        'sequence': 1,
+        'sequence': 2,
         'event': 'STARTUP_STOP',
         'ret': 0,
         # 35 秒前的真实 receive timestamp 仍是本实例 startup 资格；SDK
         # status 是 event stream，长期 idle 不能被当作 backend death。
         'receive_monotonic_ns': time.monotonic_ns() - 35_000_000_000,
     }
-    ok, detail = node._sdk_status_ready(status, 35.0)
+    classic_verified_status = {
+        **startup_status,
+        'sequence': 1,
+        'event': 'CLASSIC_VERIFIED',
+    }
+    ok, detail = node._sdk_status_ready(
+        startup_status, classic_verified_status,
+    )
     assert ok, detail
     assert 'idle_event_age_not_a_liveness_failure' in detail
-    status['server_instance_id'] = 'previous-instance'
-    assert node._sdk_status_ready(status, 35.0)[0] is False
+    classic_verified_status['server_instance_id'] = 'previous-instance'
+    assert node._sdk_status_ready(
+        startup_status, classic_verified_status,
+    )[0] is False
 
 
 def test_sdk_hardware_ready_rejects_nonstartup_or_current_instance_error():
@@ -1045,22 +1054,55 @@ def test_sdk_hardware_ready_rejects_nonstartup_or_current_instance_error():
     node.sdk_server_instance_id = 'current-instance'
     node.sdk_status_freshness_timeout_sec = 30.0
     node._sdk_error_status = None
-    status = {
+    startup_status = {
         'server_instance_id': 'current-instance',
         'sequence': 3,
         'event': 'MOVE',
         'ret': 0,
         'receive_monotonic_ns': time.monotonic_ns(),
     }
-    assert node._sdk_status_ready(status, 0.01)[0] is False
-    status['event'] = 'STARTUP_STOP'
-    status['ret'] = 0
+    assert node._sdk_status_ready(startup_status, None)[0] is False
+    startup_status['event'] = 'STARTUP_STOP'
+    startup_status['ret'] = 0
+    classic_verified_status = {
+        **startup_status,
+        'sequence': 2,
+        'event': 'CLASSIC_VERIFIED',
+    }
     node._sdk_error_status = {
         'server_instance_id': 'current-instance',
         'sequence': 4,
         'event': 'SDK_ERROR',
     }
-    assert node._sdk_status_ready(status, 0.01)[0] is False
+    assert node._sdk_status_ready(
+        startup_status, classic_verified_status,
+    )[0] is False
+
+
+def test_sdk_hardware_ready_rejects_old_instance_classic_verified():
+    """旧 server 的人工经典签名不能为新 server 放行。"""
+    from rk_bringup.competition_readiness_node import (
+        CompetitionReadinessNode,
+    )
+    node = object.__new__(CompetitionReadinessNode)
+    node.sdk_server_instance_id = 'current-instance'
+    node._sdk_error_status = None
+    startup_status = {
+        'server_instance_id': 'current-instance',
+        'sequence': 1,
+        'event': 'STARTUP_STOP',
+        'ret': 0,
+        'receive_monotonic_ns': time.monotonic_ns(),
+    }
+    old_classic_verified_status = {
+        **startup_status,
+        'server_instance_id': 'old-instance',
+        'sequence': 0,
+        'event': 'CLASSIC_VERIFIED',
+    }
+    assert node._sdk_status_ready(
+        startup_status, old_classic_verified_status,
+    )[0] is False
 
 
 def test_validation_start_override_is_scoped_to_follower_only():

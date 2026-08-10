@@ -15,6 +15,7 @@ import uuid
 
 import rclpy
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
@@ -24,6 +25,10 @@ from rk_mission.non_arm_route_phase_core import NonArmRoutePhaseCore
 from rk_mission.non_arm_route_phase_core import (
     validate_white_bar_timeout_chain,
 )
+from rk_mission.white_bar_blind_core import FOLLOW
+from rk_mission.white_bar_blind_core import REQUEST_ACTION
+from rk_mission.white_bar_blind_core import ZERO
+from rk_mission.white_bar_blind_core import WhiteBarBlindApproachCore
 from rk_mission.white_bar_stage_core import WhiteBarStageController
 
 
@@ -31,13 +36,24 @@ LINE_COURSE_NODE_STATES = frozenset((
     'WAIT_START',
     'START_STAGE',
     'MID_ROUTE',
-    'APPROACH_RED_CIRCLE',
-    'INSPECTION_WAIT_SIGN',
-    'INSPECTION_ACTION',
+    # 红圆后的状态名称是现场验收接口；不要复用旧的“靠近/动作”泛名。
+    'RED_TARGET_SEARCH',
+    'RED_APPROACH',
+    'RED_TURN_LEFT',
+    'RED_REVERSE_APPROACH',
+    'RED_REVERSE_STOP_CONFIRM',
+    'RED_REVERSE_NOT_CALIBRATED',
+    'RED_INSPECTION_PREP',
+    'RED_INSPECTION',
+    'RED_INSPECTION_TIMEOUT',
+    'RED_ACTION_EXECUTION',
+    'RED_CLASSIC_RECOVERY',
+    'RED_TURN_RIGHT',
     'POST_INSPECTION',
     'FINISH_STAGE',
+    'WHITE_BAR_BLIND_FORWARD',
+    'WHITE_BAR_BLIND_LINE_RECOVERY',
     'HANDLE_WHITE_BAR',
-    'TURN_AFTER_RED',
     'CORNER_PRE_TURN',
     'ALIGN_TO_LINE',
     'APPROACH_STOP_ZONE',
@@ -88,6 +104,16 @@ class LineCourseMissionNode(Node):
         self.white_stage_controller = WhiteBarStageController(
             self.allow_finish_only_test
         )
+        self.white_bar_blind_core = WhiteBarBlindApproachCore(
+            confirm_frames=self.white_bar_confirm_frames,
+            min_confidence=self.white_bar_min_confidence,
+            blind_duration_sec=self.white_bar_blind_forward_duration_sec,
+            detection_timeout_sec=self.detection_timeout_sec,
+            line_recovery_timeout_sec=(
+                self.white_bar_line_recovery_timeout_sec
+            ),
+            line_recovery_confirm_frames=self.white_bar_confirm_frames,
+        )
         self.state = 'WAIT_START'
         self.state_enter_time = time.monotonic()
         self.last_reason = 'line_course_ready'
@@ -110,8 +136,18 @@ class LineCourseMissionNode(Node):
         self.latest_stop_zone_time = None
         self.latest_white_bar = None
         self.latest_white_bar_time = None
+        self.latest_gait_lock = True
+        self.latest_gait_lock_time = None
+        self.latest_mux_status = None
+        self.latest_mux_status_time = None
         self.latest_corner = None
         self.latest_corner_time = None
+        # 候选可能在转弯期间更新或消失；进入角点后方向必须锁存，
+        # 不能由后续帧反向改写实际命令。
+        self.active_corner_direction = ''
+        self.active_corner_direction_source = ''
+        self.active_corner_detected_time = None
+        self.active_corner_confidence = 0.0
         self.red_seen_count = 0
         self.stop_seen_count = 0
         self.stop_inside_count = 0
@@ -121,6 +157,21 @@ class LineCourseMissionNode(Node):
         self.white_action_expected_request_id = None
         self.latest_white_action_request_id = 0
         self.inspection_request_started_time = None
+        # 红圆正式链路的时钟只在指定状态使用。后退单独记录有效输出时间，
+        # 不能以状态墙钟代替实际倒车时间。
+        self.red_first_seen_time = None
+        self.red_turn_start_yaw = None
+        self.red_reverse_started_time = None
+        self.red_reverse_active_elapsed = 0.0
+        self.red_reverse_last_tick = None
+        self.red_stop_status_sequence = 0
+        self.red_classic_status_sequence = 0
+        self.latest_odom_yaw = None
+        self.latest_odom_time = None
+        self.latest_final_cmd = Twist()
+        self.latest_final_cmd_time = None
+        self.latest_sdk_motion_status = None
+        self.latest_sdk_motion_status_time = None
 
         self.cmd_publisher = self.create_publisher(
             Twist,
@@ -185,6 +236,18 @@ class LineCourseMissionNode(Node):
             10,
         )
         self.create_subscription(
+            Bool,
+            self.gait_control_lock_topic,
+            self._on_gait_control_lock,
+            10,
+        )
+        self.create_subscription(
+            String,
+            self.cmd_mux_status_topic,
+            self._on_cmd_mux_status,
+            10,
+        )
+        self.create_subscription(
             SpecialTargetDetection,
             self.corner_candidate_topic,
             self._on_corner_candidate,
@@ -226,6 +289,24 @@ class LineCourseMissionNode(Node):
             self._on_inspection_action_status,
             10,
         )
+        self.create_subscription(
+            Odometry,
+            self.odom_topic,
+            self._on_odom,
+            10,
+        )
+        self.create_subscription(
+            Twist,
+            self.final_cmd_topic,
+            self._on_final_cmd,
+            10,
+        )
+        self.create_subscription(
+            String,
+            self.sdk_motion_status_topic,
+            self._on_sdk_motion_status,
+            10,
+        )
         self.control_timer = self.create_timer(
             1.0 / self.control_rate_hz,
             self._on_control_timer,
@@ -254,6 +335,8 @@ class LineCourseMissionNode(Node):
             'red_circle_topic': '/perception/red_circle_detection',
             'stop_zone_topic': '/perception/stop_zone_detection',
             'white_bar_topic': '/perception/white_bar_detection',
+            'gait_control_lock_topic': '/gait/control_lock',
+            'cmd_mux_status_topic': '/control/cmd_mux_status',
             'corner_candidate_topic': '/perception/corner_candidate',
             'mission_start_topic': '/mission/start',
             'mission_stop_topic': '/mission/stop',
@@ -276,6 +359,10 @@ class LineCourseMissionNode(Node):
             'inspection_action_status_topic': (
                 '/mission/inspection_action_status'
             ),
+            'odom_topic': '/utlidar/robot_odom',
+            'final_cmd_topic': '/navigation/cmd_vel',
+            # SDK 状态转发器提供真实 Move/StopMove 返回值与经典步态验证事件。
+            'sdk_motion_status_topic': '/go2/sdk_motion_status',
         }
         for name, value in topic_defaults.items():
             self.declare_parameter(name, value)
@@ -286,6 +373,8 @@ class LineCourseMissionNode(Node):
             'detection_timeout_sec': 0.8,
             'line_follower_status_timeout_sec': 1.0,
             'enable_corner_pre_turn': True,
+            # 正式 90° 弯由本节点发布 mission candidate 并独占转向控制权。
+            'corner_owner': 'mission',
             'corner_turn_direction': 'left',
             'corner_confirm_frames': 3,
             'corner_min_confidence': 0.45,
@@ -294,18 +383,27 @@ class LineCourseMissionNode(Node):
             'corner_min_time_sec': 0.8,
             'corner_max_time_sec': 2.5,
             'corner_cooldown_sec': 3.0,
-            'red_circle_confirm_frames': 3,
+            'red_circle_confirm_frames': 1,
             'red_circle_min_confidence': 0.55,
-            'red_circle_approach_speed': 0.04,
-            'red_circle_stop_area_ratio': 0.020,
-            'red_circle_stop_y_ratio': 0.65,
-            'red_circle_approach_timeout_sec': 8.0,
-            'turn_after_red_direction': 'left',
-            'turn_after_red_angle_deg': 90.0,
-            'turn_after_red_angular_z': 0.35,
-            'turn_after_red_timeout_sec': 5.0,
+            # 省赛红圆合同：首次可靠检测后，仍由正式 follower 巡线 3.9 秒。
+            'red_approach_duration_sec': 3.9,
+            'red_turn_left_angle_deg': 83.0,
+            'red_turn_left_angular_z': 1.0,
+            # 0.0 是显式“尚未标定”，生产运行时必须 fail-closed。
+            'red_reverse_speed_mps': 0.0,
+            'red_reverse_duration_sec': 0.0,
+            'red_turn_right_angle_deg': 80.0,
+            'red_turn_right_angular_z': -1.0,
+            'red_yaw_timeout_sec': 8.0,
+            'red_stop_confirm_timeout_sec': 3.0,
+            'red_classic_recovery_timeout_sec': 8.0,
             'white_bar_confirm_frames': 3,
             'white_bar_min_confidence': 0.55,
+            # 0.0 表示尚未标定；stable lost 后必须零速且禁止 action。
+            'white_bar_blind_forward_duration_sec': 0.0,
+            # 与正式 follower short_lost_timeout 共用同一恢复合同。
+            'white_bar_line_recovery_timeout_sec': 0.75,
+            # DEPRECATED / rollback-only：正式路径不再读取以下两项作控制。
             'white_bar_approach_speed': 0.03,
             'white_bar_stop_y_ratio': 0.70,
             'white_bar_executor_action_timeout_sec': 22.0,
@@ -355,6 +453,8 @@ class LineCourseMissionNode(Node):
             'red_circle_topic',
             'stop_zone_topic',
             'white_bar_topic',
+            'gait_control_lock_topic',
+            'cmd_mux_status_topic',
             'corner_candidate_topic',
             'mission_start_topic',
             'mission_stop_topic',
@@ -365,8 +465,9 @@ class LineCourseMissionNode(Node):
             'white_bar_stage_status_topic',
             'inspection_action_request_topic',
             'inspection_action_status_topic',
-            'corner_turn_direction',
-            'turn_after_red_direction',
+            'odom_topic',
+            'final_cmd_topic',
+            'sdk_motion_status_topic',
         )
         for name in topic_names:
             value = str(self.get_parameter(name).value).strip()
@@ -377,6 +478,21 @@ class LineCourseMissionNode(Node):
         self.enable_corner_pre_turn = bool(
             self.get_parameter('enable_corner_pre_turn').value
         )
+        self.corner_owner = str(
+            self.get_parameter('corner_owner').value
+        ).strip().lower()
+        if self.corner_owner != 'mission':
+            raise ValueError(
+                'corner_owner must be mission: mission is the sole formal '
+                '90-degree corner controller'
+            )
+        self.corner_turn_direction = str(
+            self.get_parameter('corner_turn_direction').value
+        ).strip().lower()
+        if self.corner_turn_direction not in ('left', 'right', 'hint'):
+            raise ValueError(
+                'corner_turn_direction must be left, right, or hint'
+            )
         self.allow_finish_only_test = bool(
             self.get_parameter('allow_finish_only_test').value
         )
@@ -401,11 +517,15 @@ class LineCourseMissionNode(Node):
             'corner_min_time_sec',
             'corner_max_time_sec',
             'corner_cooldown_sec',
-            'red_circle_approach_timeout_sec',
-            'turn_after_red_angle_deg',
-            'turn_after_red_timeout_sec',
+            'red_approach_duration_sec',
+            'red_turn_left_angle_deg',
+            'red_turn_right_angle_deg',
+            'red_yaw_timeout_sec',
+            'red_stop_confirm_timeout_sec',
+            'red_classic_recovery_timeout_sec',
             'white_bar_executor_action_timeout_sec',
             'white_bar_action_timeout_sec',
+            'white_bar_line_recovery_timeout_sec',
             'front_jump_start_worst_case_duration_sec',
             'front_jump_finish_worst_case_duration_sec',
             'stop_zone_approach_timeout_sec',
@@ -417,13 +537,12 @@ class LineCourseMissionNode(Node):
             'corner_vx',
             'corner_angular_z',
             'red_circle_min_confidence',
-            'red_circle_approach_speed',
-            'red_circle_stop_area_ratio',
-            'red_circle_stop_y_ratio',
-            'turn_after_red_angular_z',
+            'red_turn_left_angular_z',
+            'red_reverse_speed_mps',
+            'red_reverse_duration_sec',
+            'red_turn_right_angular_z',
             'white_bar_min_confidence',
-            'white_bar_approach_speed',
-            'white_bar_stop_y_ratio',
+            'white_bar_blind_forward_duration_sec',
             'stop_zone_min_confidence',
             'stop_zone_approach_speed',
             'align_min_confidence',
@@ -437,6 +556,11 @@ class LineCourseMissionNode(Node):
             setattr(self, name, self._float_parameter(name, positive=True))
         for name in nonnegative_names:
             setattr(self, name, self._float_parameter(name, positive=False))
+        # 转向方向是省赛固定合同；配置反号会让“达到绝对角度”掩盖路线错误。
+        if self.red_turn_left_angular_z <= 0.0:
+            raise ValueError('red_turn_left_angular_z must be positive')
+        if self.red_turn_right_angular_z >= 0.0:
+            raise ValueError('red_turn_right_angular_z must be negative')
         if self.corner_max_time_sec < self.corner_min_time_sec:
             raise ValueError(
                 'corner_max_time_sec must be >= corner_min_time_sec'
@@ -481,9 +605,31 @@ class LineCourseMissionNode(Node):
         self.latest_line = msg
         self.latest_line_time = time.monotonic()
         self._line_sequence += 1
+        line_valid = self._white_bar_line_valid(msg)
+        self.white_bar_blind_core.observe_line(
+            time.monotonic_ns(),
+            valid=line_valid,
+        )
+        if (
+            self.white_bar_blind_core.lost_confirmed
+            and not self.white_bar_blind_core.fault_reason
+            and not line_valid
+            and self.state in (
+                'START_STAGE',
+                'FINISH_STAGE',
+                'WHITE_BAR_BLIND_FORWARD',
+                'WHITE_BAR_BLIND_LINE_RECOVERY',
+            )
+        ):
+            # 不等待下一个 10 Hz timer；invalid 新帧立即撤销正速候选。
+            self._set_state(
+                'WHITE_BAR_BLIND_LINE_RECOVERY',
+                'WHITE_BAR_BLIND_LINE_RECOVERY',
+            )
+            self._publish_mission_candidate(Twist())
 
     def _on_red_circle(self, msg):
-        """错误阶段红圈清零，防止 START 前跨阶段累计。"""
+        """仅在正式红圆搜索阶段锁存第一次可靠检测。"""
         self.latest_red = msg
         self.latest_red_time = time.monotonic()
         if (
@@ -495,8 +641,49 @@ class LineCourseMissionNode(Node):
             )
         ):
             self.red_seen_count += 1
+            # ``T_RED_FIRST_SEEN`` 只在本次任务的 RED_TARGET_SEARCH 锁存一次；
+            # 后续检测消失也不能重置省赛规定的 3.9 秒巡线窗口。
+            if (
+                self.state == 'RED_TARGET_SEARCH'
+                and self.red_first_seen_time is None
+            ):
+                self.red_first_seen_time = self.latest_red_time
         else:
             self.red_seen_count = 0
+
+    def _on_odom(self, msg):
+        """从真实 odometry 四元数提取 yaw；无效姿态绝不用于盲转。"""
+        orientation = msg.pose.pose.orientation
+        values = (
+            _finite_float(orientation.x), _finite_float(orientation.y),
+            _finite_float(orientation.z), _finite_float(orientation.w),
+        )
+        if any(value is None for value in values):
+            self.latest_odom_yaw = None
+            self.latest_odom_time = time.monotonic()
+            return
+        x, y, z, w = values
+        norm = x * x + y * y + z * z + w * w
+        if norm <= 1e-12:
+            self.latest_odom_yaw = None
+            self.latest_odom_time = time.monotonic()
+            return
+        self.latest_odom_yaw = math.atan2(
+            2.0 * (w * z + x * y),
+            1.0 - 2.0 * (y * y + z * z),
+        )
+        self.latest_odom_time = time.monotonic()
+
+    def _on_final_cmd(self, msg):
+        """缓存 mux 最终命令，后退计时和停车确认只信任此真相。"""
+        self.latest_final_cmd = msg
+        self.latest_final_cmd_time = time.monotonic()
+
+    def _on_sdk_motion_status(self, msg):
+        """接收 SDK 的真实 StopMove/CLASSIC_VERIFIED 回执，拒绝畸形数据。"""
+        status = decode_json_object(msg.data)
+        self.latest_sdk_motion_status = status
+        self.latest_sdk_motion_status_time = time.monotonic()
 
     def _on_stop_zone(self, msg):
         """终点蓝区在未 arm 前不保留历史确认次数。"""
@@ -522,22 +709,34 @@ class LineCourseMissionNode(Node):
         self.stop_inside_count = self.stop_inside_count + 1 if inside else 0
 
     def _on_white_bar(self, msg):
-        """只在当前显式 arm 的 START/FINISH 阶段累计白横线。"""
+        """只用 ARM 后的新帧推进共用 seen/lost streak。"""
         self.latest_white_bar = msg
         self.latest_white_bar_time = time.monotonic()
         stage = self.white_stage_controller.active_stage
         allowed = (
-            self._line_follower_is_ready(self.latest_white_bar_time)
-            and self.white_stage_controller.state == f'{stage}_ARMED'
+            self.white_stage_controller.state == f'{stage}_ARMED'
             and self.route_core.white_bar_detection_allowed(stage)
         )
-        if allowed and self._detection_visible_with_confidence(
-            msg,
-            self.white_bar_min_confidence,
-        ):
-            self.white_seen_count += 1
-        else:
-            self.white_seen_count = 0
+        if not allowed:
+            return
+        self.white_bar_blind_core.observe_detection(
+            time.monotonic_ns(),
+            visible=bool(msg.visible),
+            confidence=msg.confidence,
+            center_y=msg.center_y,
+        )
+        # 兼容旧状态字段；正式决策只读取 shared core。
+        self.white_seen_count = self.white_bar_blind_core.seen_count
+
+    def _on_gait_control_lock(self, msg):
+        """缓存权威 gait lock；blind 期间 stale/true 都禁止动作。"""
+        self.latest_gait_lock = bool(msg.data)
+        self.latest_gait_lock_time = time.monotonic()
+
+    def _on_cmd_mux_status(self, msg):
+        """缓存 mux 安全状态；畸形 JSON 保持不健康而非猜测。"""
+        self.latest_mux_status = decode_json_object(msg.data)
+        self.latest_mux_status_time = time.monotonic()
 
     def _on_corner_candidate(self, msg):
         """巡线阶段才接收角点，避免检查时转向。"""
@@ -569,6 +768,7 @@ class LineCourseMissionNode(Node):
             self._enter_emergency_stop(route_event.reason)
             return
         stage_event = self.white_stage_controller.start_run(run_id)
+        self.white_bar_blind_core.reset()
         self._reset_runtime_for_new_run()
         self._set_state('START_STAGE', 'mission_start')
         self._publish_white_stage_status(stage_event)
@@ -580,6 +780,7 @@ class LineCourseMissionNode(Node):
             return
         route_event = self.route_core.mission_stop()
         stage_event = self.white_stage_controller.mission_stop()
+        self.white_bar_blind_core.reset()
         self._clear_active_action()
         self._reset_detection_counts()
         self._reset_line_follower_readiness()
@@ -620,12 +821,20 @@ class LineCourseMissionNode(Node):
         if not route_event.accepted:
             self._enter_emergency_stop(route_event.reason)
             return
+        if stage in ('START', 'FINISH'):
+            self.white_bar_blind_core.arm(stage, time.monotonic_ns())
+        else:
+            self.white_bar_blind_core.reset()
         self.white_seen_count = 0
-        # FINISH 命令只能来自 TURN_AFTER_RED；ACK 不能打断转向，
-        # 或其后的 ALIGN_TO_LINE，只更新路线 phase 等待白线。
+        # FINISH 命令只能在红圆右转并重新找线后生效；不能打断红圆链路。
         if stage == 'START':
             self._set_state('START_STAGE', route_event.reason)
-        elif self.state not in ('TURN_AFTER_RED', 'ALIGN_TO_LINE'):
+        elif self.state not in (
+            'RED_APPROACH', 'RED_TURN_LEFT', 'RED_REVERSE_APPROACH',
+            'RED_REVERSE_STOP_CONFIRM', 'RED_INSPECTION_PREP',
+            'RED_INSPECTION', 'RED_ACTION_EXECUTION',
+            'RED_CLASSIC_RECOVERY', 'RED_TURN_RIGHT', 'ALIGN_TO_LINE',
+        ):
             self._set_state('FINISH_STAGE', route_event.reason)
         else:
             self.last_reason = route_event.reason
@@ -703,7 +912,10 @@ class LineCourseMissionNode(Node):
                 return
             self._clear_active_action()
             self._reset_detection_counts()
-            self._set_state('TURN_AFTER_RED', route_event.reason)
+            # executor 已完成既有“识别→映射→动作”闭环；下一步仍必须经
+            # 独立 classic verification gate，不能立即右转。
+            self.red_classic_status_sequence = self._sdk_status_sequence()
+            self._set_state('RED_CLASSIC_RECOVERY', route_event.reason)
             self._publish_mission_candidate(Twist())
             return
         if state in INSPECTION_FAILURE_STATES or (
@@ -740,12 +952,17 @@ class LineCourseMissionNode(Node):
             running=running,
         )
         if route_event.accepted and running:
-            self._set_state('INSPECTION_ACTION', 'inspection_action_progress')
+            self._set_state(
+                'RED_ACTION_EXECUTION', 'inspection_action_progress'
+            )
 
     def _on_control_timer(self):
         """零速优先的单循环，驱动候选速度和路线状态。"""
         now = time.monotonic()
-        if self.state in ('WAIT_START', 'FINAL_STOP', 'EMERGENCY_STOP'):
+        if self.state in (
+            'WAIT_START', 'FINAL_STOP', 'EMERGENCY_STOP',
+            'RED_REVERSE_NOT_CALIBRATED', 'RED_INSPECTION_TIMEOUT',
+        ):
             self._publish_mission_candidate(Twist())
             return
         if not self.route_core.mission_started:
@@ -754,12 +971,27 @@ class LineCourseMissionNode(Node):
             return
         if self.state == 'HANDLE_WHITE_BAR':
             self._control_white_bar_wait(now)
-        elif self.state == 'APPROACH_RED_CIRCLE':
+        elif self.state in (
+            'WHITE_BAR_BLIND_FORWARD',
+            'WHITE_BAR_BLIND_LINE_RECOVERY',
+        ):
+            self._control_armed_white_bar(now)
+        elif self.state == 'RED_APPROACH':
             self._control_red_approach(now)
-        elif self.state in ('INSPECTION_WAIT_SIGN', 'INSPECTION_ACTION'):
+        elif self.state == 'RED_TURN_LEFT':
+            self._control_red_turn(now, left=True)
+        elif self.state == 'RED_REVERSE_APPROACH':
+            self._control_red_reverse_approach(now)
+        elif self.state == 'RED_REVERSE_STOP_CONFIRM':
+            self._control_red_reverse_stop_confirm(now)
+        elif self.state == 'RED_INSPECTION_PREP':
+            self._control_red_inspection_prep(now)
+        elif self.state in ('RED_INSPECTION', 'RED_ACTION_EXECUTION'):
             self._control_inspection_wait(now)
-        elif self.state == 'TURN_AFTER_RED':
-            self._control_turn_after_red(now)
+        elif self.state == 'RED_CLASSIC_RECOVERY':
+            self._control_red_classic_recovery(now)
+        elif self.state == 'RED_TURN_RIGHT':
+            self._control_red_turn(now, left=False)
         elif self.state == 'CORNER_PRE_TURN':
             self._control_corner_turn(now)
         elif self.state == 'ALIGN_TO_LINE':
@@ -769,6 +1001,7 @@ class LineCourseMissionNode(Node):
         elif self.state in (
             'START_STAGE',
             'MID_ROUTE',
+            'RED_TARGET_SEARCH',
             'POST_INSPECTION',
             'FINISH_STAGE',
             'FINAL_ZONE_ARMED',
@@ -788,12 +1021,15 @@ class LineCourseMissionNode(Node):
             self._control_armed_white_bar(now)
             return
         if phase == 'MID_ROUTE':
-            if self._red_confirmed(now):
+            if self.red_first_seen_time is not None:
                 route_event = self.route_core.red_circle_confirmed()
                 if route_event.accepted:
+                    first_seen = self.red_first_seen_time
                     self._reset_detection_counts()
-                    self._set_state('APPROACH_RED_CIRCLE', route_event.reason)
-                    self._publish_mission_candidate(Twist())
+                    self.red_first_seen_time = first_seen
+                    self._set_state('RED_APPROACH', 'T_RED_FIRST_SEEN')
+                    # RED_APPROACH 的首周期也必须走 follower；不额外盲走。
+                    self._control_red_approach(now)
                 return
             if self._corner_confirmed(now):
                 self._start_corner_turn()
@@ -801,13 +1037,13 @@ class LineCourseMissionNode(Node):
             self._publish_suggested_or_zero(now)
             return
         if phase == 'FINISH_STAGE':
-            if self._white_bar_confirmed(now):
-                self._control_armed_white_bar(now)
-                return
-            if self._corner_confirmed(now):
+            if (
+                not self.white_bar_blind_core.seen_latched
+                and self._corner_confirmed(now)
+            ):
                 self._start_corner_turn()
                 return
-            self._publish_suggested_or_zero(now)
+            self._control_armed_white_bar(now)
             return
         if phase == 'FINAL_ZONE_ARMED':
             if self._stop_zone_confirmed(now):
@@ -824,28 +1060,51 @@ class LineCourseMissionNode(Node):
         self._enter_emergency_stop(f'route_phase_state_mismatch_{phase}')
 
     def _control_armed_white_bar(self, now):
-        """白线低速接近阈值，达到后只请求一次 Action。"""
+        """共用 seen→lost→blind 状态；center_y 与旧低速参数不参与控制。"""
         stage = self.white_stage_controller.active_stage
         if not self.route_core.white_bar_detection_allowed(stage):
             self._publish_mission_candidate(Twist())
             return
-        if not self._white_bar_confirmed(now):
-            self._publish_suggested_or_zero(now)
-            return
-        bar = self.latest_white_bar
-        center_y = _finite_float(getattr(bar, 'center_y', None))
-        if center_y is None:
-            self._enter_emergency_stop('white_bar_center_y_non_finite')
-            return
-        stage_event = self.white_stage_controller.white_bar_event(
-            center_y >= self.white_bar_stop_y_ratio
+        safety = self._white_bar_safety_inputs(now)
+        decision = self.white_bar_blind_core.evaluate(
+            time.monotonic_ns(), **safety,
         )
-        if stage_event.action == 'APPROACH':
-            cmd = self._copy_suggested_cmd(now)
-            cmd.linear.x = self.white_bar_approach_speed
+        self.white_seen_count = self.white_bar_blind_core.seen_count
+        if decision.action == FOLLOW:
+            cmd = Twist()
+            cmd.linear.x = decision.linear_x
+            cmd.linear.y = 0.0
+            cmd.angular.z = decision.angular_z
+            if decision.reason == 'WHITE_BAR_BLIND_FORWARD':
+                self._set_state(
+                    'WHITE_BAR_BLIND_FORWARD', decision.reason
+                )
             self._publish_mission_candidate(cmd)
             return
+        if (
+            decision.action == ZERO
+            and decision.reason == 'WHITE_BAR_BLIND_LINE_RECOVERY'
+        ):
+            # 短时丢线期间 mission 必须保持零候选，不进入不可恢复故障。
+            self._set_state(
+                'WHITE_BAR_BLIND_LINE_RECOVERY', decision.reason
+            )
+            self._publish_mission_candidate(Twist())
+            return
+        if decision.action != REQUEST_ACTION:
+            self._enter_emergency_stop(decision.reason)
+            return
+
+        # 先撤销 mission candidate；真正动作仍由既有 executor 的最终零速
+        # 确认门放行，任务层不会直接调用任何 gait/SDK 动作。
+        self._publish_mission_candidate(Twist())
+        stage_event = self.white_stage_controller.white_bar_event(True)
         if stage_event.action == 'SEND_REQUEST':
+            if stage_event.motion_name != decision.motion_name:
+                self._enter_emergency_stop(
+                    'white_bar_blind_motion_mapping_mismatch'
+                )
+                return
             route_event = self.route_core.white_bar_action_started(stage)
             if not route_event.accepted:
                 self._publish_white_stage_status(
@@ -873,6 +1132,68 @@ class LineCourseMissionNode(Node):
             self._enter_emergency_stop(stage_event.reason)
             return
         self._publish_mission_candidate(Twist())
+
+    def _white_bar_safety_inputs(self, now):
+        """汇总 blind 仍必须满足的线、候选、gait 与 mux 安全门。"""
+        line = self.latest_line
+        line_fresh = self._is_fresh(self.latest_line_time, now)
+        line_valid = self._white_bar_line_valid(line)
+        suggested_fresh = self._is_fresh(
+            self.latest_suggested_time,
+            now,
+            self.suggested_cmd_timeout_sec,
+        )
+        suggested = self.latest_suggested_cmd
+        gait_fresh = self._is_fresh(
+            self.latest_gait_lock_time,
+            now,
+            self.suggested_cmd_timeout_sec,
+        )
+        mux_fresh = self._is_fresh(
+            self.latest_mux_status_time,
+            now,
+            self.suggested_cmd_timeout_sec,
+        )
+        mux = self.latest_mux_status
+        mux_healthy = (
+            isinstance(mux, dict)
+            and mux.get('estop') is False
+            and mux.get('arm_lock') is False
+            and mux.get('gait_lock') is False
+            and mux.get('invalid_command_count', 0) == 0
+        )
+        return {
+            'line_valid': line_valid,
+            'line_fresh': line_fresh,
+            'suggested_fresh': suggested_fresh,
+            'suggested_vx': suggested.linear.x,
+            'suggested_wz': suggested.angular.z,
+            'follower_ready': self.line_follower_ready,
+            'follower_fresh': self._is_fresh(
+                self.latest_line_follower_status_time,
+                now,
+                self.line_follower_status_timeout_sec,
+            ),
+            'gait_locked': self.latest_gait_lock,
+            'gait_fresh': gait_fresh,
+            'mux_healthy': mux_healthy,
+            'mux_fresh': mux_fresh,
+            'mux_source_valid': (
+                isinstance(mux, dict)
+                and mux.get('active_source') == 'mission'
+            ),
+        }
+
+    @staticmethod
+    def _white_bar_line_valid(line):
+        """blind 恢复与原有白线安全门共用同一 LineTrack 有效定义。"""
+        return (
+            line is not None
+            and bool(getattr(line, 'line_visible', False))
+            and _finite_float(getattr(line, 'confidence', None)) is not None
+            and _finite_float(getattr(line, 'lateral_error', None)) is not None
+            and _finite_float(getattr(line, 'heading_error', None)) is not None
+        )
 
     def _control_white_bar_wait(self, now):
         """Action 期间持续零候选；路线层超时会故障关闭。"""
@@ -910,47 +1231,17 @@ class LineCourseMissionNode(Node):
         self._enter_emergency_stop(route_event.reason)
 
     def _control_red_approach(self, now):
-        """红圈低速靠近，到位后检查并零速等待。"""
-        # 靠近状态仍校验巡线，避免状态失效后继续盲走。
-        if not self._line_follower_is_ready(now):
+        """按省赛合同持续 3.9 秒正式巡线，完成后先发布 ZERO。"""
+        safety_reason = self._red_follower_safety_reason(now)
+        if safety_reason:
+            self._enter_emergency_stop(safety_reason)
+            return
+        if now - self.state_enter_time >= self.red_approach_duration_sec:
             self._publish_mission_candidate(Twist())
+            self._start_red_turn(left=True, reason='red_approach_complete')
             return
-        if not self._is_fresh(self.latest_red_time, now):
-            self._enter_emergency_stop('red_circle_detection_stale')
-            return
-        red = self.latest_red
-        area = _finite_float(getattr(red, 'area_ratio', None))
-        center_y = _finite_float(getattr(red, 'center_y', None))
-        if area is None or center_y is None:
-            self._enter_emergency_stop('red_circle_geometry_non_finite')
-            return
-        if (
-            area >= self.red_circle_stop_area_ratio
-            or center_y >= self.red_circle_stop_y_ratio
-        ):
-            request_id = f'inspection-{uuid.uuid4()}'
-            route_event = self.route_core.red_circle_reached(request_id)
-            if not route_event.accepted:
-                self._enter_emergency_stop(route_event.reason)
-                return
-            request = String()
-            request.data = json.dumps({
-                'run_id': self.route_core.run_id,
-                'request_id': request_id,
-                'action': 'detect_and_execute_warning',
-            }, separators=(',', ':'))
-            self.inspection_action_request_publisher.publish(request)
-            self.inspection_request_started_time = now
-            self.active_action = 'inspection'
-            self._set_state('INSPECTION_WAIT_SIGN', route_event.reason)
-            self._publish_mission_candidate(Twist())
-            return
-        if now - self.state_enter_time >= self.red_circle_approach_timeout_sec:
-            self._enter_emergency_stop('red_circle_approach_timeout')
-            return
-        cmd = self._copy_suggested_cmd(now)
-        cmd.linear.x = self.red_circle_approach_speed
-        self._publish_mission_candidate(cmd)
+        # 完整复制 LineTrack → follower → mission_cmd 的候选，不覆盖 vx/yaw。
+        self._publish_suggested_or_zero(now)
 
     def _control_inspection_wait(self, now):
         """检查识别与 SDK 动作期间候选恒为零，超时急停。"""
@@ -960,41 +1251,279 @@ class LineCourseMissionNode(Node):
             and now - self.inspection_request_started_time
             >= self.inspection_action_timeout_sec
         ):
-            self._enter_emergency_stop('inspection_action_timeout')
+            self.route_core.fault('inspection_action_timeout')
+            self._set_state('RED_INSPECTION_TIMEOUT', 'inspection_action_timeout')
+            self._publish_mission_candidate(Twist())
 
-    def _control_turn_after_red(self, now):
-        """检查成功后执行 TURN_AFTER_RED，作为 FINISH 里程碑。"""
-        if self.turn_after_red_angular_z <= 0.0:
-            self._enter_emergency_stop('turn_after_red_zero_speed')
+    def _start_red_turn(self, *, left, reason):
+        """以新鲜真实 yaw 建立转角原点；缺 yaw 时禁止用时间替代。"""
+        now = time.monotonic()
+        if not self._is_fresh(self.latest_odom_time, now):
+            self._enter_emergency_stop('red_turn_odom_stale')
             return
-        target_duration = min(
-            math.radians(self.turn_after_red_angle_deg)
-            / self.turn_after_red_angular_z,
-            self.turn_after_red_timeout_sec,
+        if self.latest_odom_yaw is None:
+            self._enter_emergency_stop('red_turn_odom_invalid')
+            return
+        self.red_turn_start_yaw = self.latest_odom_yaw
+        self._set_state('RED_TURN_LEFT' if left else 'RED_TURN_RIGHT', reason)
+
+    def _control_red_turn(self, now, *, left):
+        """83°左转和80°右转都以归一化真实 yaw 收敛，绝不时间盲转。"""
+        if now - self.state_enter_time >= self.red_yaw_timeout_sec:
+            self._enter_emergency_stop('red_turn_yaw_timeout')
+            return
+        if not self._is_fresh(self.latest_odom_time, now):
+            self._enter_emergency_stop('red_turn_odom_stale')
+            return
+        if self.red_turn_start_yaw is None or self.latest_odom_yaw is None:
+            self._enter_emergency_stop('red_turn_odom_invalid')
+            return
+        safety_reason = self._red_motion_safety_reason(now)
+        if safety_reason:
+            self._enter_emergency_stop(safety_reason)
+            return
+        target_deg = (
+            self.red_turn_left_angle_deg if left
+            else self.red_turn_right_angle_deg
         )
-        if now - self.state_enter_time >= target_duration:
-            self._begin_align('red', 'turn_after_red_complete')
+        yaw_delta = self._normalize_angle(
+            self.latest_odom_yaw - self.red_turn_start_yaw
+        )
+        if abs(yaw_delta) >= math.radians(target_deg):
+            self._publish_mission_candidate(Twist())
+            if left:
+                if (
+                    self.red_reverse_duration_sec <= 0.0
+                    or self.red_reverse_speed_mps <= 0.0
+                ):
+                    self.route_core.fault('RED_REVERSE_NOT_CALIBRATED')
+                    self._set_state(
+                        'RED_REVERSE_NOT_CALIBRATED',
+                        'RED_REVERSE_NOT_CALIBRATED',
+                    )
+                    return
+                self.red_reverse_started_time = time.monotonic()
+                self.red_reverse_active_elapsed = 0.0
+                self.red_reverse_last_tick = now
+                self._set_state(
+                    'RED_REVERSE_APPROACH', 'red_turn_left_complete'
+                )
+                return
+            # 保留原有 FINISH milestone 名，供 white-bar stage publisher 兼容。
+            self._begin_align('red', 'red_turn_right_complete')
             return
         cmd = Twist()
         cmd.angular.z = (
-            self._turn_direction(self.turn_after_red_direction)
-            * self.turn_after_red_angular_z
+            self.red_turn_left_angular_z if left
+            else self.red_turn_right_angular_z
         )
         self._publish_mission_candidate(cmd)
 
+    def _control_red_reverse_approach(self, now):
+        """按实际最终倒车命令累计有效时间；停车/失锁期间冻结计时。"""
+        if self.red_reverse_duration_sec <= 0.0:
+            self.route_core.fault('RED_REVERSE_NOT_CALIBRATED')
+            self._set_state(
+                'RED_REVERSE_NOT_CALIBRATED', 'RED_REVERSE_NOT_CALIBRATED'
+            )
+            self._publish_mission_candidate(Twist())
+            return
+        if self.red_reverse_last_tick is None:
+            self.red_reverse_last_tick = now
+        elapsed_delta = max(0.0, now - self.red_reverse_last_tick)
+        self.red_reverse_last_tick = now
+        # 先提出普通经典步态 Move 候选；只有 mux 最终输出已证实倒车时才计时。
+        cmd = Twist()
+        cmd.linear.x = -self.red_reverse_speed_mps
+        self._publish_mission_candidate(cmd)
+        if self._reverse_command_active(now):
+            self.red_reverse_active_elapsed += elapsed_delta
+        if self.red_reverse_active_elapsed >= self.red_reverse_duration_sec:
+            self._publish_mission_candidate(Twist())
+            self.red_stop_status_sequence = self._sdk_status_sequence()
+            self._set_state(
+                'RED_REVERSE_STOP_CONFIRM', 'red_reverse_active_duration_met'
+            )
+
+    def _control_red_reverse_stop_confirm(self, now):
+        """倒车结束必须同时看到最终零速和成功 StopMove，才可进入识别准备。"""
+        self._publish_mission_candidate(Twist())
+        if now - self.state_enter_time >= self.red_stop_confirm_timeout_sec:
+            self._enter_emergency_stop('red_reverse_stop_confirm_timeout')
+            return
+        if not self._final_cmd_is_zero(now):
+            return
+        status = self.latest_sdk_motion_status
+        if (
+            isinstance(status, dict)
+            and self._sdk_status_sequence() > self.red_stop_status_sequence
+            and status.get('event') == 'STOP_MOVE'
+            and status.get('ret') == 0
+        ):
+            self._start_red_inspection_prep(now)
+
+    def _start_red_inspection_prep(self, now):
+        """零速确认后才授权既有识别→动作执行器，不改写其映射。"""
+        request_id = f'inspection-{uuid.uuid4()}'
+        route_event = self.route_core.red_circle_reached(request_id)
+        if not route_event.accepted:
+            self._enter_emergency_stop(route_event.reason)
+            return
+        request = String()
+        request.data = json.dumps({
+            'run_id': self.route_core.run_id,
+            'request_id': request_id,
+            'action': 'detect_and_execute_warning',
+        }, separators=(',', ':'))
+        self.inspection_action_request_publisher.publish(request)
+        self.inspection_request_started_time = now
+        self.active_action = 'inspection'
+        self._set_state('RED_INSPECTION_PREP', route_event.reason)
+        self._publish_mission_candidate(Twist())
+
+    def _control_red_inspection_prep(self, now):
+        """识别前维持最终零速并等待执行器持有 gait lock。"""
+        self._publish_mission_candidate(Twist())
+        if (
+            self._final_cmd_is_zero(now)
+            and self._is_fresh(self.latest_gait_lock_time, now)
+            and self.latest_gait_lock
+        ):
+            self._set_state('RED_INSPECTION', 'red_inspection_stationary_locked')
+            return
+        if (
+            self.inspection_request_started_time is not None
+            and now - self.inspection_request_started_time
+            >= self.inspection_action_timeout_sec
+        ):
+            self.route_core.fault('red_inspection_prep_timeout')
+            self._set_state('RED_INSPECTION_TIMEOUT', 'red_inspection_prep_timeout')
+
+    def _control_red_classic_recovery(self, now):
+        """只接受动作成功之后的新 CLASSIC_VERIFIED，禁止再次调用 2049。"""
+        self._publish_mission_candidate(Twist())
+        if now - self.state_enter_time >= self.red_classic_recovery_timeout_sec:
+            self._enter_emergency_stop('red_classic_recovery_timeout')
+            return
+        status = self.latest_sdk_motion_status
+        if not isinstance(status, dict):
+            return
+        if self._sdk_status_sequence() <= self.red_classic_status_sequence:
+            return
+        if status.get('event') == 'SDK_ERROR' or status.get('ret') not in (0,):
+            self._enter_emergency_stop('red_classic_recovery_failed')
+            return
+        if status.get('event') == 'CLASSIC_VERIFIED':
+            self._start_red_turn(left=False, reason='CLASSIC_VERIFIED')
+
+    def _red_follower_safety_reason(self, now):
+        """红圈 3.9 秒仍是巡线，线、follower、步态和 mux 任一失效即停。"""
+        if not self._line_follower_is_ready(now):
+            return 'red_approach_line_follower_not_ready'
+        if not self._is_fresh(self.latest_line_time, now) or not self._white_bar_line_valid(self.latest_line):
+            return 'red_approach_line_track_invalid'
+        if not self._is_fresh(
+            self.latest_suggested_time, now, self.suggested_cmd_timeout_sec
+        ):
+            return 'red_approach_follower_command_stale'
+        return self._red_motion_safety_reason(now)
+
+    def _red_motion_safety_reason(self, now):
+        """正式红圆运动共享 gait/mux fail-closed 门，避免绕过最终仲裁。"""
+        if not self._is_fresh(
+            self.latest_gait_lock_time, now, self.suggested_cmd_timeout_sec
+        ) or self.latest_gait_lock:
+            return 'red_motion_gait_not_available'
+        mux = self.latest_mux_status
+        if not self._is_fresh(
+            self.latest_mux_status_time, now, self.suggested_cmd_timeout_sec
+        ) or not isinstance(mux, dict):
+            return 'red_motion_mux_status_stale'
+        if (
+            mux.get('estop') is not False
+            or mux.get('arm_lock') is not False
+            or mux.get('gait_lock') is not False
+            or mux.get('invalid_command_count', 0) != 0
+        ):
+            return 'red_motion_mux_safety_fault'
+        return ''
+
+    def _reverse_command_active(self, now):
+        """只有普通 Move 实际输出为预期后退且安全允许时，累计后退有效时间。"""
+        if self._red_motion_safety_reason(now):
+            return False
+        if not self._is_fresh(
+            self.latest_final_cmd_time, now, self.suggested_cmd_timeout_sec
+        ):
+            return False
+        final = self.latest_final_cmd
+        values = (
+            _finite_float(final.linear.x), _finite_float(final.linear.y),
+            _finite_float(final.angular.z),
+        )
+        return (
+            all(value is not None for value in values)
+            and values[0] < -1e-3
+            and abs(values[1]) <= 1e-3
+            and abs(values[2]) <= 1e-3
+        )
+
+    def _final_cmd_is_zero(self, now):
+        """停车确认检查最终 mux 输出的全部平面控制量与新鲜度。"""
+        if not self._is_fresh(
+            self.latest_final_cmd_time, now, self.suggested_cmd_timeout_sec
+        ):
+            return False
+        final = self.latest_final_cmd
+        values = (
+            final.linear.x, final.linear.y, final.linear.z,
+            final.angular.x, final.angular.y, final.angular.z,
+        )
+        return all(
+            value is not None and abs(value) <= 1e-3
+            for value in (_finite_float(value) for value in values)
+        )
+
+    def _sdk_status_sequence(self):
+        """只接受严格正整数状态序号，旧回执不能满足新的停车/步态门。"""
+        status = self.latest_sdk_motion_status
+        sequence = status.get('sequence') if isinstance(status, dict) else 0
+        return sequence if type(sequence) is int and sequence > 0 else 0
+
+    @staticmethod
+    def _normalize_angle(angle):
+        """将 yaw 差归一化到 [-pi, pi]，跨 ±pi 时仍能正确判断转角。"""
+        return math.atan2(math.sin(angle), math.cos(angle))
+
     def _start_corner_turn(self):
         """确认角点后独立转向，居中后才恢复巡线。"""
+        direction = self._resolved_corner_direction(self.latest_corner)
+        if direction is None:
+            # direction_hint 未经确认时不能默认左转，避免把右弯变成撞内侧。
+            self.last_reason = 'corner_direction_unknown'
+            self._publish_mission_candidate(Twist())
+            return
         route_event = self.route_core.corner_confirmed()
         if not route_event.accepted:
             return
         self.corner_seen_count = 0
+        self.active_corner_direction = direction
+        self.active_corner_direction_source = (
+            'direction_hint' if self.corner_turn_direction == 'hint'
+            else 'configured_fixed_direction'
+        )
+        self.active_corner_detected_time = self.latest_corner_time
+        self.active_corner_confidence = float(
+            getattr(self.latest_corner, 'confidence', 0.0)
+        )
         self._set_state('CORNER_PRE_TURN', route_event.reason)
         self._publish_mission_candidate(Twist())
 
     def _control_corner_turn(self, now):
         """角点局部转向有时长边界，防止无限转圈。"""
-        # 转角不能绕过 START_READY 门，失联时只保留零速。
-        if not self._line_follower_is_ready(now):
+        # 进入角点前已通过 START_READY；之后 follower 会因丢线进入
+        # CORNER_OWNER_WAIT。此时再要求 LINE_FOLLOW 会错误地让 mission 停转。
+        if self.active_corner_direction not in ('left', 'right'):
             self._publish_mission_candidate(Twist())
             return
         elapsed = now - self.state_enter_time
@@ -1009,11 +1538,8 @@ class LineCourseMissionNode(Node):
             return
         cmd = Twist()
         cmd.linear.x = self.corner_vx
-        cmd.angular.z = (
-            self._turn_direction(
-                self.corner_turn_direction,
-                self.latest_corner,
-            ) * self.corner_angular_z
+        cmd.angular.z = self._turn_sign(self.active_corner_direction) * (
+            self.corner_angular_z
         )
         self._publish_mission_candidate(cmd)
 
@@ -1046,7 +1572,12 @@ class LineCourseMissionNode(Node):
             if not route_event.accepted:
                 self._enter_emergency_stop(route_event.reason)
                 return
-            self._set_state(route_event.route_phase, route_event.reason)
+            next_state = route_event.route_phase
+            if route_event.route_phase == 'MID_ROUTE':
+                # 红圆算法只在正式中段搜索状态接入；路线 phase 保持兼容名称。
+                next_state = 'RED_TARGET_SEARCH'
+                self.red_first_seen_time = None
+            self._set_state(next_state, route_event.reason)
             self.align_context = ''
             self._publish_mission_candidate(Twist())
             return
@@ -1098,15 +1629,6 @@ class LineCourseMissionNode(Node):
             and self.red_seen_count >= self.red_circle_confirm_frames
         )
 
-    def _white_bar_confirmed(self, now):
-        """白线确认只服务当前 arm 阶段，不能按次数推断。"""
-        stage = self.white_stage_controller.active_stage
-        return (
-            self._is_fresh(self.latest_white_bar_time, now)
-            and self.route_core.white_bar_detection_allowed(stage)
-            and self.white_seen_count >= self.white_bar_confirm_frames
-        )
-
     def _corner_confirmed(self, now):
         """角点确认遵守 phase gate 和本地配置开关。"""
         return (
@@ -1114,6 +1636,7 @@ class LineCourseMissionNode(Node):
             and self._is_fresh(self.latest_corner_time, now)
             and self.route_core.corner_detection_allowed()
             and self.corner_seen_count >= self.corner_confirm_frames
+            and self._resolved_corner_direction(self.latest_corner) is not None
         )
 
     def _stop_zone_confirmed(self, now):
@@ -1231,7 +1754,7 @@ class LineCourseMissionNode(Node):
         """公开验收状态；旗标、请求和候选来自真相。"""
         route = self.route_core
         msg = String()
-        msg.data = json.dumps({
+        payload = {
             'state': self.state,
             'route_phase': route.route_phase,
             'mission_started': bool(route.mission_started),
@@ -1246,22 +1769,73 @@ class LineCourseMissionNode(Node):
             'active_action': self.active_action,
             'white_bar_stage_state': self.white_stage_controller.state,
             'white_bar_stage_run_id': self.white_stage_controller.run_id,
-            'white_bar_stage': self.white_stage_controller.active_stage,
             'white_bar_action_request_sent': bool(
                 self.white_stage_controller.request_sent
             ),
+            # 兼容旧字段；新消费者应读取 seen/lost 明确字段。
             'white_bar_confirm_count': self.white_seen_count,
             'red_confirm_count': self.red_seen_count,
             'stop_zone_confirm_count': self.stop_seen_count,
             'stop_zone_inside_count': self.stop_inside_count,
             'corner_confirm_count': self.corner_seen_count,
+            'corner_owner': self.corner_owner,
+            'corner_direction_config': self.corner_turn_direction,
+            'corner_direction_active': self.active_corner_direction,
+            'corner_direction_source': self.active_corner_direction_source,
+            'corner_first_detected_time': self.active_corner_detected_time,
+            'corner_active_confidence': self.active_corner_confidence,
+            'corner_candidate_direction_hint': str(getattr(
+                self.latest_corner, 'direction_hint', ''
+            )),
+            'corner_candidate_confidence': float(getattr(
+                self.latest_corner, 'confidence', 0.0
+            )),
             'line_follower_ready': bool(self.line_follower_ready),
             'line_follower_status_reason': self.latest_line_status,
             'align_context': self.align_context,
             'align_confirm_count': self.align_seen_count,
+            'T_RED_FIRST_SEEN': self.red_first_seen_time,
+            'red_reverse_configured_duration': self.red_reverse_duration_sec,
+            'red_reverse_active_elapsed': self.red_reverse_active_elapsed,
+            'red_reverse_wall_elapsed': (
+                0.0 if self.red_reverse_started_time is None else max(
+                    0.0, time.monotonic() - self.red_reverse_started_time
+                )
+            ),
+            'red_reverse_remaining': max(
+                0.0, self.red_reverse_duration_sec - self.red_reverse_active_elapsed
+            ),
+            # 简短字段保留给现场标定脚本，和需求中的术语一一对应。
+            'configured_duration': self.red_reverse_duration_sec,
+            'active_elapsed': self.red_reverse_active_elapsed,
+            'wall_elapsed': (
+                0.0 if self.red_reverse_started_time is None else max(
+                    0.0, time.monotonic() - self.red_reverse_started_time
+                )
+            ),
+            'remaining': max(
+                0.0, self.red_reverse_duration_sec - self.red_reverse_active_elapsed
+            ),
             'final_vx': float(cmd.linear.x),
             'final_wz': float(cmd.angular.z),
-        }, separators=(',', ':'))
+            # final_* 为历史兼容字段且实际是 mission candidate；验收 final
+            # 必须读取下列 mux 字段，避免把上游候选误当 SDK 最终命令。
+            'mission_candidate_vx': float(cmd.linear.x),
+            'mission_candidate_vy': float(cmd.linear.y),
+            'mission_candidate_yaw': float(cmd.angular.z),
+            'mux_final_cmd_fresh': self._is_fresh(
+                self.latest_final_cmd_time,
+                time.monotonic(),
+                self.suggested_cmd_timeout_sec,
+            ),
+            'mux_final_vx': float(self.latest_final_cmd.linear.x),
+            'mux_final_vy': float(self.latest_final_cmd.linear.y),
+            'mux_final_yaw': float(self.latest_final_cmd.angular.z),
+        }
+        payload.update(
+            self.white_bar_blind_core.snapshot(time.monotonic_ns())
+        )
+        msg.data = json.dumps(payload, separators=(',', ':'))
         self.state_publisher.publish(msg)
 
     def _publish_white_stage_status(self, event):
@@ -1319,10 +1893,15 @@ class LineCourseMissionNode(Node):
     def _reset_detection_counts(self):
         """错误阶段、stop 与新任务都清理跨检测计数。"""
         self.red_seen_count = 0
+        self.red_first_seen_time = None
         self.stop_seen_count = 0
         self.stop_inside_count = 0
         self.white_seen_count = 0
         self.corner_seen_count = 0
+        self.active_corner_direction = ''
+        self.active_corner_direction_source = ''
+        self.active_corner_detected_time = None
+        self.active_corner_confidence = 0.0
 
     def _reset_line_follower_readiness(self):
         """stop/new-run 丢弃旧 ready/候选，强制新的就绪闭环。"""
@@ -1338,6 +1917,10 @@ class LineCourseMissionNode(Node):
         self.white_action_started_time = None
         self.white_action_expected_request_id = None
         self.inspection_request_started_time = None
+        self.red_turn_start_yaw = None
+        self.red_reverse_started_time = None
+        self.red_reverse_active_elapsed = 0.0
+        self.red_reverse_last_tick = None
 
     def _is_duplicate_stage_command(self, payload):
         """允许 ACK 丢失时重发同一命令，回退序号故障。"""
@@ -1353,15 +1936,19 @@ class LineCourseMissionNode(Node):
             and stage == self.white_stage_controller.active_stage
         )
 
+    def _resolved_corner_direction(self, detection):
+        """返回本弯的显式方向；hint 缺失或非法时故障关闭而非默认左转。"""
+        direction = self.corner_turn_direction
+        if direction == 'hint':
+            direction = str(getattr(
+                detection, 'direction_hint', ''
+            )).strip().lower()
+        return direction if direction in ('left', 'right') else None
+
     @staticmethod
-    def _turn_direction(direction, detection=None):
-        """保留 left/right/hint 配置，默认左转且不猜测方向。"""
-        normalized = str(direction).strip().lower()
-        if normalized == 'hint' and detection is not None:
-            normalized = str(
-                getattr(detection, 'direction_hint', '')
-            ).strip().lower()
-        return -1.0 if normalized == 'right' else 1.0
+    def _turn_sign(direction):
+        """将已验证的左右方向映射到 ROS yaw 符号。"""
+        return -1.0 if direction == 'right' else 1.0
 
 
 def main(args=None):

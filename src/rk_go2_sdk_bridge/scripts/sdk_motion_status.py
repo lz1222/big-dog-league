@@ -7,7 +7,7 @@ import time
 
 
 VALID_EVENTS = frozenset((
-    'STARTUP_STOP', 'MOVE', 'STOP_MOVE', 'SDK_ERROR',
+    'CLASSIC_VERIFIED', 'STARTUP_STOP', 'MOVE', 'STOP_MOVE', 'SDK_ERROR',
 ))
 REQUIRED_FIELDS = frozenset((
     'server_instance_id', 'sequence', 'event', 'ret', 'reason', 'vx', 'vy', 'yaw',

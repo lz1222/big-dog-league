@@ -1,0 +1,2 @@
+event,elapsed_sec,unix_sec,cloud_count,cloud_gap_sec,cloud_frame_id,eth0_rx_bytes,eth0_rx_packets,eth0_rx_errors,eth0_rx_dropped,eth0_tx_bytes,eth0_tx_packets,eth0_tx_errors,eth0_tx_dropped,eth1_rx_bytes,eth1_rx_packets,eth1_rx_errors,eth1_rx_dropped,eth1_tx_bytes,eth1_tx_packets,eth1_tx_errors,eth1_tx_dropped
+counter_sample,1.054600,1786176647.674621,10,,base_link,1422764932,1249641,0,0,5772107,28747,0,0,0,0,0,0,0,0,0,0

@@ -55,12 +55,11 @@ CONTROL_PLANE_MAX_FRAME_GAP_MS="${RK_COMPETITION_CONTROL_PLANE_MAX_FRAME_GAP_MS:
 CONTROL_PLANE_PROBE_TERMINAL_SUCCESS_MODE="${RK_COMPETITION_CONTROL_PLANE_PROBE_TERMINAL_SUCCESS_MODE:-normal}"
 SDK_LISTEN_TIMEOUT_SEC="${RK_COMPETITION_SDK_LISTEN_TIMEOUT_SEC:-10}"
 STATUS_GATE_TIMEOUT_SEC="${RK_COMPETITION_STATUS_GATE_TIMEOUT_SEC:-12}"
-# 默认不允许改变机器人控制权；仅在机器人已静止并由正式启动入口显式授权时，
-# prearm 才可执行一次 ReleaseMode / sport_mode OFF→ON 恢复。
-ENABLE_MOTION_CONTROL_RECOVERY="${RK_COMPETITION_ENABLE_MOTION_CONTROL_RECOVERY:-false}"
 # 控制面 DDS 样本连续并不等于 Sport RPC 已完成服务切换。默认 0 保持正式
 # 启动行为不变；零运动验收可显式给出稳定窗口，期间不创建 SDK client、更不发命令。
 SDK_STARTUP_SETTLE_SEC="${RK_COMPETITION_SDK_STARTUP_SETTLE_SEC:-0}"
+# 当前人工经典状态由操作者显式确认；禁止用 SportModeState error_code 反推步态。
+MANUAL_CLASSIC_CONFIRMED="${RK_COMPETITION_MANUAL_CLASSIC_CONFIRMED:-false}"
 
 resolve_workspace_dir() {
     local candidate
@@ -375,13 +374,6 @@ done
 
 if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ] \
         && [ "$START_SDK_SERVER" = "true" ]; then
-    case "$ENABLE_MOTION_CONTROL_RECOVERY" in
-        true|false|1|0) ;;
-        *)
-            echo "ERROR: RK_COMPETITION_ENABLE_MOTION_CONTROL_RECOVERY must be true or false." >&2
-            exit 1
-            ;;
-    esac
     case "$CONTROL_PLANE_PROBE_TERMINAL_SUCCESS_MODE" in
         normal|controlled) ;;
         *)
@@ -391,6 +383,11 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ] \
     esac
     if ! [[ "$SDK_STARTUP_SETTLE_SEC" =~ ^[0-9]+$ ]]; then
         echo "ERROR: RK_COMPETITION_SDK_STARTUP_SETTLE_SEC must be a non-negative integer." >&2
+        exit 1
+    fi
+    if [ "$MANUAL_CLASSIC_CONFIRMED" != "true" ] \
+            && [ "$MANUAL_CLASSIC_CONFIRMED" != "false" ]; then
+        echo "ERROR: RK_COMPETITION_MANUAL_CLASSIC_CONFIRMED must be true or false." >&2
         exit 1
     fi
     for measured_value in \
@@ -483,14 +480,12 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
         cleanup_failed_start
         exit 1
     fi
-    # 正式 SDK server 之前的唯一控制状态门。默认只读；显式 recovery=true
-    # 只可在机器人静止、且本次 backend 尚未 READY 时使用一次性恢复步骤。
-    echo "MOTION_CONTROL_PREARM recovery_enabled=${ENABLE_MOTION_CONTROL_RECOVERY}"
+    # 正式 SDK server 之前只读核验 MotionSwitcher 与 Sport responder。
+    # mcf 是经典静止时的已观测状态，不能在此处触发任何模式释放或服务切换。
+    echo "MOTION_CONTROL_PREARM mutation_count=0"
     if ! "$SDK_RUNTIME_WRAPPER" "$MOTION_CONTROL_PREARM" \
             --interface "$SDK_NETWORK_INTERFACE" \
-            --enable-recovery "$ENABLE_MOTION_CONTROL_RECOVERY" \
-            --version-timeout-sec 3 \
-            --recovery-timeout-sec 10 2>&1 \
+            --version-timeout-sec 3 2>&1 \
             | tee "${LOG_DIR}/motion_control_prearm.log"; then
         cleanup_failed_start
         exit 1
@@ -551,6 +546,7 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
         --max-vx "$MOTION_MAX_VX"
         --max-vy "$MOTION_MAX_VY"
         --max-yaw "$MOTION_MAX_YAW"
+        --manual-classic-confirmed "$MANUAL_CLASSIC_CONFIRMED"
     )
     SERVER_COMMAND="exec $(printf '%q ' "${SERVER_ARGS[@]}")"
     if ! tmux new-window -d -t "$SESSION" -n sdk_server \
@@ -563,6 +559,18 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
     record_tmux_pane sdk_server "${SESSION}:sdk_server" \
         "${LOG_DIR}/sdk_server.log"
 
+    # 当前固件不支持 2049 ClassicWalk API。操作者的人工经典确认只作为
+    # 当前实例审计事件；不读取 error_code 来推断步态，也不执行任何 gait 写入。
+    if ! "$SDK_STATUS_GATE" --mode status --event CLASSIC_VERIFIED \
+            --required-ret 0 --reject-move \
+            --expected-server-instance-id "$SERVER_INSTANCE_ID" \
+            --min-receive-monotonic-ns "$STATUS_MIN_RECEIVE_NS" \
+            --status-ip "$SDK_STATUS_IP" --status-port "$SDK_STATUS_PORT" \
+            --timeout-sec "$STATUS_GATE_TIMEOUT_SEC" 2>&1 \
+            | tee "${LOG_DIR}/classic_verified_status_gate.log"; then
+        cleanup_failed_start
+        exit 1
+    fi
     if ! "$SDK_STATUS_GATE" --mode status --event STARTUP_STOP \
             --required-ret 0 --reject-move \
             --expected-server-instance-id "$SERVER_INSTANCE_ID" \

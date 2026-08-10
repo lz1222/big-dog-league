@@ -87,6 +87,19 @@ def test_selection_prefers_grasp_image_center_not_largest_area(config, camera_in
     assert result.center_x < 130
 
 
+def test_detect_all_returns_multiple_same_color_objects(config, camera_info):
+    """同色抓取样品必须保留全部候选，不能只返回距离画面中心最近的一件。"""
+    image = np.zeros((200, 200, 3), dtype=np.uint8)
+    cv2.circle(image, (60, 100), 25, (255, 255, 0), -1)
+    cv2.circle(image, (145, 100), 25, (255, 255, 0), -1)
+    depth = np.full((200, 200), 650, dtype=np.uint16)
+    candidates = ColorObjectDetectorCore(config).detect_all(
+        image, depth, '16UC1', camera_info, ['cyan'])
+    assert len(candidates) == 2
+    assert {candidate.color for candidate in candidates} == {'cyan'}
+    assert {round(candidate.depth_m, 3) for candidate in candidates} == {0.65}
+
+
 def test_region_depth_handles_zero_center_and_mad_outliers(config, camera_info):
     image, depth = _scene((0, 0, 255))
     depth[100, 100] = 0

@@ -1,0 +1,28 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/unitree/rk_inspection_ws/tools/go2_legacy_stair_cli/go2_legacy_stair_cli.cpp
+cmath
+-
+cstdlib
+-
+cstring
+-
+iomanip
+-
+iostream
+-
+stdexcept
+-
+string
+-
+unitree/robot/channel/channel_factory.hpp
+-
+unitree/robot/go2/sport/sport_client.hpp
+-
+

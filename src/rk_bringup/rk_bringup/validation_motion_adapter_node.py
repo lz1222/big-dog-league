@@ -253,10 +253,12 @@ def parse_arguments(argv=None):
     parser.add_argument('--max-yaw', type=float, default=0.8)
     parser.add_argument('--max-lateral-error', type=float, default=0.8)
     arguments = parser.parse_args(argv)
-    if not (0.0 < arguments.motion_sec <= 1.0):
-        parser.error('--motion-sec must be in (0, 1.0]')
-    if not (arguments.motion_sec < arguments.watchdog_sec <= 1.2):
-        parser.error('--watchdog-sec must be > motion and <= 1.2')
+    # 隔离动态验收最长只允许一次 8.0 s 直线窗口；8.2 s 是独立硬上限，
+    # 预留调度与 StopMove 传播余量，不能被命令行放宽为长距离运行。
+    if not (0.0 < arguments.motion_sec <= 8.0):
+        parser.error('--motion-sec must be in (0, 8.0]')
+    if not (arguments.motion_sec < arguments.watchdog_sec <= 8.2):
+        parser.error('--watchdog-sec must be > motion and <= 8.2')
     return arguments
 
 

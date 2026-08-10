@@ -1,0 +1,21 @@
+# STARTUP_HOME_POSE 配置草案：尚未得到有效的双源只读采样，禁止接入控制或到位判定。
+# 数值保持官方 App 显示单位；此文件不执行任何单位换算。
+startup_home_pose:
+  value_unit: app_display_unit
+  angle0: 0.000000
+  angle1: -90.000000
+  angle2: 90.000000
+  angle3: 0.000000
+  angle4: 0.000000
+  angle5: 0.000000
+  angle6: -19.000000
+
+# 只有 `rt/arm_Feedback` 与 `current_servo_angle` 均有有效采样后才能填入数值。
+home_tolerance:
+  angle0: null
+  angle1: null
+  angle2: null
+  angle3: null
+  angle4: null
+  angle5: null
+  angle6: null

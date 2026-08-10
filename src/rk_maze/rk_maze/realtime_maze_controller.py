@@ -290,10 +290,22 @@ class RealtimeMazeController(Node):
         )
 
     def _load_heading_config(self) -> HeadingControllerConfig:
+        # 参数需显式声明才会读取 YAML；默认关闭长期侧向补偿，防止持续左偏修正。
+        defaults = HeadingControllerConfig()
+        for name in ('kp_heading', 'kp_center', 'kd_gyro', 'post_turn_kp_heading',
+                     'post_turn_max_wz', 'max_abs_imu_wz'):
+            if not self.has_parameter(name):
+                self.declare_parameter(name, getattr(defaults, name))
+        if not self.has_parameter('enable_lateral_centering'):
+            self.declare_parameter('enable_lateral_centering', defaults.enable_lateral_centering)
         return HeadingControllerConfig(
             kp_heading=self._try_float('kp_heading', 1.5),
-            kp_center=self._try_float('kp_center', 0.8),
+            kp_center=self._try_float('kp_center', 0.0),
             kd_gyro=self._try_float('kd_gyro', 0.3),
+            post_turn_kp_heading=self._try_float('post_turn_kp_heading', 0.8),
+            post_turn_max_wz=self._try_float('post_turn_max_wz', 0.20),
+            max_abs_imu_wz=self._try_float('max_abs_imu_wz', 1.50),
+            enable_lateral_centering=self._try_bool('enable_lateral_centering', False),
         )
 
     def _load_mcc_config(self) -> MotionCompensatedCloudConfig:
@@ -319,7 +331,15 @@ class RealtimeMazeController(Node):
         )
 
     def _load_stop_bias_config(self) -> StopBiasConfig:
-        return StopBiasConfig()
+        # 停稳统计和 stop feedforward 都必须显式启用，默认不能参与控制。
+        if not self.has_parameter('stop_bias_enabled'):
+            self.declare_parameter('stop_bias_enabled', False)
+        if not self.has_parameter('stop_feedforward_enabled'):
+            self.declare_parameter('stop_feedforward_enabled', False)
+        return StopBiasConfig(
+            enabled=self._try_bool('stop_bias_enabled', False),
+            feedforward_enabled=self._try_bool('stop_feedforward_enabled', False),
+        )
 
     def _load_jh_config(self) -> JointHealthConfig:
         return JointHealthConfig(
@@ -497,6 +517,8 @@ class RealtimeMazeController(Node):
             ),
             now_sec=now,
             in_turn=(self._state in (STATE_ARC_TURN_ENTRY, STATE_ARC_TURN_MAIN)),
+            # 重捕获期才允许低增益墙线重对齐；巡航不使用侧向偏差做长期转向。
+            post_turn_realign=(self._state == STATE_CORRIDOR_REACQUIRE),
         )
 
         # F5+F6: Plan candidates
@@ -630,6 +652,8 @@ class RealtimeMazeController(Node):
             'cloud_buffer_frames': self._cloud_buffer.accumulated_frames,
             'cloud_buffer_clears': self._cloud_buffer.cleared_count,
             'stop_bias_samples': self._stop_bias.sample_count,
+            'stop_bias_enabled': self._stop_bias_config.enabled,
+            'stop_feedforward_enabled': self._stop_bias_config.feedforward_enabled,
             'corridor': (
                 {
                     'heading_deg': math.degrees(self._latest_corridor.corridor_heading)
@@ -671,6 +695,14 @@ class RealtimeMazeController(Node):
     def _try_int(self, name: str, default: int) -> int:
         try:
             return int(self.get_parameter(name).value)
+        except Exception:
+            return default
+
+    def _try_bool(self, name: str, default: bool) -> bool:
+        """读取布尔参数失败时回退到安全默认值，避免字符串真值误开实验功能。"""
+        try:
+            value = self.get_parameter(name).value
+            return value if isinstance(value, bool) else default
         except Exception:
             return default
 

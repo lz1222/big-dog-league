@@ -76,6 +76,9 @@ function(configure_d1_target target_name)
     set_target_properties(${target_name} PROPERTIES
       BUILD_RPATH "${UNITREE_SDK2_PREFIX}/lib;${UNITREE_SDK2_RUNTIME_DIR}"
       INSTALL_RPATH "${UNITREE_SDK2_PREFIX}/lib;${UNITREE_SDK2_RUNTIME_DIR}"
+      # ROS Foxy 也携带同名 CycloneDDS。使用 DT_RPATH 优先选择与 SDK2
+      # 匹配的版本，避免被环境变量中的 ROS 动态库覆盖而在启动时失败。
+      LINK_FLAGS "-Wl,--disable-new-dtags"
     )
   endif()
 endfunction()
@@ -122,3 +125,36 @@ add_executable(d1_servo_heat_diagnosis src/d1_servo_heat_diagnosis.cpp src/msg/A
 configure_d1_target(d1_servo_heat_diagnosis)
 add_executable(d1_joint5_control_diagnosis src/d1_joint5_control_diagnosis.cpp src/msg/ArmString_.cpp src/msg/PubServoInfo_.cpp)
 configure_d1_target(d1_joint5_control_diagnosis)
+# 抓取平台预设抓取准备动作：基于官方 rt/arm_Command、rt/arm_Feedback 的受限两点位程序。
+add_executable(d1_grasp_platform_preset_prepare src/d1_grasp_platform_preset_prepare.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_grasp_platform_preset_prepare)
+# 兼容此前已交付的命令名，避免旧二进制继续使用已淘汰的单次 mode=1 控制逻辑。
+add_executable(d1_fixed_pose_executor src/d1_grasp_platform_preset_prepare.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_fixed_pose_executor)
+# 抓取平台预设抓取归位动作：复用同一安全状态机，仅执行当前位置回到位置一。
+add_executable(d1_grasp_platform_return_home src/d1_grasp_platform_return_home.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_grasp_platform_return_home)
+# 一号平台放置动作：从动作一连续移动至动作三并保持使能。
+add_executable(d1_platform1_place_action src/d1_platform1_place_action.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_platform1_place_action)
+# 一号平台夹爪张开动作：对齐动作三后，仅改变爪夹至动作四。
+add_executable(d1_platform1_gripper_open_action src/d1_platform1_gripper_open_action.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_platform1_gripper_open_action)
+# 一号平台抬升动作：对齐动作四后，抬升至动作五并保持使能。
+add_executable(d1_platform1_lift_action src/d1_platform1_lift_action.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_platform1_lift_action)
+# 一号平台归位动作：对齐动作五后，按抬升后的安全姿态归位至动作一。
+add_executable(d1_platform1_return_home_action src/d1_platform1_return_home_action.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_platform1_return_home_action)
+# 一号平台完整机械臂动作：串行执行放置、张开、等待、抬升和归位，阶段失败即卸力退出。
+add_executable(d1_platform1_complete_action src/d1_platform1_complete_action.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_platform1_complete_action)
+# 二号平台完整机械臂动作：串行执行放置、张开、等待、抬升和归位，阶段失败即卸力退出。
+add_executable(d1_platform2_complete_action src/d1_platform2_complete_action.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_platform2_complete_action)
+# 中转平台完整放置动作：串行执行放置、张开、等待、抬升和左移，阶段失败即卸力退出。
+add_executable(d1_transfer_platform_complete_place_action src/d1_transfer_platform_complete_place_action.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_transfer_platform_complete_place_action)
+# 置位动作：从当前任意反馈姿态以受限分段轨迹回到动作一。
+add_executable(d1_reset_to_pose_one_action src/d1_reset_to_pose_one_action.cpp src/msg/ArmString_.cpp)
+configure_d1_target(d1_reset_to_pose_one_action)
