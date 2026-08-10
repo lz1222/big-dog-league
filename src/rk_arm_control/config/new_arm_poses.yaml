@@ -105,7 +105,8 @@ new_arm:
         - type: move
           pose: HOME
 
-    # 不在 YAML 复制固定关节值；以下单步只调用已有的完整 D1 固定动作。
+    # 不在 YAML 复制固定关节值；两项完整 D1 放置程序均已含放置、张爪、
+    # 抬升和 HOME。这里必须只有一个 fixed step，避免成功后重复执行旧通用动作。
     PLACE_PLATFORM_1:
       steps:
         - type: fixed_platform_action
@@ -113,20 +114,6 @@ new_arm:
     PLACE_PLATFORM_2:
       steps:
         - type: fixed_platform_action
-        - type: gripper
-          action: open
-        - type: move
-          pose: PRE_PICK_START
-        - type: move
-          pose: PICK_START
-        - type: gripper
-          action: close
-        - type: wait
-          duration_sec: 0.4
-        - type: move
-          pose: LIFT_START
-        - type: move
-          pose: HOME
 
     PLACE_TRANSFER:
       steps:

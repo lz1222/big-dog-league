@@ -21,7 +21,9 @@ from std_msgs.msg import Bool, String
 from rk_arm_control.adapters.dry_run_adapter import DryRunArmAdapter
 from rk_arm_control.adapters.sdk_bridge_adapter import SdkBridgeArmAdapter
 from rk_arm_control.fixed_platform_action_runner import (
+    FIXED_PLATFORM_EXECUTABLES,
     FixedPlatformActionRunner,
+    fixed_platform_task_plan_error,
 )
 from rk_interfaces.action import ExecuteArmTask
 from rk_interfaces.msg import ItemTagArray
@@ -106,6 +108,19 @@ class NewArmTaskNode(Node):
         # 任何姿态数据，且默认禁用，防止软件接线阶段误动作。
         self.fixed_platform_runner = FixedPlatformActionRunner(
             self.arm_params.get('fixed_platform_actions', {}))
+        # 启动时暴露错误配置；执行前还会再次检查，防止运行期配置被错误替换。
+        for fixed_task_name in FIXED_PLATFORM_EXECUTABLES:
+            fixed_task = self.tasks.get(fixed_task_name, {})
+            fixed_steps = (
+                fixed_task.get('steps', [])
+                if isinstance(fixed_task, dict) else [])
+            plan_error = fixed_platform_task_plan_error(
+                fixed_task_name,
+                fixed_steps,
+            )
+            if plan_error:
+                self.get_logger().error(
+                    '%s: %s', fixed_task_name, plan_error)
 
         topics = self.arm_params.get('topics', {})
         self.status_topic = str(topics.get('status', '/arm/status'))
@@ -325,12 +340,20 @@ class NewArmTaskNode(Node):
             self.publish_status(task_name, STATUS_FAILED, '', False, message)
             return ExecutionResult(False, STATUS_FAILED, message)
 
+        raw_steps = task_config.get('steps', [])
+        plan_error = fixed_platform_task_plan_error(task_name, raw_steps)
+        if plan_error:
+            # 固定 executable 是完整动作；异常编排绝不能继续走通用 move/gripper。
+            self.publish_status(
+                task_name, STATUS_FAILED, '', False, plan_error)
+            return ExecutionResult(False, STATUS_FAILED, plan_error)
+
         if not self._try_begin_task(task_name):
             message = f'new arm busy: active={self._active_task}'
             self.publish_status(task_name, STATUS_BUSY, '', False, message)
             return ExecutionResult(False, STATUS_BUSY, message)
 
-        steps = list(task_config.get('steps', []))
+        steps = list(raw_steps)
         last_step = ''
         try:
             self.publish_lock(True)

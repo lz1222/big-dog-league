@@ -18,6 +18,28 @@ FIXED_PLATFORM_EXECUTABLES = {
 }
 
 
+def fixed_platform_task_plan_error(task_name: str, steps: object) -> str:
+    """校验完整 D1 放置任务不能在 fixed action 后继续执行通用步骤。
+
+    两个 executable 自身已经完成放置、张爪、抬升和归位。这里在真正创建
+    D1 子进程前拒绝错误 YAML，避免 fixed action 成功后 fall-through 到旧动作。
+    非固定平台任务保持原有通用 step 语义。
+    """
+    normalized = str(task_name or '').upper()
+    if normalized not in FIXED_PLATFORM_EXECUTABLES:
+        return ''
+    if not isinstance(steps, (list, tuple)) or not steps:
+        return 'FIXED_PLATFORM_TASK_INVALID_PLAN'
+    if len(steps) > 1:
+        return 'FIXED_PLATFORM_TASK_HAS_TRAILING_STEPS'
+    step = steps[0]
+    if not isinstance(step, Mapping):
+        return 'FIXED_PLATFORM_TASK_INVALID_PLAN'
+    if str(step.get('type', '')).lower() != 'fixed_platform_action':
+        return 'FIXED_PLATFORM_TASK_INVALID_PLAN'
+    return ''
+
+
 @dataclass(frozen=True)
 class FixedPlatformActionResult:
     """固定动作进程的明确结果，非零退出和超时均不能报告成功。"""
