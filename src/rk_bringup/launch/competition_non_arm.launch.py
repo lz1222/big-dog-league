@@ -124,6 +124,7 @@ def generate_launch_description():
     enable_debug_image = LaunchConfiguration('enable_debug_image')
     sdk_network_interface = LaunchConfiguration('sdk_network_interface')
     sdk_server_runtime = LaunchConfiguration('sdk_server_runtime')
+    sdk_server_start_gate = LaunchConfiguration('sdk_server_start_gate')
     stream_helper = LaunchConfiguration('stream_helper')
     line_image_topic = LaunchConfiguration('line_image_topic')
     sign_image_topic = LaunchConfiguration('sign_image_topic')
@@ -340,6 +341,15 @@ def generate_launch_description():
             ),
         ),
         DeclareLaunchArgument(
+            'sdk_server_start_gate',
+            default_value=[FindPackagePrefix('rk_go2_sdk_bridge'),
+                           '/lib/rk_go2_sdk_bridge/sdk_server_start_gate.py'],
+            description=(
+                'Receiver-ready gate which starts the production SDK server '
+                'only after the current status listener is bound.'
+            ),
+        ),
+        DeclareLaunchArgument(
             'sdk_udp_host', default_value='127.0.0.1',
             description='Production SDK UDP host.',
         ),
@@ -518,6 +528,8 @@ def generate_launch_description():
                 'udp_port': ParameterValue(sdk_udp_port, value_type=int),
                 'final_cmd_topic': '/navigation/cmd_vel',
                 'sdk_status_topic': '/go2/sdk_motion_status',
+                # owner 与 forwarder 必须锁定同一正式启动 nonce，拒绝旧实例重放。
+                'expected_server_instance_id': sdk_server_instance_id,
                 'status_topic': '/gait/mode_status',
                 'lock_request_topic': (
                     '/gait/control_lock_req/global_gait_owner'
@@ -696,25 +708,8 @@ def generate_launch_description():
                 ),
             }],
         ),
-        # SDK server/forwarder 仅在真实硬件模式存在，软件测试没有网络出口。
-        # ROS Foxy 节点继续继承其自身环境；SDK server 经安装树 wrapper 启动，
-        # 仅加载构建时确认的一对 Unitree CycloneDDS 库。
-        ExecuteProcess(
-            # 直接 launch 时也必须显式传入同一接口，不能回退到 server 自身默认值。
-            cmd=[
-                sdk_server_runtime, sdk_server,
-                '--interface', sdk_network_interface,
-                '--listen-ip', sdk_udp_host,
-                '--port', sdk_udp_port,
-                '--status-ip', sdk_status_ip,
-                '--status-port', sdk_status_port,
-                '--server-instance-id', sdk_server_instance_id,
-                '--max-vx', motion_max_vx,
-                '--max-vy', motion_max_vy,
-                '--max-yaw', motion_max_yaw,
-            ], output='log',
-            condition=use_hardware_sdk_server,
-        ),
+        # forwarder 必须先 bind status UDP socket 并发布当前实例 ready。后面的
+        # 启动门订阅该握手后才创建 server，不能靠 launch action 顺序或 sleep 猜测。
         Node(
             package='rk_go2_sdk_bridge',
             executable='cmd_vel_udp_forwarder.py',
@@ -734,6 +729,26 @@ def generate_launch_description():
                 'max_vy': ParameterValue(motion_max_vy, value_type=float),
                 'max_yaw': ParameterValue(motion_max_yaw, value_type=float),
             }],
+        ),
+        # SDK server/forwarder 仅在真实硬件模式存在，软件测试没有网络出口。
+        # gate 不持有 SDK writer，只在 receiver-ready 合同成立后 exec 既有
+        # runtime/server，因此启动 CLASSIC 状态不会在 UDP receiver bind 前丢失。
+        ExecuteProcess(
+            cmd=[
+                sdk_server_start_gate,
+                '--runtime-wrapper', sdk_server_runtime,
+                '--sdk-server', sdk_server,
+                '--interface', sdk_network_interface,
+                '--listen-ip', sdk_udp_host,
+                '--port', sdk_udp_port,
+                '--status-ip', sdk_status_ip,
+                '--status-port', sdk_status_port,
+                '--server-instance-id', sdk_server_instance_id,
+                '--max-vx', motion_max_vx,
+                '--max-vy', motion_max_vy,
+                '--max-yaw', motion_max_yaw,
+            ], output='log',
+            condition=use_hardware_sdk_server,
         ),
         # 这是测试专用合成输入，不是 mock locomotion Action Server。
         Node(

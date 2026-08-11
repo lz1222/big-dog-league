@@ -123,6 +123,7 @@ install(PROGRAMS
   scripts/cmd_vel_udp_forwarder.py
   scripts/sdk_motion_status.py
   scripts/sdk_motion_status_gate.py
+  scripts/sdk_server_start_gate.py
   scripts/sdk_motion_status_audit.py
   scripts/warning_sign_image_classifier.py
   scripts/go2_warning_sign_sdk_loop.sh

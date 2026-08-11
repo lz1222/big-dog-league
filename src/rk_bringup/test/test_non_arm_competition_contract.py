@@ -601,25 +601,44 @@ def test_formal_start_network_gate_fails_closed_before_sdk_processes():
     )
 
 
-def test_formal_start_is_receiver_first_and_uses_current_instance_ack():
-    """B0 listener、实例 ACK 和端口门禁必须全部早于 formal ROS graph。"""
+def test_formal_start_gates_server_after_receiver_and_global_owner_ready():
+    """B0 ready 与 owner subscriber 都必须先于当前实例 server 启动。"""
     source = (
         PACKAGE_ROOT / 'scripts' / 'start_non_arm_competition.sh'
     ).read_text(encoding='utf-8')
 
     assert '"start_udp_forwarder:=false"' in source
     assert '--server-instance-id "$SERVER_INSTANCE_ID"' in source
-    assert source.index('FORWARDER_ARGS=') < source.index(
-        '--mode receiver'
-    ) < source.index('SERVER_ARGS=') < source.index(
+    forwarder_start = source.index('FORWARDER_ARGS=')
+    owner_gate = source.index(
+        'wait_for_global_gait_owner_status_subscriber', forwarder_start
+    )
+    assert forwarder_start < source.index('--mode receiver') < source.index(
+        '-n ros_graph', forwarder_start
+    ) < owner_gate < source.index('SERVER_ARGS=') < source.index(
         '--mode status'
-    ) < source.index('-n ros_graph')
+    )
+    assert 'SDK_SERVER_START_GATE=' in source
+    assert '--receiver-ready-timeout-sec "$STATUS_GATE_TIMEOUT_SEC"' in source
     assert 'SDK_MOTION_BACKEND_READY' in (
         PACKAGE_ROOT / 'rk_bringup' / 'competition_readiness_node.py'
     ).read_text(encoding='utf-8')
     assert 'readiness_gate.log' in source
     assert 'readonly_graph_check >/dev/null' not in source
     assert 'grep -Fqm1 "[${pattern}]" "$ros_log"' in source
+
+    launch_source = FORMAL_LAUNCH.read_text(encoding='utf-8')
+    forwarder_section = launch_source.split(
+        "executable='cmd_vel_udp_forwarder.py'", 1
+    )[1]
+    server_gate_section = launch_source.rsplit('ExecuteProcess(', 1)[1]
+    assert 'sdk_server_start_gate' in server_gate_section
+    assert "'expected_server_instance_id': sdk_server_instance_id" in (
+        launch_source
+    )
+    assert forwarder_section.index('),') < forwarder_section.index(
+        'sdk_server_start_gate'
+    )
 
     readiness_source = (
         PACKAGE_ROOT / 'rk_bringup' / 'competition_readiness_node.py'
@@ -1105,22 +1124,24 @@ def test_sdk_hardware_ready_rejects_old_instance_classic_verified():
     )[0] is False
 
 
-def test_global_gait_owner_readiness_requires_classic_command_ack():
-    """生产必须是经典步态 ACK 且已释放锁；smoke 来源不得混入硬件。"""
+def test_global_gait_owner_readiness_requires_classic_validated_sequence():
+    """生产只接受已验收调用序列且已释放锁；ACK 不得伪装成实体事实。"""
     from rk_bringup.competition_readiness_node import (
         CompetitionReadinessNode,
     )
     payload = {
-        'state': 'CLASSIC_READY',
+        'state': 'CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE',
         'target': 'CLASSIC',
-        'verification_source': 'command_ack',
+        'verification_source': (
+            'validated_sequence_current_cpp_pre_stop_speed_classic_settle_v1'),
         'movement_lock_held': False,
     }
     assert CompetitionReadinessNode._global_gait_mode_ready(payload, False)
     assert not CompetitionReadinessNode._global_gait_mode_ready(payload, True)
     for key, bad_value in (
-        ('state', 'FREE_READY'),
+        ('state', 'CLASSIC_READY'),
         ('target', 'FREE'),
+        ('verification_source', 'command_ack'),
         ('verification_source', 'software_smoke'),
         ('movement_lock_held', True),
     ):

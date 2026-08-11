@@ -39,7 +39,7 @@ class StatusAuditNode(Node):
 
 
 def summarize(statuses, expected_server_instance_id):
-    """验证启动停车、随后经典 ACK、零命令停车及无 MOVE 的闭环合同。"""
+    """验证启动停车、已验收 Classic 序列、零命令停车及无 MOVE 的闭环合同。"""
     startup = [
         status for status in statuses
         if status['event'] == 'STARTUP_STOP' and status['ret'] == 0
@@ -50,7 +50,11 @@ def summarize(statuses, expected_server_instance_id):
     ]
     classic_verified = [
         status for status in statuses
-        if status['event'] == 'CLASSIC_VERIFIED' and status['ret'] == 0
+        if status['event'] == 'CLASSIC_VERIFIED'
+        and status['ret'] == 0
+        and ('verification_source='
+             'validated_sequence_current_cpp_pre_stop_speed_classic_settle_v1')
+        in status['reason']
     ]
     move = [status for status in statuses if status['event'] == 'MOVE']
     errors = [status for status in statuses if status['event'] == 'SDK_ERROR']

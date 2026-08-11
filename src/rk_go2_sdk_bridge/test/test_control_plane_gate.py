@@ -197,13 +197,17 @@ def test_formal_start_scripts_keep_probe_sdk_ros_ordering():
     ) < line_source.index('start_background "realsense_camera"')
     assert '"start_sdk_server:=false"' in competition_source
     assert '"start_udp_forwarder:=false"' in competition_source
-    assert competition_source.index('CONTROL_GATE_COMMAND=') < (
-        competition_source.index('FORWARDER_ARGS=')
-    ) < competition_source.index('--mode receiver') < (
-        competition_source.index('SERVER_ARGS=')
-    ) < competition_source.index('--mode status') < (
-        competition_source.index('-n ros_graph')
+    forwarder_start = competition_source.index('FORWARDER_ARGS=')
+    owner_gate = competition_source.index(
+        'wait_for_global_gait_owner_status_subscriber', forwarder_start
     )
+    assert competition_source.index('CONTROL_GATE_COMMAND=') < forwarder_start < (
+        competition_source.index('--mode receiver')
+    ) < competition_source.index(
+        '-n ros_graph', forwarder_start
+    ) < owner_gate < (
+        competition_source.index('SERVER_ARGS=')
+    ) < competition_source.index('--mode status')
     assert "grep -Fq 'UDP server listening on'" not in competition_source
 
 

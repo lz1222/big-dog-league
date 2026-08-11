@@ -301,6 +301,25 @@ wait_for_udp_listener_count() {
     return 1
 }
 
+wait_for_global_gait_owner_status_subscriber() {
+    # UDP receiver ready 只证明 datagram 不会丢；server 启动前还要确认正式
+    # GlobalGaitOwner 已订阅 ROS status，避免把 late-joiner replay 当作主路径。
+    local timeout_sec="$1"
+    local deadline=$(( $(date +%s) + timeout_sec ))
+    local topic_info
+
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        topic_info="$(timeout 4s ros2 topic info -v /go2/sdk_motion_status 2>&1 || true)"
+        if printf '%s\n' "$topic_info" | grep -Fq 'Node name: global_gait_owner'; then
+            echo "GlobalGaitOwner status subscriber ready."
+            return 0
+        fi
+        sleep 0.2
+    done
+    echo "ERROR: global_gait_owner did not subscribe to /go2/sdk_motion_status." >&2
+    return 1
+}
+
 record_tmux_pane() {
     local label="$1"
     local target="$2"
@@ -355,6 +374,7 @@ SDK_RUNTIME_WRAPPER="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_server_r
 CONTROL_PLANE_GATE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_control_plane_gate.py"
 CONTROL_PLANE_PROBE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_sdk_sport_state_monitor"
 SDK_STATUS_GATE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/sdk_motion_status_gate.py"
+SDK_SERVER_START_GATE="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/sdk_server_start_gate.py"
 MOTION_CONTROL_PREARM="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/go2_motion_control_prearm"
 UDP_FORWARDER="${SDK_BRIDGE_PREFIX}/lib/rk_go2_sdk_bridge/cmd_vel_udp_forwarder.py"
 if [ -n "${SDK_SERVER}" ]; then
@@ -364,7 +384,8 @@ else
 fi
 
 for required_file in "$SDK_RUNTIME_WRAPPER" "$CONTROL_PLANE_GATE" \
-    "$CONTROL_PLANE_PROBE" "$SDK_STATUS_GATE" "$MOTION_CONTROL_PREARM" \
+    "$CONTROL_PLANE_PROBE" "$SDK_STATUS_GATE" "$SDK_SERVER_START_GATE" \
+    "$MOTION_CONTROL_PREARM" \
     "$UDP_FORWARDER" \
     "$SDK_SERVER_BINARY"; do
     if [ ! -x "$required_file" ]; then
@@ -535,9 +556,28 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
         exit 1
     fi
 
+    # 先创建完整 ROS 图：GlobalGaitOwner 必须已订阅 status，server 的启动
+    # CLASSIC 事件才可同时走实时 subscriber 与现有 replay 双路径。
+    if ! tmux new-window -d -t "$SESSION" -n ros_graph \
+            "bash -lc $(printf '%q' "$LAUNCH_COMMAND")"; then
+        cleanup_failed_start
+        exit 1
+    fi
+    tmux pipe-pane -o -t "${SESSION}:ros_graph" \
+        "cat >> $(printf '%q' "${LOG_DIR}/launch.log")"
+    record_tmux_pane competition_launch "${SESSION}:ros_graph" \
+        "${LOG_DIR}/launch.log"
+    if ! wait_for_global_gait_owner_status_subscriber \
+            "$STATUS_GATE_TIMEOUT_SEC"; then
+        cleanup_failed_start
+        exit 1
+    fi
+
     STATUS_MIN_RECEIVE_NS="$(python3 -c 'import time; print(time.monotonic_ns())')"
     SERVER_ARGS=(
-        "$SDK_RUNTIME_WRAPPER" "$SDK_SERVER_BINARY"
+        "$SDK_SERVER_START_GATE"
+        --runtime-wrapper "$SDK_RUNTIME_WRAPPER"
+        --sdk-server "$SDK_SERVER_BINARY"
         --interface "$SDK_NETWORK_INTERFACE"
         --listen-ip "$SDK_UDP_HOST"
         --port "$SDK_UDP_PORT"
@@ -548,6 +588,7 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
         --max-vy "$MOTION_MAX_VY"
         --max-yaw "$MOTION_MAX_YAW"
         --manual-classic-confirmed "$MANUAL_CLASSIC_CONFIRMED"
+        --receiver-ready-timeout-sec "$STATUS_GATE_TIMEOUT_SEC"
     )
     SERVER_COMMAND="exec $(printf '%q ' "${SERVER_ARGS[@]}")"
     if ! tmux new-window -d -t "$SESSION" -n sdk_server \
@@ -593,11 +634,6 @@ if [ "$HARDWARE_MODE" = "true" ] && [ "$SOFTWARE_SMOKE_MODE" != "true" ]; then
         exit 1
     fi
 
-    if ! tmux new-window -d -t "$SESSION" -n ros_graph \
-            "bash -lc $(printf '%q' "$LAUNCH_COMMAND")"; then
-        cleanup_failed_start
-        exit 1
-    fi
 else
     if ! tmux new-session -d -s "$SESSION" -n ros_graph \
             "bash -lc $(printf '%q' "$LAUNCH_COMMAND")"; then
@@ -606,10 +642,12 @@ else
     fi
 fi
 
-tmux pipe-pane -o -t "${SESSION}:ros_graph" \
-    "cat >> $(printf '%q' "${LOG_DIR}/launch.log")"
-record_tmux_pane competition_launch "${SESSION}:ros_graph" \
-    "${LOG_DIR}/launch.log"
+if [ "$HARDWARE_MODE" != "true" ] || [ "$SOFTWARE_SMOKE_MODE" = "true" ]; then
+    tmux pipe-pane -o -t "${SESSION}:ros_graph" \
+        "cat >> $(printf '%q' "${LOG_DIR}/launch.log")"
+    record_tmux_pane competition_launch "${SESSION}:ros_graph" \
+        "${LOG_DIR}/launch.log"
+fi
 
 deadline=$(( $(date +%s) + STARTUP_TIMEOUT_SEC ))
 while [ "$(date +%s)" -lt "$deadline" ]; do

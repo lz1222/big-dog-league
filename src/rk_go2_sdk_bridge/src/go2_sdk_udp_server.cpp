@@ -3,17 +3,14 @@
 #include "rk_go2_sdk_bridge/motion_status_protocol.hpp"
 
 #include <unitree/robot/channel/channel_factory.hpp>
-#include <unitree/robot/channel/channel_subscriber.hpp>
 #include <unitree/robot/go2/sport/sport_client.hpp>
 #include <unitree/robot/go2/vui/vui_client.hpp>
-#include <unitree/idl/go2/SportModeState_.hpp>
 
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cmath>
-#include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -21,7 +18,6 @@
 #include <iomanip>
 #include <iostream>
 #include <fstream>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <sstream>
@@ -41,14 +37,19 @@ using rk_go2_sdk_bridge::UdpMotionCore;
 enum class GaitState
 {
   kUnknown,
-  kClassicReady,
+  kClassicCommandAck,
+  // 无可区分的硬件回读时，只能表示已通过实机矩阵验收的调用序列，不能称物理反馈。
+  kClassicEstablishedByValidatedSequence,
   kFreeReady,
   kFailed,
 };
 
 volatile std::sig_atomic_t g_running = 1;
 
-constexpr const char* kSportModeStateTopic = "rt/sportmodestate";
+// SportModeState 的 error_code=2010 已被本轮落地 A/B 证伪：Classic 与 Free
+// 均可出现，故不再把任一 DDS 字段虚构为实体步态反馈。
+constexpr const char* kClassicValidatedSequenceSource =
+    "validated_sequence_current_cpp_pre_stop_speed_classic_settle_v1";
 struct ServerConfig
 {
   std::string network_interface{"eth1"};
@@ -499,10 +500,12 @@ void SendRequestReply(
   }
 }
 
-std::string GaitReason(const GaitRequest& request, const std::string& phase)
+std::string GaitReason(
+    const GaitRequest& request, const std::string& phase,
+    const std::string& verification_source = "none")
 {
   return "request_id=" + request.request_id + ";target=" + request.target +
-      ";phase=" + phase + ";verification_source=command_ack";
+      ";phase=" + phase + ";verification_source=" + verification_source;
 }
 
 bool ApplyGaitRequest(
@@ -513,8 +516,13 @@ bool ApplyGaitRequest(
   // 再执行省赛已验证的 ZERO → StopMove → gait → settle 合同。
   status.Publish("GAIT_REQUESTED", 0, GaitReason(request, "requested"),
                  0.0, 0.0, 0.0);
+  // startup 的 StopMove 已经完成时 core 尚无活动速度目标；重复 StopMove 会让
+  // server 时序偏离已验证的 Classic 建立序列。运行中若确有活动目标，仍先停车。
+  const bool had_active_motion = core.active();
   const MotionDecision stop = core.ForceStop("gait_transition");
-  ExecuteDecision(client, status, core, stop);
+  if (had_active_motion) {
+    ExecuteDecision(client, status, core, stop);
+  }
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
   int32_t ret = 0;
@@ -541,22 +549,31 @@ bool ApplyGaitRequest(
     return false;
   }
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  const int32_t zero_ret = client.Move(0.0F, 0.0F, 0.0F);
-  const int32_t hold_ret = client.StopMove();
-  const int32_t final_ret = zero_ret != 0 ? zero_ret : hold_ret;
-  if (final_ret != 0) {
-    gait_state = GaitState::kFailed;
-    status.Publish("GAIT_FAILED", final_ret,
-                   GaitReason(request, "final_zero_error"), 0.0, 0.0, 0.0);
-    return false;
-  }
   if (request.target == "CLASSIC") {
-    gait_state = GaitState::kClassicReady;
+    // SDK ret=0 只证明 RPC 被接收；先发布可审计的中间 ACK，绝不据此放行 Move。
+    gait_state = GaitState::kClassicCommandAck;
+    status.Publish("CLASSIC_COMMAND_ACK", 0,
+                   GaitReason(request, "command_ack", "command_ack"),
+                   0.0, 0.0, 0.0);
+  }
+
+  // 现场 A/B 已确认：ClassicWalk 后追加 Move(0)→StopMove 会回退成灵动步态。
+  // 前置 StopMove 已清掉旧速度目标；此处仅 settle，首次速度或最终停车仍由
+  // UdpMotionCore/退出守卫统一执行，避免重引入该破坏性时序。
+  std::this_thread::sleep_for(std::chrono::milliseconds(700));
+  if (request.target == "CLASSIC") {
+    gait_state = GaitState::kClassicEstablishedByValidatedSequence;
+    status.Publish("CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE", 0,
+                   GaitReason(request, "validated_sequence",
+                              kClassicValidatedSequenceSource),
+                   0.0, 0.0, 0.0);
   } else if (request.target == "FREE") {
     gait_state = GaitState::kFreeReady;
   }
-  status.Publish("GAIT_READY", 0, GaitReason(request, "ready"),
+  const std::string verification_source = request.target == "CLASSIC"
+      ? kClassicValidatedSequenceSource : "command_ack";
+  status.Publish("GAIT_READY", 0,
+                 GaitReason(request, "ready", verification_source),
                  0.0, 0.0, 0.0);
   return true;
 }
@@ -794,8 +811,8 @@ int RunServer(const ServerConfig& config)
             << (WallTimeSeconds() - init_started) << std::endl;
   EmergencyStopGuard stop_guard(client, status);
 
-  // CLASSIC_VERIFIED 与 STARTUP_STOP 成功前 UDP socket 不得 bind，因此失败
-  // 路径不存在运动输入出口，也不允许以零速度 Move 绕过人工经典步态门。
+  // 经实机验证的 Classic 调用序列与 STARTUP_STOP 成功前 UDP socket 不得 bind，
+  // 因此 command ACK 或零速度 Move 都不能绕过既定的步态建立顺序。
   if (SendStartupStopWithRetry(client, status) != 0) {
     throw std::runtime_error("STARTUP_STOPMOVE_RETRY_EXHAUSTED");
   }
@@ -807,10 +824,10 @@ int RunServer(const ServerConfig& config)
   if (!ApplyGaitRequest(client, status, core, startup_request, gait_state)) {
     throw std::runtime_error("STARTUP_CLASSIC_FAILED");
   }
-  // READY 仅表示 SDK 调用序列成功；不得把 SportModeState 某个 error_code
-  // 虚构为跨固件硬件确认。
+  // 此事件表示经过实体 A/B 验收的调用序列完成；不是每次启动的硬件反馈。
   status.Publish("CLASSIC_VERIFIED", 0,
-                 "startup_classic;verification_source=command_ack",
+                 "startup_classic;verification_source=" +
+                     std::string(kClassicValidatedSequenceSource),
                  0.0, 0.0, 0.0);
 
   const int socket_fd = CreateUdpSocket(config);
@@ -907,9 +924,8 @@ int RunServer(const ServerConfig& config)
                 action_request.request_id, action_request.action, result);
             decision = {};
           }
-        } else if (gait_state == GaitState::kFailed ||
-                   gait_state == GaitState::kUnknown) {
-          decision = core.ForceStop("gait_not_ready");
+        } else if (gait_state != GaitState::kClassicEstablishedByValidatedSequence) {
+          decision = core.ForceStop("classic_sequence_not_established");
         } else {
           decision = core.AcceptPacket(
               payload, MonotonicSeconds(start_time));

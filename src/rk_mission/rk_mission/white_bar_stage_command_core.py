@@ -16,7 +16,8 @@ SEQUENCER_STATES = frozenset((
     'COMPLETED',
     'FAULTED',
 ))
-FINISH_MILESTONE_STATE = 'TURN_AFTER_RED'
+# 正式 non-arm FSM 在红任务完成且完成安全找线后发布 POST_INSPECTION；此时才可 arm FINISH。
+FINISH_MILESTONE_STATE = 'POST_INSPECTION'
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,8 @@ class WhiteBarStageCommandSequencer:
     ):
         if finish_milestone_state != FINISH_MILESTONE_STATE:
             raise ValueError(
-                'finish_milestone_state must be TURN_AFTER_RED'
+                'finish_milestone_state must be '
+                f'{FINISH_MILESTONE_STATE}'
             )
         self.command_retry_sec = self._positive_float(
             command_retry_sec,

@@ -79,7 +79,7 @@ def _start_completed(sequencer, now=0.0):
 def _finish_pending(sequencer, now=0.0):
     _start_completed(sequencer, now)
     event = sequencer.on_line_course_state(
-        _line_state(state='TURN_AFTER_RED'),
+        _line_state(state='POST_INSPECTION'),
         now + 0.2,
     )
     assert event.action == 'SEND_COMMAND'
@@ -259,7 +259,7 @@ def test_early_red_milestone_waits_for_start_completion():
     _start_pending(sequencer)
 
     milestone = sequencer.on_line_course_state(
-        _line_state(state='TURN_AFTER_RED'),
+        _line_state(state='POST_INSPECTION'),
         0.1,
     )
     completed = sequencer.on_stage_status(
@@ -285,7 +285,7 @@ def test_start_completion_then_red_milestone_sends_finish_sequence_two():
     _start_completed(sequencer)
 
     event = sequencer.on_line_course_state(
-        _line_state(state='TURN_AFTER_RED'),
+        _line_state(state='POST_INSPECTION'),
         0.2,
     )
 
@@ -580,7 +580,7 @@ def test_finish_milestone_parameter_rejects_any_other_state():
     try:
         _sequencer(finish_milestone_state='REACQUIRE_LINE')
     except ValueError as exc:
-        assert str(exc) == 'finish_milestone_state must be TURN_AFTER_RED'
+        assert str(exc) == 'finish_milestone_state must be POST_INSPECTION'
     else:
         raise AssertionError('invalid milestone state must fail')
 

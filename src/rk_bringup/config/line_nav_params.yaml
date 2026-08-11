@@ -34,8 +34,10 @@ real_line_tracker_node:
     # 如果机器狗实际中心在紫色线右侧，robot_center_x_offset_fraction 设为正数；
     # 如果在左侧，设为负数。每 0.01 约等于画面宽度的 1%。
     # 需要更精细时再用 robot_center_x_offset_px 微调像素。
-    robot_center_x_offset_fraction: 0.0
+    robot_center_x_offset_fraction: 0.0422
     robot_center_x_offset_px: 0.0
+    # 实体机身平行黑线的静态 signed heading 零点（左负右正）。
+    heading_zero_offset_rad: 0.023144
 
     line_width_cm: 10.0
 
@@ -152,9 +154,11 @@ line_follower_node:
     # 如果还是左右摆：继续降低 kp_lateral 或 max_angular_z。
     # 如果回中太慢：小幅提高 kp_lateral，每次加 0.1。
     kp_lateral: 0.85
-    kp_heading: 0.35
+    # 与正式 production 同步：加强小幅固定 heading 夹角的校正。
+    kp_heading: 0.70
     max_angular_z: 0.28
-    angular_deadband: 0.08
+    # 与正式 production 同步：允许小幅 heading 校正，不把直线姿态误差长期压零。
+    angular_deadband: 0.02
     angular_smoothing_alpha: 0.22
     line_follow_min_confidence: 0.0
 
@@ -284,7 +288,8 @@ white_bar_stage_command_publisher:
     white_bar_stage_command_topic: /mission/white_bar_stage_command
     line_course_state_topic: /mission/line_course_state
     publisher_status_topic: /mission/white_bar_stage_command_publisher_status
-    finish_milestone_state: TURN_AFTER_RED
+    # 与正式 non-arm FSM 对齐：红任务完成并安全找线后才 arm FINISH。
+    finish_milestone_state: POST_INSPECTION
     control_rate_hz: 10.0
     command_retry_sec: 0.5
     command_ack_timeout_sec: 5.0

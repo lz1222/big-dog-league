@@ -354,7 +354,7 @@ class NonArmSmokePublisher(Node):
                 self._publish_sign('electric_shock', 0.95)
                 self._valid_sign_pulses += 1
                 return
-        # FINISH 命令可在 TURN_AFTER_RED 时提前到达；只有路线节点自身已切到
+        # FINISH 命令可在 POST_INSPECTION 时提前到达；只有路线节点自身已切到
         # FINISH_STAGE 后才投递白线，不能把早到的视觉证据消耗在转向阶段。
         if phase == 'FINISH_STAGE' and state == 'FINISH_STAGE':
             self._publish_next_white_bar('FINISH')

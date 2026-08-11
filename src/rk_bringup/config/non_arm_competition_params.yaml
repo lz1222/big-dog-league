@@ -25,9 +25,12 @@ real_line_tracker_node:
     roi_right_margin_fraction: 0.03
     threshold_value: 70
     max_lateral_error: 1.0
-    # 320 px 图像下，机身几何中心对准黑线时的实测参考偏置为 +13.5 px。
+    # 实体直线验收显示机身稳定偏右；恢复已验证的 +13.5 px 几何中心偏置。
     robot_center_x_offset_fraction: 0.0422
     robot_center_x_offset_px: 0.0
+    # 实体机身平行黑线的静态 signed heading 零点（左负右正）。
+    # LineTrack 发布 signed_raw_heading - heading_zero_offset_rad。
+    heading_zero_offset_rad: 0.023144
     line_width_cm: 10.0
     num_scan_bands: 11
     min_path_bands: 4
@@ -133,9 +136,11 @@ line_follower_node:
     error_slow_threshold: 0.12
     error_slowest_threshold: 0.28
     kp_lateral: 0.85
-    kp_heading: 0.35
+    # 加强残余 heading 校正，使约 0.05 rad 的固定夹角稳定越过 0.02 死区。
+    kp_heading: 0.70
     max_angular_z: 0.28
-    angular_deadband: 0.08
+    # 保留小幅 heading 校正，避免直线姿态误差长期低于死区而侧身行走。
+    angular_deadband: 0.02
     angular_smoothing_alpha: 0.22
     line_follow_min_confidence: 0.0
     short_lost_timeout: 0.75
@@ -223,6 +228,38 @@ line_course_mission_node:
     corner_max_time_sec: 2.5
     corner_cooldown_sec: 3.0
 
+    # TRANSFER 首个 RIGHT L 拐点：未完成实体标定前必须故障关闭。
+    right_corner_confirm_frames: 3
+    right_corner_motion_calibrated: false
+    right_corner_forward_speed: 0.0  # FIELD_CALIBRATION_REQUIRED
+    right_corner_forward_active_time_sec: 0.0  # FIELD_CALIBRATION_REQUIRED
+    right_corner_forward_timeout_sec: 20.0
+    right_corner_turn_wz: 0.0  # FIELD_CALIBRATION_REQUIRED; core 强制 -abs
+    right_corner_target_yaw_deg: 90.0
+    right_corner_turn_timeout_sec: 8.0
+
+    # RIGHT 转完后的短直线继续普通巡线；只有专用左向入口门
+    # 连续确认后才可交出视觉控制权进入 blind LEFT arc。
+    transfer_arc_entry_calibrated: false
+    transfer_arc_entry_confirm_frames: 3
+    transfer_arc_motion_calibrated: false
+    transfer_arc_vx: 0.0  # FIELD_CALIBRATION_REQUIRED; 必须 > 0
+    transfer_arc_wz: 0.0  # FIELD_CALIBRATION_REQUIRED; core 强制 +abs
+    transfer_arc_task_stop_yaw_deg: 0.0  # FIELD_CALIBRATION_REQUIRED
+    transfer_arc_exit_delta_yaw_deg: 0.0  # FIELD_CALIBRATION_REQUIRED
+    transfer_arc_yaw_timeout_sec: 12.0
+    transfer_yaw_wrong_direction_tolerance_deg: 3.0
+    transfer_zero_confirm_frames: 3
+    transfer_zero_epsilon: 0.001
+    transfer_final_cmd_tolerance: 0.005
+    transfer_odom_timeout_sec: 0.5
+    transfer_reacquire_max_lateral_error: 0.75
+    transfer_arm_action_name: /arm/execute_task
+    transfer_arm_action_timeout_sec: 90.0
+    # 保留既有 ExecuteArmTask 动作名，不修改机械臂轨迹。
+    transfer_place_task: transfer_place
+    transfer_pick_task: transfer_pick
+
     # TargetDetector 已在 real_line_tracker_node 中按省赛 HSV/形态学合同实现；
     # 此处首帧可靠输出即锁存 T_RED_FIRST_SEEN，不另行调整检测算法。
     red_circle_confirm_frames: 1  # 首次可靠红圆检测即确认
@@ -234,7 +271,7 @@ line_course_mission_node:
     red_reverse_speed_mps: 0.25  # 后退速度（米/秒）；现场确认后填写正数
     red_reverse_duration_sec: 1.2  # 后退有效运动时长（秒）；现场标定后填写正数
     red_turn_right_angle_deg: 80.0  # 识别动作后的右转目标角度（度）
-    red_turn_right_angular_z: -1.0  # 右转角速度（弧度/秒，负值为右转）
+    red_turn_right_angular_z: 1.0  # 右转角速度幅值（弧度/秒）；路线节点固定输出负 wz
     red_yaw_timeout_sec: 8.0  # 单次红圆转向的 yaw 反馈超时（秒）
     red_stop_confirm_timeout_sec: 3.0  # 后退结束后确认 StopMove 的超时（秒）
     red_classic_recovery_timeout_sec: 8.0  # 等待 CLASSIC_VERIFIED 的超时（秒）

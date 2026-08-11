@@ -2,15 +2,19 @@ from dataclasses import replace
 
 import cv2
 import numpy as np
+import pytest
 from sensor_msgs.msg import Image
 
 from rk_perception.real_line_tracker_node import (
     LineTrackerConfig,
     RealLineTrackerNode,
+    correct_heading_error,
     detect_blue_stop_zone,
+    detect_corner_candidate,
     detect_line_in_image,
     detect_red_circle,
     detect_white_bar,
+    validate_heading_zero_offset_rad,
 )
 
 
@@ -48,13 +52,16 @@ class _CallbackHarness:
     """不初始化 ROS 节点，隔离验证 image_callback 的主输出契约。"""
 
     image_callback = RealLineTrackerNode.image_callback
-    publish_debug_images_safely = RealLineTrackerNode.publish_debug_images_safely
+    publish_debug_images_safely = (
+        RealLineTrackerNode.publish_debug_images_safely
+    )
 
     def __init__(self, image, debug_enabled=True, debug_failure=None,
                  forced_result=None):
         self.bridge = _ImageBridge(image)
         self.tracker_config = default_config()
         self.max_track_jump_fraction = 0.30
+        self.heading_zero_offset_rad = 0.0
         self.publisher = _RecordedPublisher()
         self.enable_debug_image = debug_enabled
         self.debug_failure = debug_failure
@@ -181,13 +188,84 @@ def test_right_line_has_positive_lateral_error():
     assert result.lateral_error > 0.20
 
 
-def test_slanted_line_has_heading_error():
-    image = draw_line(make_image(), bottom_x=420, top_x=280)
+def test_center_left_and_right_heading_sign_contract():
+    """图像上方是前方：前方向左为负 heading，向右为正。"""
+    center = detect_line_in_image(
+        draw_line(make_image(), bottom_x=320, top_x=320), default_config()
+    )
+    left = detect_line_in_image(
+        draw_line(make_image(), bottom_x=420, top_x=280), default_config()
+    )
+    right = detect_line_in_image(
+        draw_line(make_image(), bottom_x=220, top_x=360), default_config()
+    )
 
-    result = detect_line_in_image(image, default_config())
+    assert center.heading_error == pytest.approx(0.0, abs=0.02)
+    assert left.line_visible and left.heading_error < -0.15
+    assert right.line_visible and right.heading_error > 0.15
 
-    assert result.line_visible is True
-    assert abs(result.heading_error) > 0.15
+
+def test_heading_zero_offset_calibration_preserves_raw_sign_contract():
+    """整体反号后的 -0.0436 静态偏置必须显式相减。"""
+    assert correct_heading_error(-0.0436, -0.0436) == pytest.approx(0.0)
+    assert correct_heading_error(0.10, -0.0436) == pytest.approx(0.1436)
+    assert correct_heading_error(-0.02, -0.0436) == pytest.approx(0.0236)
+    assert correct_heading_error(0.12, 0.0) == pytest.approx(0.12)
+
+
+def test_smooth_large_curve_is_not_a_sharp_corner():
+    """11 个扫描带连续的平滑大弯不能由 heading 单独触发直角。"""
+    image = make_image()
+    points = []
+    for y in range(479, 5, -3):
+        progress = (479.0 - y) / (479.0 - 5.0)
+        points.append((int(320 - 180 * progress ** 1.25), y))
+    cv2.polylines(
+        image, [np.asarray(points, dtype=np.int32)], False, (0, 0, 0), 48
+    )
+    config = replace(
+        default_config(), num_scan_bands=11, min_path_bands=4,
+        require_bottom_band=True, max_band_center_jump_fraction=0.40,
+    )
+
+    line = detect_line_in_image(image, config)
+    corner = detect_corner_candidate(line, image.shape[1])
+
+    assert len(line.selected_bands) == 11
+    assert abs(line.heading_error) > 0.30
+    assert line.transverse_visible is False
+    assert corner.visible is False
+
+
+@pytest.mark.parametrize(
+    ('end_x', 'expected_direction'), ((80, 'left'), (560, 'right'))
+)
+def test_l_corner_is_detected_while_bottom_incoming_line_exists(
+    end_x, expected_direction
+):
+    """下部纵线未消失时，上部向左/右延伸横线必须提前保留。"""
+    image = make_image()
+    cv2.line(image, (320, 479), (320, 235), (0, 0, 0), 48)
+    cv2.line(image, (320, 235), (end_x, 235), (0, 0, 0), 48)
+    config = replace(
+        default_config(), max_line_width_fraction=0.20,
+        num_scan_bands=11, min_path_bands=4, require_bottom_band=True,
+    )
+
+    line = detect_line_in_image(image, config)
+    corner = detect_corner_candidate(line, image.shape[1])
+
+    assert line.line_visible and line.reason == 'ok'
+    assert line.bottom_band_valid and line.transverse_visible
+    assert corner.visible
+    assert corner.direction_hint == expected_direction
+
+
+@pytest.mark.parametrize('offset', (float('nan'), float('inf'), -float('inf')))
+def test_heading_zero_offset_rejects_nonfinite_values(offset):
+    """NaN/Inf 标定不得进入巡线控制链。"""
+    with pytest.raises(ValueError, match='must be finite'):
+        validate_heading_zero_offset_rad(offset)
 
 
 def test_blank_floor_is_not_visible():

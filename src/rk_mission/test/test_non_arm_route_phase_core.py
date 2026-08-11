@@ -24,13 +24,17 @@ def _started_core():
 
 
 def _to_mid_route(core):
-    """走完 START 跳跃和对齐，供中段门控测试复用。"""
+    """走完 START 和 TRANSFER 一次性里程碑，供检查段复用。"""
     assert core.accept_stage_command('START').accepted
     assert core.white_bar_action_started('START').accepted
     assert core.white_bar_action_completed('START').route_phase == (
         'START_REACQUIRE'
     )
-    assert core.alignment_completed('start').route_phase == 'MID_ROUTE'
+    assert core.alignment_completed('start').route_phase == 'TRANSFER_ROUTE'
+    assert core.transfer_started_event().accepted
+    completed = core.transfer_completed_event()
+    assert completed.route_phase == 'MID_ROUTE'
+    assert completed.transfer_started and completed.transfer_completed
 
 
 def _to_post_inspection(core):
@@ -127,7 +131,7 @@ def test_finish_stage_reacknowledgement_returns_status_instead_of_none():
         'action_done': True,
     }, 0.1).state == 'WAIT_FINISH_MILESTONE'
     assert sequencer.on_line_course_state({
-        'state': 'TURN_AFTER_RED',
+        'state': 'POST_INSPECTION',
         'mission_started': True,
         'white_bar_stage_run_id': 'run-001',
     }, 0.2).requested_stage == 'FINISH'
@@ -429,5 +433,7 @@ def test_red_arrival_contract_uses_follower_yaw_and_active_reverse_time():
     assert 'self._normalize_angle(' in source
     assert 'CLASSIC_VERIFIED' in source
     assert params['red_approach_duration_sec'] == 3.9
-    assert params['red_reverse_duration_sec'] == 0.0
+    # 保留当前 worktree 已完成的实体倒车标定；本测试只确认
+    # 路线仍按 mux 最终命令累计 active time，不将其覆盖回零。
+    assert params['red_reverse_duration_sec'] > 0.0
     assert 'red_reverse_speed_mps' in params

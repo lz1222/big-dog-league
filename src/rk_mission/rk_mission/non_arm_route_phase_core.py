@@ -15,6 +15,7 @@ ROUTE_PHASES = frozenset((
     'WAIT_START',
     'START_STAGE',
     'START_REACQUIRE',
+    'TRANSFER_ROUTE',
     'MID_ROUTE',
     'INSPECTION_APPROACH',
     'INSPECTION_WAIT_SIGN',
@@ -101,6 +102,8 @@ class RoutePhaseEvent:
     active_request_id: str
     active_stage: str
     fault_reason: str
+    transfer_started: bool
+    transfer_completed: bool
 
 
 class NonArmRoutePhaseCore:
@@ -136,6 +139,8 @@ class NonArmRoutePhaseCore:
         self.active_request_id = ''
         self.active_stage = ''
         self.red_circle_consumed = False
+        self.transfer_started = False
+        self.transfer_completed = False
         self.fault_reason = ''
         return self._event(True, 'TRANSITION', 'mission_start')
 
@@ -229,10 +234,11 @@ class NonArmRoutePhaseCore:
         return self.fault(str(reason or 'white_bar_action_failed'))
 
     def red_detection_allowed(self):
-        """红圈只在 START 对齐后的中段路线允许确认一次。"""
+        """红圈只在 TRANSFER 出口重新找线后允许确认一次。"""
         return (
             self.mission_started
             and self.route_phase == 'MID_ROUTE'
+            and self.transfer_completed
             and not self.red_circle_consumed
             and not self.inspection_completed
         )
@@ -328,6 +334,37 @@ class NonArmRoutePhaseCore:
             'FINISH_STAGE',
         )
 
+    def transfer_detection_allowed(self):
+        """只在 START 后的专用 TRANSFER phase 允许首个右角。"""
+        return (
+            self.mission_started
+            and self.route_phase == 'TRANSFER_ROUTE'
+            and not self.transfer_completed
+        )
+
+    def transfer_started_event(self):
+        """锁存 TRANSFER 本 run 已启动，重复调用安全忽略。"""
+        if not self.transfer_detection_allowed():
+            return self._event(
+                False, 'IGNORED', 'transfer_not_allowed_in_phase'
+            )
+        if self.transfer_started:
+            return self._event(True, 'IGNORED', 'transfer_duplicate_ignored')
+        self.transfer_started = True
+        return self._event(True, 'TRANSITION', 'transfer_started')
+
+    def transfer_completed_event(self):
+        """出口线稳定捕获后才进入检查区巡线。"""
+        if (
+            self.route_phase != 'TRANSFER_ROUTE'
+            or not self.transfer_started
+            or self.transfer_completed
+        ):
+            return self.fault('transfer_completion_out_of_order')
+        self.transfer_completed = True
+        self.route_phase = 'MID_ROUTE'
+        return self._event(True, 'TRANSITION', 'transfer_completed')
+
     def corner_confirmed(self):
         """角点是局部受控动作，对齐后路线阶段不变。"""
         if not self.corner_detection_allowed():
@@ -337,7 +374,7 @@ class NonArmRoutePhaseCore:
     def alignment_completed(self, context):
         """只允许指定动作后的对齐成功解锁下一阶段。"""
         if context == 'start' and self.route_phase == 'START_REACQUIRE':
-            self.route_phase = 'MID_ROUTE'
+            self.route_phase = 'TRANSFER_ROUTE'
             return self._event(True, 'TRANSITION', 'start_alignment_completed')
         if context == 'finish' and self.route_phase == 'FINISH_REACQUIRE':
             self.route_phase = 'FINAL_ZONE_ARMED'
@@ -416,6 +453,8 @@ class NonArmRoutePhaseCore:
         self.active_request_id = ''
         self.active_stage = ''
         self.red_circle_consumed = False
+        self.transfer_started = False
+        self.transfer_completed = False
         self.fault_reason = ''
 
     @staticmethod
@@ -439,4 +478,6 @@ class NonArmRoutePhaseCore:
             active_request_id=self.active_request_id,
             active_stage=self.active_stage,
             fault_reason=self.fault_reason,
+            transfer_started=bool(self.transfer_started),
+            transfer_completed=bool(self.transfer_completed),
         )

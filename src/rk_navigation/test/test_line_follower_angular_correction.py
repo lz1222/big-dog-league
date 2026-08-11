@@ -12,7 +12,7 @@ import pytest
 from rk_navigation.line_follower_node import LineFollowerNode
 
 
-def make_follower(lateral_error, heading_error=0.0):
+def make_follower(lateral_error, heading_error=0.0, kp_heading=0.70):
     """构造最小 follower 状态，固定为比赛正式角速度参数。"""
     follower = object.__new__(LineFollowerNode)
     follower.last_line_msg = SimpleNamespace(
@@ -22,9 +22,9 @@ def make_follower(lateral_error, heading_error=0.0):
         heading_error=heading_error,
     )
     follower.kp_lateral = 0.85
-    follower.kp_heading = 0.0
+    follower.kp_heading = kp_heading
     follower.max_angular_z = 0.28
-    follower.angular_deadband = 0.08
+    follower.angular_deadband = 0.02
     follower.angular_smoothing_alpha = 0.22
     follower.last_angular_z = 0.0
     follower.last_raw_angular_z = 0.0
@@ -62,6 +62,33 @@ def test_sustained_negative_raw_request_eventually_publishes_negative_yaw():
     outputs = command_for_frames(make_follower(lateral_error=1.0))
 
     assert outputs[-1] < 0.0
+
+
+def test_left_heading_requests_positive_yaw():
+    """左向路径 heading<0，按正式控制合同必须输出 +wz。"""
+    follower = make_follower(
+        lateral_error=0.0, heading_error=-0.40, kp_heading=0.70
+    )
+
+    assert command_for_frames(follower, 5)[-1] > 0.0
+
+
+def test_right_heading_requests_negative_yaw():
+    """右向路径 heading>0，按正式控制合同必须输出 -wz。"""
+    follower = make_follower(
+        lateral_error=0.0, heading_error=0.40, kp_heading=0.70
+    )
+
+    assert command_for_frames(follower, 5)[-1] < 0.0
+
+
+def test_formal_small_heading_above_new_deadband_requests_yaw():
+    """0.06 rad heading 单独超过正式 0.02 死区时必须产生校正。"""
+    follower = make_follower(
+        lateral_error=0.0, heading_error=0.06, kp_heading=0.70
+    )
+
+    assert command_for_frames(follower, 5)[-1] < 0.0
 
 
 def test_true_small_request_inside_deadband_stays_zero():

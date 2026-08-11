@@ -105,7 +105,8 @@ class WhiteBarStageCommandPublisherNode(Node):
         }
         for name, value in topic_defaults.items():
             self.declare_parameter(name, value)
-        self.declare_parameter('finish_milestone_state', 'TURN_AFTER_RED')
+        # 仅由现行正式 FSM 的 POST_INSPECTION 解锁 FINISH，拒绝旧状态名漂移。
+        self.declare_parameter('finish_milestone_state', 'POST_INSPECTION')
         self.declare_parameter('control_rate_hz', 10.0)
         self.declare_parameter('command_retry_sec', 0.5)
         self.declare_parameter('command_ack_timeout_sec', 5.0)

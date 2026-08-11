@@ -26,7 +26,11 @@ def status(sequence, event, ret=0):
         'sequence': sequence,
         'event': event,
         'ret': ret,
-        'reason': 'test',
+        'reason': (
+            'verification_source='
+            'validated_sequence_current_cpp_pre_stop_speed_classic_settle_v1'
+            if event == 'CLASSIC_VERIFIED' else 'test'
+        ),
         'vx': 0.0,
         'vy': 0.0,
         'yaw': 0.0,

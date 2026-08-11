@@ -17,8 +17,10 @@ from rclpy.qos import ReliabilityPolicy
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
-from global_gait_owner_core import CLASSIC_READY, FAILED, FREE_READY, UNKNOWN
-from global_gait_owner_core import GlobalGaitOwnerCore
+from global_gait_owner_core import (CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE,
+                                    CLASSIC_VALIDATED_SEQUENCE_SOURCE, FAILED,
+                                    FREE_READY, UNKNOWN)
+from global_gait_owner_core import GlobalGaitOwnerCore, SdkStatusSequenceGuard
 
 
 class GlobalGaitOwner(Node):
@@ -34,6 +36,8 @@ class GlobalGaitOwner(Node):
             'final_cmd_topic', '/navigation/cmd_vel').value)
         self.sdk_status_topic = str(self.declare_parameter(
             'sdk_status_topic', '/go2/sdk_motion_status').value)
+        self.expected_server_instance_id = str(self.declare_parameter(
+            'expected_server_instance_id', '').value).strip()
         self.status_topic = str(self.declare_parameter(
             'status_topic', '/gait/mode_status').value)
         self.lock_topic = str(self.declare_parameter(
@@ -54,6 +58,10 @@ class GlobalGaitOwner(Node):
         self._validate_parameters()
 
         self.core = GlobalGaitOwnerCore()
+        # UDP forwarder 会重放启动历史；owner 只能按当前实例的递增序号消费，
+        # 否则旧的 GAIT_REQUESTED 会在已验证 Classic 后再次锁车。
+        self._status_sequence_guard = SdkStatusSequenceGuard(
+            self.expected_server_instance_id)
         self._transition_mutex = threading.Lock()
         self._state_mutex = threading.Lock()
         self._zero_condition = threading.Condition(self._state_mutex)
@@ -94,7 +102,8 @@ class GlobalGaitOwner(Node):
                           callback_group=self.callback_group)
 
         if self.software_smoke_mode:
-            self.core.observe_startup_classic(0)
+            self.core.state = CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE
+            self.core.target = 'CLASSIC'
             self.core.verification_source = 'software_smoke'
         self._publish_state()
 
@@ -102,6 +111,9 @@ class GlobalGaitOwner(Node):
         """限制时间与零速阈值，避免命令行把有界转换变成无限等待。"""
         if not self.udp_host or not 0 < self.udp_port <= 65535:
             raise ValueError('invalid UDP endpoint')
+        # smoke 没有真实 UDP server；正式链必须显式绑定启动 nonce。
+        if not self.software_smoke_mode and not self.expected_server_instance_id:
+            raise ValueError('expected_server_instance_id is required')
         if not 1 <= self.zero_samples_required <= 20:
             raise ValueError('zero_samples_required must be in range 1..20')
         for name, value in (
@@ -132,6 +144,10 @@ class GlobalGaitOwner(Node):
             status = json.loads(message.data)
         except (TypeError, ValueError):
             return
+        with self._state_mutex:
+            if not self._status_sequence_guard.accept(
+                    status.get('server_instance_id'), status.get('sequence')):
+                return
         event = status.get('event')
         ret = status.get('ret')
         reason = status.get('reason', '')
@@ -143,8 +159,16 @@ class GlobalGaitOwner(Node):
         if event == 'CLASSIC_VERIFIED' and ret == 0:
             with self._state_mutex:
                 if not self.core.request_id:
-                    self.core.observe_startup_classic(0)
-                    self._lock_held = False
+                    self.core.observe_startup_classic(
+                        0, fields.get('verification_source', 'none'))
+                    self._lock_held = (
+                        self.core.state != CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE)
+            return
+        if event == 'CLASSIC_COMMAND_ACK':
+            with self._state_mutex:
+                if self.core.observe_classic_command_ack(ret, reason):
+                    self._lock_held = True
+            self._publish_state()
             return
         if event == 'GAIT_REQUESTED':
             request_id = fields.get('request_id', '')
@@ -170,8 +194,10 @@ class GlobalGaitOwner(Node):
             return
         if event == 'ACTION_READY' and ret == 0:
             with self._state_mutex:
-                self.core.observe_startup_classic(0)
-                self._lock_held = False
+                self.core.observe_startup_classic(
+                    0, fields.get('verification_source', 'none'))
+                self._lock_held = (
+                    self.core.state != CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE)
             self._publish_state()
             return
         if event not in ('GAIT_READY', 'GAIT_FAILED'):
@@ -179,7 +205,13 @@ class GlobalGaitOwner(Node):
         with self._state_mutex:
             if self.core.observe_ack(event, ret, reason):
                 self._last_request_success = event == 'GAIT_READY' and ret == 0
+                # 启动 Classic 的 GAIT_READY 不经过 /gait/ensure_classic 服务。
+                # 一旦当前 request_id 已由已验收序列确认，必须在此处解除锁；
+                # 否则 core 已就绪而 arbiter 永久停车，且不能靠重发 Classic 掩盖。
+                if self.core.state == CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE:
+                    self._lock_held = False
                 self._ack_event.set()
+        self._publish_state()
 
     def _wait_for_final_zero(self):
         """movement lock 生效后要求新鲜、连续最终零速，不能只看候选命令。"""
@@ -202,9 +234,10 @@ class GlobalGaitOwner(Node):
     def _request(self, target):
         with self._transition_mutex:
             with self._state_mutex:
-                if target == 'CLASSIC' and self.core.state == CLASSIC_READY:
+                if (target == 'CLASSIC'
+                        and self.core.state == CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE):
                     self._lock_held = False
-                    return True, 'CLASSIC already ready (command_ack)'
+                    return True, 'CLASSIC already established by validated sequence'
                 if target == 'FREE' and self.core.state == FREE_READY:
                     self._lock_held = True
                     return True, 'FREE already ready (command_ack)'
@@ -240,11 +273,12 @@ class GlobalGaitOwner(Node):
                 return False, 'SDK gait ACK timeout'
             with self._state_mutex:
                 success = self._last_request_success
-                if success and target == 'CLASSIC':
+                state = self.core.state
+                if (success and target == 'CLASSIC'
+                        and state == CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE):
                     self._lock_held = False
                 elif target in ('FREE', 'HOLD') or not success:
                     self._lock_held = True
-                state = self.core.state
                 reason = self.core.failure_reason
             self._publish_state()
             return success, state if success else reason

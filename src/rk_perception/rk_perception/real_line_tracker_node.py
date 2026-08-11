@@ -35,6 +35,9 @@ def clamp(value, minimum, maximum):
 
 
 PENDING_SWITCH_STABLE_FRAMES = 3
+# 相机相对机身的安装 yaw 校准只应覆盖小角度固定偏差；超过此范围必须拒绝，
+# 避免错误参数把有效巡线方向翻转成不可解释的大角度补偿。
+MAX_HEADING_ZERO_OFFSET_RAD = 0.35
 
 
 @dataclass(frozen=True)
@@ -219,6 +222,17 @@ class LineDetectionResult:
     candidate_rejected: bool = False
     candidate_rejection_reason: str = 'none'
     track_jump_rejected: bool = False
+    # geometric 是旧 dx/dy 几何值；signed 经 source 一次反号后左负右正。
+    geometric_heading_error: Optional[float] = None
+    raw_heading_error: Optional[float] = None
+    # 横向宽黑段是 L 型拐点的独立几何证据；即使主线仍为 ok
+    # 也必须保留，避免上/中 ROI 的出口横线被主路径丢弃。
+    transverse_visible: bool = False
+    transverse_center_y: Optional[float] = None
+    transverse_left_x: Optional[float] = None
+    transverse_right_x: Optional[float] = None
+    transverse_width_px: float = 0.0
+    transverse_width_ratio: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -376,11 +390,16 @@ class StructuralWhiteBarCandidate:
     local_contrast: float = 0.0
 
 
-def _structural_white_bar_reference_x(line_result, robot_center_x, image_width):
+def _structural_white_bar_reference_x(
+    line_result, robot_center_x, image_width
+):
     """优先使用当前可靠路径锚点；丢线时回退到已标定机身中心。"""
     fallback = _normalize_preferred_center(robot_center_x, image_width)
     anchor = getattr(line_result, 'tracking_anchor_x', None)
-    if bool(getattr(line_result, 'line_visible', False)) and anchor is not None:
+    if (
+        bool(getattr(line_result, 'line_visible', False))
+        and anchor is not None
+    ):
         return _normalize_preferred_center(anchor, image_width)
     return fallback
 
@@ -495,7 +514,10 @@ def _detect_white_bar_structural_candidate(
             right_of_route = indices[indices >= reference_x]
             if not len(left_of_route) or not len(right_of_route):
                 continue
-            if int(right_of_route[0] - left_of_route[-1]) > max_fragment_gap_px:
+            if (
+                int(right_of_route[0] - left_of_route[-1])
+                > max_fragment_gap_px
+            ):
                 continue
             # 上下文只在 y 方向局部取样、横向覆盖全赛道，避免黑线路径
             # 在白杆中央形成的小缺口把片段内 median 错误放大。
@@ -607,7 +629,10 @@ class StructuralWhiteBarTemporalFilter:
             stable_y = self.stable_candidate.result.center_y
             current_y = raw.center_y
             image_height = max(1.0, float(raw_candidate.roi_bottom_y))
-            if abs(current_y - stable_y) * image_height > self.config.max_y_jump_px:
+            if (
+                abs(current_y - stable_y) * image_height
+                > self.config.max_y_jump_px
+            ):
                 return self._handle_miss('structural_unstable_y')
             self.stable_candidate = raw_candidate
             self.missed_count = 0
@@ -620,7 +645,10 @@ class StructuralWhiteBarTemporalFilter:
         else:
             pending_y = self.pending_candidate.result.center_y
             image_height = max(1.0, float(raw_candidate.roi_bottom_y))
-            if abs(raw.center_y - pending_y) * image_height <= self.config.max_y_jump_px:
+            if (
+                abs(raw.center_y - pending_y) * image_height
+                <= self.config.max_y_jump_px
+            ):
                 self.pending_candidate = raw_candidate
                 self.pending_count += 1
             else:
@@ -677,14 +705,22 @@ def detect_corner_candidate(
         bool(line_result.bottom_band_valid)
         and valid_ratio < 0.55
     )
-    rejection_hint = (
-        'too_wide' in str(line_result.reason)
-        or 'too_wide' in str(line_result.candidate_rejection_reason)
-        or 'obstacle_like_dark_block' in str(line_result.reason)
-    )
+    transverse_visible = bool(line_result.transverse_visible)
     anchor = line_result.tracking_anchor_x
     direction_hint = 'unknown'
     edge_score = 0.0
+    if transverse_visible and anchor is not None and image_width > 0:
+        left_extent = max(
+            0.0, float(anchor) - float(line_result.transverse_left_x)
+        )
+        right_extent = max(
+            0.0, float(line_result.transverse_right_x) - float(anchor)
+        )
+        direction_margin = max(2.0, 0.04 * float(image_width))
+        if left_extent > right_extent + direction_margin:
+            direction_hint = 'left'
+        elif right_extent > left_extent + direction_margin:
+            direction_hint = 'right'
     if anchor is not None and image_width > 0:
         normalized_x = float(anchor) / float(image_width)
         if normalized_x < edge_fraction:
@@ -702,31 +738,37 @@ def detect_corner_candidate(
                 0.0,
                 1.0
             )
-        elif float(line_result.heading_error) > min_heading_error:
+        elif direction_hint == 'unknown' and float(
+            line_result.heading_error
+        ) > min_heading_error:
             direction_hint = 'right'
-        elif float(line_result.heading_error) < -min_heading_error:
+        elif direction_hint == 'unknown' and float(
+            line_result.heading_error
+        ) < -min_heading_error:
             direction_hint = 'left'
 
+    # heading 只能提高置信度或补充方向，不得单独把平滑大弯
+    # 误报为 90° 直角。可见角点必须另有横线或上部截断/边缘跃迁。
     visible = bool(
         line_result.bottom_band_valid
         and (
-            abs(float(line_result.heading_error)) >= min_heading_error
+            transverse_visible
             or (sparse_upper_path and edge_score > 0.0)
-            or rejection_hint
         )
     )
     confidence = clamp(
-        0.45 * heading_score
-        + 0.35 * edge_score
-        + (0.20 if sparse_upper_path or rejection_hint else 0.0),
+        0.25 * heading_score
+        + 0.25 * edge_score
+        + (0.50 if transverse_visible else 0.0)
+        + (0.20 if sparse_upper_path else 0.0),
         0.0,
         1.0
     )
     reason_parts = []
     if sparse_upper_path:
         reason_parts.append('upper_path_sparse')
-    if rejection_hint:
-        reason_parts.append('wide_or_block_rejection')
+    if transverse_visible:
+        reason_parts.append('transverse_geometry')
     if heading_score >= 1.0:
         reason_parts.append('large_heading')
     if edge_score > 0.0:
@@ -739,6 +781,11 @@ def detect_corner_candidate(
             clamp(float(anchor) / float(image_width), 0.0, 1.0)
             if anchor is not None and image_width > 0 else 0.0
         ),
+        center_y=(
+            clamp(float(line_result.transverse_center_y), 0.0, 1.0)
+            if line_result.transverse_center_y is not None else 0.0
+        ),
+        width_ratio=float(line_result.transverse_width_ratio),
         direction_hint=direction_hint,
         reason=','.join(reason_parts) if reason_parts else 'not_candidate'
     )
@@ -1027,6 +1074,9 @@ def detect_line_in_image(
     )
     heading_error = _heading_error_from_path(selected_bands, slope)
     confidence = _compute_confidence(len(selected_bands), config)
+    transverse = _transverse_evidence(
+        candidates, band_rows, width, tracking_anchor_x
+    )
 
     if confidence < config.visible_min_confidence:
         return _lost_result(
@@ -1051,6 +1101,7 @@ def detect_line_in_image(
         line_visible=True,
         lateral_error=lateral_error,
         heading_error=heading_error,
+        geometric_heading_error=-heading_error,
         confidence=confidence,
         reason='ok',
         dark_fraction=dark_fraction,
@@ -1067,7 +1118,23 @@ def detect_line_in_image(
         current_bottom_x=tracking_anchor_x,
         bottom_band_valid=bottom_band_valid,
         candidate_rejected=False,
-        candidate_rejection_reason='none'
+        candidate_rejection_reason='none',
+        transverse_visible=bool(transverse and transverse['visible']),
+        transverse_center_y=(
+            transverse['center_y'] if transverse is not None else None
+        ),
+        transverse_left_x=(
+            transverse['left_x'] if transverse is not None else None
+        ),
+        transverse_right_x=(
+            transverse['right_x'] if transverse is not None else None
+        ),
+        transverse_width_px=(
+            transverse['width_px'] if transverse is not None else 0.0
+        ),
+        transverse_width_ratio=(
+            transverse['width_ratio'] if transverse is not None else 0.0
+        ),
     )
 
 
@@ -1198,6 +1265,63 @@ def _scan_line_candidates(binary, config, x_offset=0):
         candidates_by_band.append(band_candidates)
 
     return band_rows, candidates_by_band, candidates
+
+
+def _transverse_evidence(
+    candidates, band_rows, image_width, tracking_anchor_x
+):
+    """从既有扫描带中提取上/中 ROI 横线，不建第二套图像管线。
+
+    正常纵线候选宽度较小；L 型出口横线穿过某个扫描带时会形成
+    ``too_wide`` 段。只接受离开 bottom 的带，防止近处黑块或自身阴影
+    冒充直角证据。
+    """
+    if image_width <= 0 or not band_rows:
+        return None
+    minimum_band = max(2, int(math.ceil(len(band_rows) * 0.20)))
+    minimum_width = max(1.0, float(image_width) * 0.28)
+    eligible = [
+        candidate for candidate in candidates
+        if candidate.band_index >= minimum_band
+        and candidate.reason == 'too_wide'
+        and float(candidate.width_px) >= minimum_width
+    ]
+    if not eligible:
+        return None
+
+    anchor = _finite_anchor(tracking_anchor_x, image_width)
+    # 优先选择覆盖 incoming anchor 的宽段；多个候选时选最宽者，
+    # 避免将旁边独立黑块当成与主线相连的 L 形。
+    connected = [
+        candidate for candidate in eligible
+        if float(candidate.x_start) <= anchor <= float(candidate.x_end)
+    ]
+    selected = max(
+        connected or eligible,
+        key=lambda candidate: (candidate.width_px, candidate.band_index),
+    )
+    roi_height = max(1.0, float(max(row.y_max for row in band_rows)))
+    return {
+        'visible': bool(connected),
+        'center_y': clamp(float(selected.y) / roi_height, 0.0, 1.0),
+        'left_x': float(selected.x_start),
+        'right_x': float(selected.x_end),
+        'width_px': float(selected.width_px),
+        'width_ratio': clamp(
+            float(selected.width_px) / float(image_width), 0.0, 1.0
+        ),
+    }
+
+
+def _finite_anchor(value, image_width):
+    """将跟踪锚点限定在图像内；异常时仅回退画面中心。"""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = float(image_width) / 2.0
+    if not math.isfinite(value):
+        value = float(image_width) / 2.0
+    return clamp(value, 0.0, max(0.0, float(image_width - 1)))
 
 
 def _allowed_width_px(band_index, config, image_width):
@@ -1378,6 +1502,7 @@ def _select_lateral_anchor_x(selected_bands, preferred_center_x, image_width):
 
 
 def _heading_error_from_path(selected_bands, fallback_slope):
+    """返回机体前方路径方向：左为负，右为正。"""
     if selected_bands:
         top_candidate = min(selected_bands, key=lambda candidate: candidate.y)
         bottom_candidate = max(
@@ -1387,16 +1512,41 @@ def _heading_error_from_path(selected_bands, fallback_slope):
         delta_y = float(bottom_candidate.y - top_candidate.y)
         if abs(delta_y) >= 1.0:
             slope = (
-                float(bottom_candidate.center_x - top_candidate.center_x)
+                float(top_candidate.center_x - bottom_candidate.center_x)
                 / delta_y
             )
             return clamp(math.atan(slope), -math.pi / 2.0, math.pi / 2.0)
 
     return clamp(
-        math.atan(float(fallback_slope)),
+        # ``polyfit`` 的 slope 是 dx/dy，与对外“前方向”合同相反。
+        math.atan(-float(fallback_slope)),
         -math.pi / 2.0,
         math.pi / 2.0
     )
+
+
+def validate_heading_zero_offset_rad(offset):
+    """校验相机—机身固定 heading 零点，非法值必须 fail-closed。"""
+    try:
+        offset = float(offset)
+    except (TypeError, ValueError):
+        raise ValueError('heading_zero_offset_rad must be finite')
+    if not math.isfinite(offset):
+        raise ValueError('heading_zero_offset_rad must be finite')
+    if abs(offset) > MAX_HEADING_ZERO_OFFSET_RAD:
+        raise ValueError(
+            'heading_zero_offset_rad exceeds calibration safety range'
+        )
+    return offset
+
+
+def correct_heading_error(raw_heading, heading_zero_offset_rad):
+    """以实体平行黑线时采集的零点校准原始视觉 heading。"""
+    raw_heading = float(raw_heading)
+    if not math.isfinite(raw_heading):
+        raise ValueError('raw heading must be finite')
+    offset = validate_heading_zero_offset_rad(heading_zero_offset_rad)
+    return clamp(raw_heading - offset, -math.pi / 2.0, math.pi / 2.0)
 
 
 def _fit_line_to_bands(selected_bands, roi_height):
@@ -1540,6 +1690,8 @@ class RealLineTrackerNode(Node):
         self.declare_parameter('max_lateral_error', 1.0)
         self.declare_parameter('robot_center_x_offset_fraction', 0.0)
         self.declare_parameter('robot_center_x_offset_px', 0.0)
+        # 只校正 camera/body heading 零点；横向中心仍由既有参数独立定义。
+        self.declare_parameter('heading_zero_offset_rad', 0.0)
         self.declare_parameter('line_width_cm', 10.0)
         self.declare_parameter('num_scan_bands', 11)
         self.declare_parameter('min_path_bands', 3)
@@ -1744,6 +1896,9 @@ class RealLineTrackerNode(Node):
         self.robot_center_x_offset_px = self.get_parameter(
             'robot_center_x_offset_px'
         ).get_parameter_value().double_value
+        self.heading_zero_offset_rad = validate_heading_zero_offset_rad(
+            self.get_parameter('heading_zero_offset_rad').value
+        )
         self.red_circle_min_area_ratio = max(
             0.0,
             float(self.get_parameter('red_circle_min_area_ratio').value)
@@ -1787,7 +1942,9 @@ class RealLineTrackerNode(Node):
             float(self.get_parameter('white_bar_min_area_ratio').value)
         )
         self.white_bar_structural_config = StructuralWhiteBarConfig(
-            enabled=self._get_bool_parameter('white_bar_structural_enabled', True),
+            enabled=self._get_bool_parameter(
+                'white_bar_structural_enabled', True
+            ),
             roi_top_fraction=float(
                 self.get_parameter('white_bar_roi_top_fraction').value
             ),
@@ -2020,6 +2177,21 @@ class RealLineTrackerNode(Node):
                 preferred_center_x=preferred_center_x,
                 robot_center_x=robot_center_x,
                 max_track_jump_fraction=self.max_track_jump_fraction
+            )
+            # LineTrack 保持原有接口，但 heading_error 必须面向机身零参考；
+            # 原始视觉斜率保存在 result，供 overlay/debug 审计校准符号。
+            raw_heading = current_result.heading_error
+            current_result = replace(
+                current_result,
+                raw_heading_error=raw_heading,
+                # 无线时没有可校正的几何量，继续保持零误差；
+                # 否则零偏会伪造一个不存在的右向 heading。
+                heading_error=(
+                    correct_heading_error(
+                        raw_heading, self.heading_zero_offset_rad
+                    )
+                    if current_result.line_visible else 0.0
+                ),
             )
             stage = 'apply_route_lock'
             result = self.apply_route_lock(
@@ -2414,6 +2586,8 @@ class RealLineTrackerNode(Node):
             line_visible=True,
             lateral_error=self.last_result.lateral_error,
             heading_error=self.last_result.heading_error,
+            geometric_heading_error=self.last_result.geometric_heading_error,
+            raw_heading_error=self.last_result.raw_heading_error,
             confidence=self.last_result.confidence,
             reason='track_jump_rejected_hold_last',
             roi_start_x=self.last_result.roi_start_x,
@@ -2662,9 +2836,17 @@ class RealLineTrackerNode(Node):
             f'valid_bands={len(result.selected_bands)}/'
             f'{self.tracker_config.num_scan_bands}',
             f'lateral_error={result.lateral_error:.3f}',
-            f'heading_error={result.heading_error:.3f}',
+            'raw_geometric_heading='
+            f'{self.format_optional_float(result.geometric_heading_error)}',
+            'signed_heading_error='
+            f'{self.format_optional_float(result.raw_heading_error)}',
+            f'heading_zero_offset={self.heading_zero_offset_rad:.3f}',
+            f'corrected_heading_error={result.heading_error:.3f}',
             f'confidence={result.confidence:.3f}',
             f'line_visible={self.format_bool(result.line_visible)}',
+            'transverse_visible='
+            f'{self.format_bool(result.transverse_visible)}',
+            f'transverse_width_ratio={result.transverse_width_ratio:.3f}',
             'bottom_band_valid='
             f'{self.format_bool(result.bottom_band_valid)}',
             'candidate_rejected='

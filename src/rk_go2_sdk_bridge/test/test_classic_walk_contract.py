@@ -19,10 +19,12 @@ def _status(event, sequence=1, ret=0):
 
 
 def test_classic_verified_status_event_is_protocol_valid():
-    """readiness 必须观测当前实例的经典步态 command ACK。"""
+    """readiness 必须区分 Classic 的 RPC ACK 与实体签名事件。"""
     decoded = decode_status_datagram(_status('CLASSIC_VERIFIED', 2).encode())
     assert decoded['event'] == 'CLASSIC_VERIFIED'
     assert decoded['ret'] == 0
+    command_ack = decode_status_datagram(_status('CLASSIC_COMMAND_ACK', 3).encode())
+    assert command_ack['event'] == 'CLASSIC_COMMAND_ACK'
 
 
 def test_single_owner_action_status_events_are_protocol_valid():
@@ -33,8 +35,8 @@ def test_single_owner_action_status_events_are_protocol_valid():
         assert decoded['event'] == event
 
 
-def test_startup_classic_ack_precedes_udp_bind_and_fails_closed():
-    """SDK 经典步态序列成功前，不得绑定 UDP Move socket。"""
+def test_startup_classic_physical_verification_precedes_udp_bind():
+    """实体 Classic 签名成功前，server 不得绑定 UDP Move socket。"""
     source = (PACKAGE_ROOT / 'src' / 'go2_sdk_udp_server.cpp').read_text(
         encoding='utf-8'
     )
@@ -44,10 +46,12 @@ def test_startup_classic_ack_precedes_udp_bind_and_fails_closed():
     assert startup < classic < udp_bind
     assert 'client.ClassicWalk(true)' in source
     assert 'client.FreeWalk()' in source
-    assert 'verification_source=command_ack' in source
+    assert 'CLASSIC_COMMAND_ACK' in source
+    assert 'CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE' in source
+    assert 'validated_sequence_current_cpp_pre_stop_speed_classic_settle_v1' in source
     assert 'SelectMode(' not in source
     assert 'ReleaseMode(' not in source
-    assert 'error_code() ==' not in source
+    assert 'kClassicPhysicalErrorCode' not in source
 
 
 def test_move_loop_does_not_contain_gait_entry_calls():
@@ -85,16 +89,25 @@ def test_motion_helper_delegates_all_sdk_writes_to_server():
     assert 'ACTION_ACK' in server
 
 
-def test_formal_start_waits_for_current_instance_classic_ack():
-    """启动脚本在 ROS 图之前等待 server 的经典步态 ACK。"""
+def test_formal_start_gates_current_classic_after_owner_subscription():
+    """当前 receiver 与 owner 就绪后，才允许 server 发出启动 Classic ACK。"""
     start_source = (
         PACKAGE_ROOT.parent / 'rk_bringup' / 'scripts' /
         'start_non_arm_competition.sh'
     ).read_text(encoding='utf-8')
+    forwarder = start_source.index('FORWARDER_ARGS=')
+    owner = start_source.index(
+        'wait_for_global_gait_owner_status_subscriber', forwarder
+    )
+    server = start_source.index('SERVER_ARGS=')
     classic_ack = start_source.index('--event CLASSIC_VERIFIED')
     startup_ack = start_source.index('--event STARTUP_STOP')
-    listener = start_source.index('wait_for_udp_listener_count', startup_ack)
-    assert classic_ack < startup_ack < listener
+    assert forwarder < owner < server < classic_ack < startup_ack
+    owner_source = (PACKAGE_ROOT / 'scripts' / 'global_gait_owner.py').read_text(
+        encoding='utf-8'
+    )
+    assert 'CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE' in owner_source
+    assert 'self._lock_held = False' in owner_source
     assert 'global_gait_owner.py' in (
         PACKAGE_ROOT.parent / 'rk_bringup' / 'launch' /
         'competition_non_arm.launch.py'

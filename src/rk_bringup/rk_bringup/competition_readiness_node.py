@@ -674,13 +674,14 @@ class CompetitionReadinessNode(Node):
 
     @staticmethod
     def _global_gait_mode_ready(payload, software_smoke_mode):
-        """只接受经典就绪且已释放 movement lock 的权威 owner 状态。"""
+        """生产只接受实机 A/B 验收的 Classic 调用序列，command ACK 不得解除锁。"""
         expected_source = (
-            'software_smoke' if software_smoke_mode else 'command_ack'
+            'software_smoke' if software_smoke_mode
+            else 'validated_sequence_current_cpp_pre_stop_speed_classic_settle_v1'
         )
         return (
             isinstance(payload, dict)
-            and payload.get('state') == 'CLASSIC_READY'
+            and payload.get('state') == 'CLASSIC_ESTABLISHED_BY_VALIDATED_SEQUENCE'
             and payload.get('target') == 'CLASSIC'
             and payload.get('verification_source') == expected_source
             and payload.get('movement_lock_held') is False
